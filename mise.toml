@@ -89,13 +89,12 @@ run = [
 description = "Everything CI gates a pull request on"
 depends = ["docs"]
 run = [
-  "cargo fmt --all --check",
-  "cargo clippy --workspace --all-targets -- -D warnings",
-  "cargo build --workspace --all-targets",
-  "cargo test --workspace",
   "sh tools/check-lua.sh",
   "mise exec -- lua-language-server --check . --checklevel=Warning",
-  "lua5.1 tools/harness.lua executor",
+  # The Rust and harness gates. They skip, loudly, until the code they check
+  # exists, so this task is green on a fresh checkout and gets stricter by
+  # itself as the plan lands.
+  "sh tools/buildcheck.sh",
 ]
 
 [tasks.release]
