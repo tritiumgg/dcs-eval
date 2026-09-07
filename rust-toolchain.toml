@@ -1,0 +1,19 @@
+# One toolchain across every host and CI.
+#
+# CI gates a pull request on `clippy -D warnings`. A floating channel resolves
+# per host, so a new stable release introduces a lint that fails CI for a
+# reason unrelated to the change. The channel is pinned instead.
+#
+# This is the only file that names the Rust toolchain, and mise reads it.
+# mise.toml enables the idiomatic version file setting for rust and clears
+# RUSTUP_TOOLCHAIN, which would otherwise override this file and discard the
+# two lists below.
+#
+# Change the toolchain by editing `channel`, then `mise install`. Not with
+# `mise use rust@<version>`: that writes a version into mise.toml's [tools]
+# and mise stops reading this file.
+
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
+targets = ["x86_64-pc-windows-msvc"]

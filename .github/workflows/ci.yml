@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The document checks, the hook tests and the shell parse. They need no
+  # toolchain, so they fail in under a minute rather than after a build.
+  preflight:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hold docs/STATE.md to its budget
+        run: sh tools/statecheck.sh
+      - name: Keep specification citations and task IDs out of the code
+        run: sh tools/nospecrefs.sh
+      - name: Test every hook against its payload
+        run: sh tools/hooktest.sh
+      - name: Every shell script parses as sh
+        run: for f in tools/*.sh .claude/hooks/*.sh; do sh -n "$f" || exit 1; done
+
+  # Windows is the only supported host, so there is one job and no matrix:
+  # everything past Milestone B needs a running DCS, which is Windows-only.
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+
+      # The reference interpreter is built from the pinned tarball, because
+      # mise's lua plugin needs make. The cache key is the script that builds
+      # it, so a change to the version or the flags rebuilds.
+      - name: Cache the reference interpreter
+        id: lua-cache
+        uses: actions/cache@v4
+        with:
+          path: .lua
+          key: lua-5.1.5-${{ runner.os }}-${{ hashFiles('tools/mklua.sh') }}
+
+      - name: Build the reference interpreter
+        if: steps.lua-cache.outputs.cache-hit != 'true'
+        run: mise run lua-build
+
+      - name: Prove the interpreter is 5.1.5 PUC-Rio
+        run: mise run lua-check
+
+      - name: Everything a pull request is gated on
+        run: mise run check

@@ -1,0 +1,16 @@
+# Cargo build output.
+/target/
+
+# The reference interpreter. tools/mklua.sh builds Lua 5.1.5 from the
+# official tarball here; it is a build artefact, not a vendored binary.
+/.lua/
+
+# Local agent settings. .claude/settings.json is shared; this is not.
+.claude/settings.local.json
+
+# Staged release artefacts.
+/dist/
+
+# Live-run output. A measurement of one session on one DCS build; STATE.md
+# and the decision records carry what it established, not the raw rows.
+/runs/
