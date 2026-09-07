@@ -1,0 +1,21 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+
+  "runtime.version": "Lua 5.1",
+  "runtime.pathStrict": true,
+  "runtime.path": ["?.lua", "?/init.lua", "tools/?.lua"],
+
+  "workspace.library": ["types"],
+  "workspace.ignoreDir": [".lua", "target", ".git"],
+
+  "diagnostics.globals": [
+    "Export",
+    "LuaExportStart",
+    "LuaExportStop",
+    "LuaExportActivityNextEvent",
+    "LuaExportBeforeNextFrame",
+    "LuaExportAfterNextFrame"
+  ],
+
+  "diagnostics.disable": ["discard-returns"]
+}

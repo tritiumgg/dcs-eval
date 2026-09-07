@@ -1,0 +1,103 @@
+# Windows is the only supported host. Both halves of this project exist to
+# talk to a running DCS World, which ships for Windows only, and the client's
+# containment controls are NTFS-specific.
+#
+# Rust is configured in rust-toolchain.toml, not here. mise's rust tool sets
+# RUSTUP_TOOLCHAIN, which overrides that file outright — and an override
+# discards its `components` and `targets`, so clippy, rustfmt and the target
+# go missing while the version still looks correct. Clearing the variable and
+# enabling the idiomatic version file setting puts the file back in charge;
+# mise still installs and manages the toolchain it names.
+#
+# So `mise use rust@<version>` is the wrong move here. Edit `channel` in
+# rust-toolchain.toml instead, then run `mise install`.
+
+[settings]
+idiomatic_version_file_enable_tools = ["rust"]
+
+[env]
+RUSTUP_TOOLCHAIN = ""
+# The reference interpreter, built by tools/mklua.sh. mise's lua plugin runs
+# the tarball's makefile and Windows has no make, so the interpreter is built
+# here rather than installed as a [tools] entry.
+_.path = ["{{config_root}}/.lua/bin"]
+
+[tools]
+# The two language servers. Claude Code's lua-lsp and rust-analyzer-lsp
+# plugins run the bare binary name, and mise's ls-shims directory is on PATH
+# for exactly that, so a version pinned here is the version the editor and the
+# agent both get. Left unpinned, the shim resolves whatever is installed
+# globally and two machines analyse the same tree differently.
+#
+# lua-language-server reads .luarc.json at the root, which pins the files to
+# Lua 5.1 and declares the globals DCS gives the executor.
+lua-language-server = "3.19.1"
+# rust-analyzer reads rust-analyzer.toml at the root. It is a standalone
+# release rather than the rustup component: the component would be
+# version-matched to rust-toolchain.toml, but the ls-shim resolves mise tools
+# and would not find it, which is the whole point of pinning it.
+rust-analyzer = "2026-08-31"
+
+[tasks.lua-build]
+description = "Build the reference Lua 5.1.5 PUC-Rio from the official tarball"
+run = "sh tools/mklua.sh"
+
+[tasks.lua-check]
+description = "Prove the interpreter on PATH is Lua 5.1.5 PUC-Rio and nothing else"
+run = "sh tools/check-lua.sh"
+
+[tasks.harness]
+description = "Run the Lua harness over every executor suite"
+depends = ["lua-check"]
+run = "lua5.1 tools/harness.lua executor"
+
+# The static half of the Lua gate. types/dcs.lua declares the DCS-provided
+# globals, so a misspelt DCS call is a finding here rather than a nil-index in
+# a live frame — which is the expensive place to find one. Exits non-zero on
+# any finding at Warning or above.
+#
+# Through `mise exec` rather than bare: the task runner would resolve the shim,
+# and lua-language-server.exe looks for its own main.lua beside the binary it
+# was launched as. `mise exec` puts the real install directory on PATH.
+[tasks.lua-lint]
+description = "Type-check the Lua against types/dcs.lua and .luarc.json"
+run = "mise exec -- lua-language-server --check . --checklevel=Warning"
+
+[tasks.build]
+description = "Build every crate in the workspace"
+run = "cargo build --workspace --all-targets"
+
+[tasks.test]
+description = "Run the workspace test suite"
+run = "cargo test --workspace"
+
+[tasks.fmt]
+description = "Format every crate"
+run = "cargo fmt --all"
+
+[tasks.docs]
+description = "Hold docs/STATE.md to its budget, keep spec citations out of the code, test the hooks"
+run = [
+  "sh tools/statecheck.sh",
+  "sh tools/nospecrefs.sh",
+  "sh tools/hooktest.sh",
+]
+
+# What CI gates a pull request on. A run here that passes is a CI run that
+# passes, so a push is the last step rather than the first test.
+[tasks.check]
+description = "Everything CI gates a pull request on"
+depends = ["docs"]
+run = [
+  "cargo fmt --all --check",
+  "cargo clippy --workspace --all-targets -- -D warnings",
+  "cargo build --workspace --all-targets",
+  "cargo test --workspace",
+  "sh tools/check-lua.sh",
+  "mise exec -- lua-language-server --check . --checklevel=Warning",
+  "lua5.1 tools/harness.lua executor",
+]
+
+[tasks.release]
+description = "Build the one binary a user downloads"
+run = "cargo build --release --workspace"

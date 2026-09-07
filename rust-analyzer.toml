@@ -1,0 +1,14 @@
+# rust-analyzer reads this at the workspace root, so the editor, the agent and
+# CI all judge the code the same way.
+#
+# check.command is clippy because that is what `mise run check` gates a pull
+# request on. With the default `cargo check`, a lint that fails CI shows no
+# squiggle while it is being written.
+
+[check]
+command = "clippy"
+extraArgs = ["--all-targets"]
+
+[cargo]
+# The product target is the host target: Windows is the only supported host.
+allTargets = true
