@@ -18,9 +18,12 @@ VERSION=5.1.5
 SHA256=2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333
 URL="https://www.lua.org/ftp/lua-$VERSION.tar.gz"
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+# pwd -P rather than pwd: the shell's PWD can arrive holding a Windows path
+# (mise sets it that way), and the builtin would echo it back.
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 out="$root/.lua"
 exe="$out/bin/lua5.1.exe"
+tarname="lua-$VERSION.tar.gz"
 
 if [ "$1" != "--force" ] && [ -x "$exe" ]; then
     echo "already built: $exe"
@@ -29,7 +32,7 @@ fi
 
 mkdir -p "$out/bin"
 
-tarball="$out/lua-$VERSION.tar.gz"
+tarball="$out/$tarname"
 if [ ! -f "$tarball" ]; then
     echo "fetching $URL"
     curl -fsSL -o "$tarball" "$URL"
@@ -46,7 +49,16 @@ fi
 
 rm -rf "$out/src"
 mkdir -p "$out/src"
-tar -xzf "$tarball" -C "$out/src" --strip-components=1
+
+# Extracted from inside the directory, naming the tarball relatively. GNU tar
+# reads an argument whose first colon precedes the first slash as host:path, so
+# an absolute Windows path makes it try to reach a machine called `D`:
+#
+#     tar (child): Cannot connect to D: resolve failed
+#
+# A relative path cannot carry a drive letter, which settles it whatever shape
+# the caller's paths arrive in.
+( cd "$out/src" && tar -xzf "../$tarname" --strip-components=1 )
 
 # lua.c holds the interpreter's main. luac.c holds the compiler's, and
 # print.c is only ever linked into luac, so neither belongs in this link.
