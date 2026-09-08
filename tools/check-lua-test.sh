@@ -18,6 +18,12 @@ set -e
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 cd "$root"
 
+# Every case below must be reached. One that stops running would otherwise
+# only lower the count in the last line, and a number nobody has a reason to
+# re-read is not a gate — so the count is asserted rather than reported.
+# Raise this when a case is added.
+CASES=6
+
 # Mixed-form Windows paths do not survive being put on PATH for a child sh —
 # `command -v` will not find anything under one — so the sandbox is named in
 # the POSIX form throughout. mktemp -d already returns that form.
@@ -26,6 +32,7 @@ trap 'rm -rf "$sandbox"' EXIT INT TERM
 
 pass=0
 fail=0
+skipped=0
 
 # Run the guard with $1 as the whole of the fake interpreter's -v output, then
 # assert its exit code is $2 and that its combined output matches $3.
@@ -34,9 +41,14 @@ case_() {
 
     rm -rf "$sandbox/bin"
     mkdir -p "$sandbox/bin"
+    # The banner is written to its own file rather than into the fake's
+    # source. Inlined, an apostrophe in a banner would close the quoting and
+    # the fake would stop parsing — which is a trap for whoever adds the next
+    # case, not a failure they could read. Here no banner is ever shell syntax.
+    printf '%s\n' "$banner" > "$sandbox/banner"
     # Real 5.1 prints -v to stderr and real 5.4 prints it to stdout; the guard
     # folds both, so the fake picks one and the difference stays untested here.
-    printf '#!/bin/sh\necho %s\n' "'$banner'" > "$sandbox/bin/lua5.1"
+    printf '#!/bin/sh\ncat "%s"\n' "$sandbox/banner" > "$sandbox/bin/lua5.1"
     chmod +x "$sandbox/bin/lua5.1"
 
     out=$(PATH="$sandbox/bin:$PATH" sh tools/check-lua.sh 2>&1) && got=0 || got=$?
@@ -58,6 +70,14 @@ check() {
             printf 'FAIL  %s\n  wanted output containing: %s\n  got: %s\n' \
                 "$name" "$want_says" "$out" >&2 ;;
     esac
+}
+
+# A case that cannot run where this is checked out. It still counts against
+# CASES, so skipping one is visible in the last line rather than only in this
+# one, which scrolls past in a CI log.
+skip_() {
+    skipped=$((skipped + 1))
+    printf 'skipped: %s\n' "$1"
 }
 
 # --- what the guard must admit ---------------------------------------------
@@ -85,16 +105,34 @@ case_ 'Lua 5.1.5  Copyright (C) 1994-2012 Lua.org' \
 #
 # PATH is cut back to wherever the coreutils this script already ran live, so
 # the guard finds no interpreter while `command`, `head` and `cat` still work.
-utils=$(dirname "$(command -v head)")
-if PATH="$utils" command -v lua5.1 >/dev/null 2>&1; then
-    printf 'skipped: the no-interpreter case — %s has its own lua5.1\n' "$utils"
+utils=$(command -v head 2>/dev/null || true)
+if [ -n "$utils" ]; then
+    utils=$(dirname "$utils")
+fi
+if [ -z "$utils" ]; then
+    # Nothing to cut PATH back *to*: an empty dirname would leave `.`, and the
+    # guard would then fail for want of `cat` rather than for want of an
+    # interpreter — a pass for the wrong reason.
+    skip_ 'the no-interpreter case — no coreutils directory to fall back to'
+elif PATH="$utils" command -v lua5.1 >/dev/null 2>&1; then
+    skip_ "the no-interpreter case — $utils has its own lua5.1"
 else
     out=$(PATH="$utils" sh tools/check-lua.sh 2>&1) && got=0 || got=$?
     check 'no interpreter names the way out' 1 "$got" 'mise run lua-build' "$out"
 fi
 
+ran=$((pass + fail + skipped))
+if [ "$ran" -ne "$CASES" ]; then
+    printf '\ncheck-lua: %d cases ran, %d expected. A case was lost.\n' \
+        "$ran" "$CASES" >&2
+    exit 1
+fi
 if [ "$fail" -ne 0 ]; then
     printf '\ncheck-lua: %d passed, %d failed\n' "$pass" "$fail" >&2
     exit 1
+fi
+if [ "$skipped" -ne 0 ]; then
+    printf 'check-lua: %d checks passed, %d skipped\n' "$pass" "$skipped"
+    exit 0
 fi
 printf 'check-lua: %d checks, all passed\n' "$pass"
