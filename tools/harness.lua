@@ -37,6 +37,42 @@ local EXECUTOR = here .. "/../executor/DcsEvalExecutor.lua"
 -- suites that must fail.
 local SUITES = dofile(SUITE_DIR .. "suites.lua")
 
+-- The DCS state models, loaded the first time a suite asks for one. Lazily,
+-- because tools/harness-test.sh copies this runner alone into a sandbox and
+-- drives it against suites that never need a state.
+local states
+
+--------------------------------------------------------------------------------
+-- Sandboxes
+--------------------------------------------------------------------------------
+
+-- Fresh directories under the system temporary directory, one per call,
+-- removed when the suite that made them ends. Windows-only paths, like the
+-- host: the interpreter is run here and nowhere else.
+local TEMP = os.getenv("TEMP") or os.getenv("TMP") or "."
+local sandboxes = {}
+local made = 0
+
+local function sandbox()
+  local path
+  repeat
+    made = made + 1
+    path = TEMP .. "\\dcs-eval-harness-" .. os.time() .. "-" .. made
+  until not os.rename(path, path)
+  if os.execute('mkdir "' .. path .. '" >nul 2>&1') ~= 0 then
+    error("harness: cannot make " .. path, 3)
+  end
+  sandboxes[#sandboxes + 1] = path
+  return path
+end
+
+local function sweep()
+  for _, path in ipairs(sandboxes) do
+    os.execute('rmdir /s /q "' .. path .. '" >nul 2>&1')
+  end
+  sandboxes = {}
+end
+
 --------------------------------------------------------------------------------
 -- The API a suite receives
 --------------------------------------------------------------------------------
@@ -123,6 +159,27 @@ local function api(count)
     })
   end
 
+  -- One DCS state's globals, built by tools/harness/states.lua: the stock
+  -- base, the libraries the census read in that state, and a raise for any
+  -- other name. `host` is the suite's own table; the model answers its
+  -- directory and process reads from it and records what the executor
+  -- registers into it.
+  function t.state(name, host)
+    states = states or dofile(SUITE_DIR .. "states.lua")
+    return states(t, name, host or {})
+  end
+
+  -- A fresh, empty directory, removed when this suite ends whether or not it
+  -- passed. A suite that drives the executor's reads and writes points
+  -- `host.writedir` into one.
+  function t.sandbox()
+    return sandbox()
+  end
+
+  -- The checkout root, for a suite that reads a file the repository keeps,
+  -- such as the type definitions, rather than one it wrote itself.
+  t.root = here .. "/.."
+
   -- The executor's one file, compiled but not run, with `env` as its globals.
   -- The suite calls the chunk itself, so it can decide what the host looks
   -- like before the first line runs. A missing file is a raise, not nil: a
@@ -165,6 +222,7 @@ local function run(name)
     end
     return debug.traceback(tostring(e), 2)
   end)
+  sweep()
   if not ok then
     if type(raised) == "table" then
       return nil, "check failed at " .. raised[FAIL], count.n
