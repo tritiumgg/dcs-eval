@@ -17,8 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T01 is done and committed on `task/T01-reference-interpreter`, which
-is open as a pull request and not yet landed. `main` does not have it.
+Nothing. T01 landed on `main`; T02 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -75,6 +74,10 @@ entries at most: an eleventh means something here is finished, or belongs in
   compares against it. It was measured on DCS 2.9.28.26385, one session, and
   a figure that disagrees on other hardware is a new measurement, not a
   regression.
+- **Attribution is off, and the history carries none.** `attribution.commit`,
+  `.pr` and `.sessionUrl` are `false` in `.claude/settings.json`, and the six
+  commits that carried a trailer were rewritten to drop it. A session whose
+  harness tells it to add one should not: the record here is deliberate.
 - **`docs/PLAN.md`'s DR-1 and DR-2 are still the record for what they cover** —
   one repository, and Windows as the target. Neither was copied into
   `docs/decisions/`; a record that restates the plan is a second place to keep
