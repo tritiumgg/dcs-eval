@@ -46,10 +46,12 @@ run = "sh tools/mklua.sh"
 description = "Prove the interpreter on PATH is Lua 5.1.5 PUC-Rio and nothing else"
 run = "sh tools/check-lua.sh"
 
+# Every registered suite. The runner prints one count per suite and exits 2
+# when nothing ran, so a suite with no checks is red here, not quiet.
 [tasks.harness]
-description = "Run the Lua harness over every executor suite"
+description = "Run the Lua harness over every registered suite"
 depends = ["lua-check"]
-run = "lua5.1 tools/harness.lua executor"
+run = "lua5.1 tools/harness.lua"
 
 # The static half of the Lua gate. types/dcs.lua declares the DCS-provided
 # globals, so a misspelt DCS call is a finding here rather than a nil-index in
@@ -96,9 +98,10 @@ run = [
   "sh tools/check-lua-test.sh",
   "sh tools/check-lua.sh",
   "mise exec -- lua-language-server --check . --checklevel=Warning",
-  # The Rust and harness gates. They skip, loudly, until the code they check
-  # exists, so this task is green on a fresh checkout and gets stricter by
-  # itself as the plan lands.
+  # The harness runner, driven against suites that must fail: proof that it
+  # still exits 2 for a suite with no checks, before it is trusted below.
+  "sh tools/harness-test.sh",
+  # The Rust workspace and every harness suite.
   "sh tools/buildcheck.sh",
 ]
 
