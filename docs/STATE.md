@@ -25,7 +25,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T06** — the load shell: `load: 80 checks` over both hosts, four non-host
+- **T06** — the load shell: `load: 79 checks` over both hosts, four non-host
   states and a raising `setUserCallbacks`; no `pcall`, or `type(DCS)` detection, reddens it.
 - **T05** — the CI workflow, built at setup, closed on observation: main run
   34277046532 printed both counts; run 34278109722, the interpreter steps removed, went red at the guard.

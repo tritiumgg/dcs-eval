@@ -1,7 +1,8 @@
 -- The load shell, driven as both hosts from one file.
 --
--- Four things are proved. Loaded into the hook state the file registers the
--- eighteen guarded callbacks and no `try` name, and publishes its namespace.
+-- Four things are proved. Loaded into the hook state the file registers
+-- exactly the eighteen guarded callbacks, which leaves no room for a `try`
+-- name, and publishes its namespace.
 -- Loaded into the export state it chains the four `LuaExport*` globals onto
 -- whatever held them, leaves a non-function holder alone, and never touches
 -- `LuaExportActivityNextEvent`. Loaded anywhere else it registers nothing.
@@ -51,14 +52,9 @@ do
   for _, name in ipairs(HOOK_CALLBACKS) do
     t.eq(type(host.callbacks[name]), "function", "hook: " .. name .. " is registered as a function")
   end
+  -- Every name present and no more keys than names: nothing else, and so no
+  -- `try` variant, can be in the table.
   t.eq(keys(host.callbacks), #HOOK_CALLBACKS, "hook: exactly the eighteen callbacks, no more")
-  local tries = 0
-  for name in pairs(host.callbacks) do
-    if name:find("Try") then
-      tries = tries + 1
-    end
-  end
-  t.eq(tries, 0, "hook: no try variant is registered")
   t.eq(host.log, nil, "hook: a good load writes nothing to dcs.log")
 
   local E = rawget(env, NAME)
