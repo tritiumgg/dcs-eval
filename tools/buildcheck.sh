@@ -34,6 +34,27 @@ if [ -f Cargo.toml ]; then
     cargo clippy --workspace --all-targets -- -D warnings
     cargo build --workspace --all-targets
     cargo test --workspace
+
+    # The roll call. Cargo pulls a path dependency into the workspace by
+    # itself, so a crate dropped from the member list still builds, and
+    # still shows in cargo's own view of the workspace; the four commands
+    # above stay green. So the manifest is read as written. Both crates are
+    # named on purpose: the library so that a Rust consumer other than the
+    # binary can link it, the binary because it is what a user downloads.
+    members=$(grep -E '^members[[:space:]]*=' Cargo.toml)
+    for crate in dcs-eval dcs-mcp; do
+        case "$members" in
+            *"\"crates/$crate\""*) ;;
+            *)
+                echo "workspace: crates/$crate is not in Cargo.toml's members" >&2
+                exit 1
+                ;;
+        esac
+    done
+    if [ ! -f target/debug/dcs-mcp.exe ]; then
+        echo "build: target/debug/dcs-mcp.exe was not produced" >&2
+        exit 1
+    fi
 else
     skip "the Rust gates — no Cargo.toml, so the workspace is not built yet"
 fi
