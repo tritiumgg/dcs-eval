@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T05 landed on `main`; T06 has not started.
+Nothing. T06 landed on `main`; T07 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,27 +25,27 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T06** — the load shell: `load: 80 checks` over both hosts, four non-host
+  states and a raising `setUserCallbacks`; no `pcall`, or `type(DCS)` detection, reddens it.
 - **T05** — the CI workflow, built at setup, closed on observation: main run
   34277046532 printed both counts; run 34278109722, the interpreter steps removed, went red at the guard.
 - **T04** — the state stubs: `stubs: 149 checks`, one per surface cell, per name
   `types/dcs.lua` declares, and the behaviour; an evaluating stub reddens it.
-- **T03** — the harness: `selftest: 1 check`, and `tools/harness-test.sh`
-  showing a suite with no checks exit 2. Suites register in `tools/harness/suites.lua`.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T06** — host detection and the two registration tails, `hook` and
-`export`, from one file under one top-level `pcall`. Done when
-`lua5.1 tools/harness.lua executor/load` drives both and prints `load: N checks`,
-count asserted; the mutation is a `DCS.setUserCallbacks` that raises: the file
-must still write one `dcs.log` line and register nothing, so removing the
-`pcall` reddens it. Needs T04. It writes `executor/DcsEvalExecutor.lua`, the
-path the harness already loads; its suite goes under `tools/harness/executor/`
-and registers in `suites.lua`.
+**Task T07** — executor containment and transport-root selection with the
+`Logs\` fallback. Done when `lua5.1 tools/harness.lua executor/containment`
+prints its check count; the mutations are a path inside the install, a
+relative path, and `Saved Games` outside `Logs\` (`Logs\..\Config` included),
+each of which must be refused, and allowing any one reddens the suite. Needs
+T06. It extends `executor/DcsEvalExecutor.lua` past registration and its suite
+goes beside `executor/load.lua`.
 
-**An agent verifies** it: the harness runs off DCS under the T04 stubs.
+**An agent verifies** it: the harness runs off DCS under the T04 stubs, with
+`host.writedir` and `host.cwd` pointed where each mutation needs.
 
 ## After that
 
@@ -76,6 +76,10 @@ entries at most: an eleventh means something here is finished, or belongs in
   compares against it. It was measured on DCS 2.9.28.26385, one session, and
   a figure that disagrees on other hardware is a new measurement, not a
   regression.
+- **Two gaps T06 left.** The hook guard's swallow path has no seam until a
+  raising stub sits on the frame path. Whether the export state survives
+  between missions is unmeasured; the load sentinel covers both answers, and
+  Stage 9 can settle it.
 - **`docs/PLAN.md`'s DR-1 and DR-2 are still the record for what they cover** —
   one repository, and Windows as the target. Neither was copied into
   `docs/decisions/`; a record that restates the plan is a second place to keep
