@@ -63,7 +63,7 @@ t.raises(function()
 end, "hook%.nosuch is not modelled", "an unknown global raises")
 t.raises(function()
   return t.state("server", {})
-end, "no DCS state named server", "server is not a state name here")
+end, "no DCS state named server", "the state is modelled once, under scripting")
 
 -- net.dostring_in answers empty and runs nothing. A stub that evaluated
 -- would answer "2" to the first and raise on the second.
@@ -72,6 +72,7 @@ t.eq(hook.net.dostring_in("mission", "error('would raise')"), "", "a chunk that 
 t.eq(hook.net.dostring_in("scripting", ""), "", "scripting is a state name")
 t.eq(hook.net.dostring_in("config", ""), "", "config is a state name")
 t.eq(hook.net.dostring_in("export", ""), "", "export is a state name")
+t.eq(hook.net.dostring_in("server", ""), "", "server is scripting's second name, and DCS answers to it")
 t.eq(hook.net.dostring_in("nowhere", "return 1"), "Invalid state name", "a name DCS does not have")
 t.eq(hook.net.dostring_in("missionscripting", ""), "Invalid state name",
   "missionscripting is reached under no name")

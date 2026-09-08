@@ -93,9 +93,17 @@ end
 -- net
 --------------------------------------------------------------------------------
 
--- The names DCS accepts on the far side of `net.dostring_in`. `scripting` is
--- the state the census also lists as `server`; the call takes this name.
-local DOSTRING_STATES = { gui = true, scripting = true, mission = true, config = true, export = true }
+-- The names DCS accepts on the far side of `net.dostring_in`. `server` is a
+-- second name for the `scripting` state, and DCS answers to both; the model
+-- of the state is one table, under the first.
+local DOSTRING_STATES = {
+  gui = true,
+  scripting = true,
+  server = true,
+  mission = true,
+  config = true,
+  export = true,
+}
 
 local function dostring_in(state, _)
   if DOSTRING_STATES[state] then

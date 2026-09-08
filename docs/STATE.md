@@ -25,7 +25,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T04** — the state stubs: `stubs: 148 checks`, one per surface cell, per name
+- **T04** — the state stubs: `stubs: 149 checks`, one per surface cell, per name
   `types/dcs.lua` declares, and the behaviour; an evaluating stub reddens it.
 - **T03** — the harness: `selftest: 1 check`, and `tools/harness-test.sh`
   showing a suite with no checks exit 2. Suites register in `tools/harness/suites.lua`.
