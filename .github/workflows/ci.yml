@@ -23,6 +23,10 @@ jobs:
         run: sh tools/statecheck.sh
       - name: Keep specification citations and task IDs out of the code
         run: sh tools/nospecrefs.sh
+      # No toolchain needed: the cases drive the guard with fake banners.
+      # That the real interpreter satisfies it is the windows job's claim.
+      - name: Prove the interpreter guard refuses a wrong version
+        run: sh tools/check-lua-test.sh
       - name: Test every hook against its payload
         run: sh tools/hooktest.sh
       - name: Every shell script parses as sh

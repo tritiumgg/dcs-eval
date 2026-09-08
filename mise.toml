@@ -89,6 +89,11 @@ run = [
 description = "Everything CI gates a pull request on"
 depends = ["docs"]
 run = [
+  # The guard, and the cases proving it refuses. The test needs no
+  # interpreter — it drives the guard with fake banners — so it runs
+  # first, and a guard that has stopped refusing fails here rather
+  # than passing quietly below.
+  "sh tools/check-lua-test.sh",
   "sh tools/check-lua.sh",
   "mise exec -- lua-language-server --check . --checklevel=Warning",
   # The Rust and harness gates. They skip, loudly, until the code they check

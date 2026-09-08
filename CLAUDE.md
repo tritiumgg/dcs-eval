@@ -22,8 +22,9 @@ docs/
   decisions/           where the build goes somewhere the specs did not
   conventions/         how a decision record is written
 types/dcs.lua          the DCS-provided globals, declared for the language server
-tools/                 mklua.sh, check-lua.sh, spec.sh, statecheck.sh,
-                       nospecrefs.sh, hooktest.sh
+tools/                 mklua.sh, check-lua.sh, check-lua-test.sh, spec.sh,
+                       statecheck.sh, nospecrefs.sh, hooktest.sh,
+                       buildcheck.sh
 .claude/hooks/         the read guard, the frozen-write guard, the shell guard,
                        the commit checks, the session start, the stop check
 ```
@@ -137,7 +138,9 @@ reading it. Edit `channel`, then `mise install`.
 **Lua is 5.1.5 PUC-Rio, never LuaJIT, never 5.4.** 5.4 has no `setfenv`, its
 integer division changes what `%.14g` prints, and LuaJIT counts debug hooks
 differently. A green run under anything else says nothing.
-`tools/check-lua.sh` proves what is on PATH and every Lua task depends on it.
+`tools/check-lua.sh` proves what is on PATH and every Lua task depends on
+it; `tools/check-lua-test.sh` drives it with fake banners and is what says
+the refusal still works.
 
 ## Language servers
 
