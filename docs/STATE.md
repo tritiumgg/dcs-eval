@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T03 landed on `main`; T04 has not started.
+Nothing. T04 landed on `main`; T05 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,30 +25,31 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T04** — the state stubs: `stubs: 148 checks`, one per surface cell, per name
+  `types/dcs.lua` declares, and the behaviour; an evaluating stub reddens it.
 - **T03** — the harness: `selftest: 1 check`, and `tools/harness-test.sh`
   showing a suite with no checks exit 2. Suites register in `tools/harness/suites.lua`.
 - **T02** — the workspace: `crates/dcs-eval` (lib) and `crates/dcs-mcp` (bin);
   `tools/buildcheck.sh` reads the member list and reddens when either is dropped.
-- **T01** — the interpreter and its guard, both halves shown: `lua5.1 5.1.5`,
-  and `tools/check-lua-test.sh` reddening on 5.4, LuaJIT and 5.1.4.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T04** — the DCS state stubs: the seven global tables of the states'
-surface, `net.dostring_in` returning `''`, and the `lfs`/`io`/`os`/`debug`
-models. Done when `lua5.1 tools/harness.lua stubs` prints the modelled-name
-count and asserts `net.dostring_in` answers empty; the mutation is a stub that
-evaluates instead, reddening that check. Needs T03. Build the tables with the
-runner's `t.strict`, and register the suite in `tools/harness/suites.lua`.
+**Task T05** — the CI workflow: the harness under 5.1 and `cargo test`. Done
+when a CI run prints both suites' check counts; the mutation is removing the
+interpreter step, which must make the interop job red rather than skipped.
+Needs T01–T03. `mise run check` is already what CI should run, so the
+workflow is that command on a Windows runner after `mise install` and
+`mise run lua-build`.
 
-**An agent verifies** this one end to end; it needs no DCS and no person.
+**An agent verifies** the counts by reading the run with `gh run view`. The
+interop job the mutation names does not exist until T15, so only the harness
+half of the mutation can be shown now; say so in the PR's "Not covered".
 
 ## After that
 
-- **T04** the state stubs, then **T05**'s CI — the rest of Stage 0, all
-  developer-only.
+- **T05**'s CI closes Stage 0, all developer-only.
 - **Milestone A** is Stages 0–2: the wire proven off DCS, the interop control
   first and the stand-in second.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
