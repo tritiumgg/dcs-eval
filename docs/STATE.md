@@ -17,8 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T03 is a pull request waiting for the maintainer; T04 has not
-started.
+Nothing. T03 landed on `main`; T04 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
