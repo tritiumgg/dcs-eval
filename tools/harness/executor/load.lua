@@ -94,6 +94,72 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- The export state
+--------------------------------------------------------------------------------
+
+local EXPORT_CALLBACKS = {
+  "LuaExportStart", "LuaExportBeforeNextFrame", "LuaExportAfterNextFrame", "LuaExportStop",
+}
+
+-- An empty Export.lua: nothing holds the four names before the load.
+do
+  local host = {}
+  local env = t.state("export", host)
+  t.load_executor(env)()
+
+  for _, name in ipairs(EXPORT_CALLBACKS) do
+    t.eq(type(rawget(env, name)), "function", "export: " .. name .. " is chained")
+  end
+  t.eq(rawget(env, "LuaExportActivityNextEvent"), nil, "export: LuaExportActivityNextEvent is never touched")
+
+  local E = rawget(env, NAME)
+  t.eq(type(E), "table", "export: the namespace global is published")
+  t.eq(E.host, "export", "export: the namespace says which host")
+  t.eq(E.phase, "loaded", "export: the phase starts at loaded")
+  t.eq(E.chained, 4, "export: all four slots are counted as chained")
+
+  rawget(env, "LuaExportStart")()
+  t.eq(E.phase, "sim", "export: after LuaExportStart the phase is sim")
+  rawget(env, "LuaExportBeforeNextFrame")()
+  rawget(env, "LuaExportAfterNextFrame")()
+  t.eq(E.phase, "sim", "export: the frame callbacks leave the phase alone")
+  rawget(env, "LuaExportStop")()
+  t.eq(E.phase, "stopped", "export: after LuaExportStop the phase is stopped")
+  t.eq(E.raised, 0, "export: every callback takes a call without raising")
+  t.eq(next(host), nil, "export: nothing in the model is written")
+end
+
+-- A crowded Export.lua: another exporter holds two of the names, one of them
+-- raising, and something that is not a function holds a third.
+do
+  local host = {}
+  local env = t.state("export", host)
+  local seen = {}
+  env.LuaExportStart = function(...)
+    seen[#seen + 1] = select("#", ...)
+  end
+  env.LuaExportStop = function()
+    error("theirs", 0)
+  end
+  env.LuaExportAfterNextFrame = "held"
+  t.load_executor(env)()
+
+  local E = rawget(env, NAME)
+  t.eq(E.chained, 3, "export: a non-function holder is counted out")
+  t.eq(rawget(env, "LuaExportAfterNextFrame"), "held", "export: the non-function holder is left alone")
+
+  rawget(env, "LuaExportStart")(1, nil, 3)
+  t.eq(#seen, 1, "export: the previous holder is still called")
+  t.eq(seen[1], 3, "export: the previous holder sees every argument, nil holes kept")
+  t.eq(E.phase, "sim", "export: ours ran alongside theirs")
+
+  t.raises(function()
+    rawget(env, "LuaExportStop")()
+  end, "^theirs$", "export: a raise in the previous holder reaches DCS as it did before")
+  t.eq(E.phase, "stopped", "export: ours ran before theirs raised")
+end
+
+--------------------------------------------------------------------------------
 -- Neither host
 --------------------------------------------------------------------------------
 
