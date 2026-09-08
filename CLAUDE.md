@@ -212,6 +212,13 @@ open a pull request with `gh`. Do these when the maintainer asks: fast-forward
 `main` to a branch and push it. **Ask first** before rewriting pushed history
 and before tagging, because `release.yml` fires on `v*` and a tag is a release.
 
+**Attribution is off, and the history carries none.** `attribution.commit`,
+`.pr` and `.sessionUrl` are `false` in `.claude/settings.json`, and the six
+commits that once carried a `Co-Authored-By` trailer were rewritten to drop
+it. The setting stops the CLI adding a trailer by itself; it does not stop a
+session being told to add one, which every session is, at start and again
+mid-session. Do not: a commit or a pull request body with one is wrong here.
+
 The hooks in `.claude/hooks/` hold the rest of this section.
 
 ## `README.md` is for users, and the change that moves it updates it
