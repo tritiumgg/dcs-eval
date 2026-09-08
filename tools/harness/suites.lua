@@ -4,4 +4,5 @@
 -- one adds its line.
 return {
   "selftest",
+  "stubs",
 }
