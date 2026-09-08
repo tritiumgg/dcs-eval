@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-07
+**Last updated:** 2026-09-08
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -17,7 +17,8 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. The repository is set up; T01 is next.
+Nothing. T01 is done and committed on `task/T01-reference-interpreter`, which
+is open as a pull request and not yet landed. `main` does not have it.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,28 +26,30 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T01** — the interpreter and its guard, both halves shown: `lua5.1 5.1.5`,
+  and `tools/check-lua-test.sh` reddening on 5.4, LuaJIT and 5.1.4.
 - **Naming** — the in-game half is the *executor*; its three on-disk names are
-  this project's, not `dcs-api`'s. ADR 0002. `docs/index.tsv` went with it.
+  this project's, not `dcs-api`'s. ADR 0002.
 - **Language servers** — both pinned; `types/dcs.lua` declares the DCS globals
   so a misspelt call fails `mise run lua-lint`.
-- **Repository setup** — the tree, `CLAUDE.md`, the hooks, `mise.toml`, the
-  two decision records. No plan task; the floor they stand on.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T01** — the pinned reference interpreter and its guard. Setup already
-landed `tools/mklua.sh` and `tools/check-lua.sh`, and `mise run lua-check`
-prints `lua5.1 5.1.5`. What is left is the mutation the plan names: point the
-guard at a 5.4 binary and show it printing the version and exiting non-zero.
+**Task T02** — the Cargo workspace: `dcs-eval` (lib) and `dcs-mcp` (bin)
+skeletons. Done when `cargo build` prints both crate names and produces
+`dcs-mcp.exe`; the mutation is removing a crate from the workspace members and
+watching the build redden. It needs nothing from T01. `tools/buildcheck.sh`
+stops skipping the Rust gates the moment `Cargo.toml` exists, so `mise run
+check` gets stricter on its own and wants no edit here.
 
 **An agent verifies** this one end to end; it needs no DCS and no person.
 
 ## After that
 
-- **T02** the Cargo workspace and **T03** the harness runner, then **T04**'s
-  state stubs and **T05**'s CI — Stage 0, all developer-only.
+- **T03** the harness runner and **T04** the state stubs, then **T05**'s CI —
+  the rest of Stage 0, all developer-only.
 - **Milestone A** is Stages 0–2: the wire proven off DCS, the interop control
   first and the stand-in second.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
