@@ -1,0 +1,21 @@
+# The workspace: one library crate and one binary crate.
+#
+# The client is a library, `dcs-eval`, so that a Rust consumer other than this
+# binary can link it; the binary, `dcs-mcp`, holds everything a user runs — the
+# MCP server, the installer and the CLI — and links the library for the wire.
+# The split is the seam: a change in how the wire is spoken must not rewrite
+# the tool wording, and the other way round.
+#
+# The toolchain is named in rust-toolchain.toml, and the formatting in
+# rustfmt.toml. Neither is repeated here.
+
+[workspace]
+resolver = "3"
+members = ["crates/dcs-eval", "crates/dcs-mcp"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.98"
+license = "MIT"
+repository = "https://github.com/tritiumgg/dcs-eval"

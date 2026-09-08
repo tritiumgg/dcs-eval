@@ -21,6 +21,8 @@ docs/
   specs/               frozen: bridge.md and mcp.md. Never edited
   decisions/           where the build goes somewhere the specs did not
   conventions/         how a decision record is written
+crates/dcs-eval        the client library: the executor's protocol, from outside DCS
+crates/dcs-mcp         the binary: the MCP server, the installer and the CLI
 types/dcs.lua          the DCS-provided globals, declared for the language server
 tools/                 mklua.sh, check-lua.sh, check-lua-test.sh, spec.sh,
                        statecheck.sh, nospecrefs.sh, hooktest.sh,
