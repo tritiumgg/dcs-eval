@@ -26,7 +26,8 @@ crates/dcs-mcp         the binary: the MCP server, the installer and the CLI
 types/dcs.lua          the DCS-provided globals, declared for the language server
 tools/                 mklua.sh, check-lua.sh, check-lua-test.sh, spec.sh,
                        statecheck.sh, nospecrefs.sh, hooktest.sh,
-                       buildcheck.sh
+                       buildcheck.sh, harness.lua, harness-test.sh
+tools/harness/         the harness suites, registered in suites.lua
 .claude/hooks/         the read guard, the frozen-write guard, the shell guard,
                        the commit checks, the session start, the stop check
 ```

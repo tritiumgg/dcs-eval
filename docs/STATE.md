@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T02 is a pull request waiting for the maintainer; T03 has not
+Nothing. T03 is a pull request waiting for the maintainer; T04 has not
 started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
@@ -26,23 +26,23 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T03** — the harness: `selftest: 1 check`, and `tools/harness-test.sh`
+  showing a suite with no checks exit 2. Suites register in `tools/harness/suites.lua`.
 - **T02** — the workspace: `crates/dcs-eval` (lib) and `crates/dcs-mcp` (bin);
   `tools/buildcheck.sh` reads the member list and reddens when either is dropped.
 - **T01** — the interpreter and its guard, both halves shown: `lua5.1 5.1.5`,
   and `tools/check-lua-test.sh` reddening on 5.4, LuaJIT and 5.1.4.
-- **Naming** — the in-game half is the *executor*; its three on-disk names are
-  this project's, not `dcs-api`'s. ADR 0002.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T03** — the Lua harness runner, `tools/harness.lua`: loads
-`DcsEvalExecutor.lua`, counts checks, exits 2 for "nothing ran", strict by
-default. Done when `lua5.1 tools/harness.lua selftest` prints
-`selftest: 1 check` and exits 0; the mutation is a test with no assertions
-exiting 2. Needs T01. `tools/buildcheck.sh` stops skipping the harness the
-moment the file exists, so `mise run check` gets stricter on its own.
+**Task T04** — the DCS state stubs: the seven global tables of the states'
+surface, `net.dostring_in` returning `''`, and the `lfs`/`io`/`os`/`debug`
+models. Done when `lua5.1 tools/harness.lua stubs` prints the modelled-name
+count and asserts `net.dostring_in` answers empty; the mutation is a stub that
+evaluates instead, reddening that check. Needs T03. Build the tables with the
+runner's `t.strict`, and register the suite in `tools/harness/suites.lua`.
 
 **An agent verifies** this one end to end; it needs no DCS and no person.
 
