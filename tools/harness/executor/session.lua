@@ -231,6 +231,23 @@ do
   t.eq(type(host.callbacks), "table", "temp: and the load went on to register")
 end
 
+-- Both the candidate and the fallback are files: there is nowhere left to
+-- go, and the load stops naming the fallback.
+do
+  local host, box = sandboxed()
+  local env = t.state("hook", host)
+  plant(env, box, [[\Temp\DCS]])
+  local rpc = plant(env, box, OUTPUT .. [[hook\rpc]])
+  t.load_executor(env)()
+  t.eq(rawget(env, NAME), nil, "both: no namespace is published")
+  t.eq(host.callbacks, nil, "both: nothing is registered")
+  t.eq(host.log and #host.log, 1, "both: one dcs.log line")
+  t.eq(host.log[1].level, env.log.ERROR, "both: the line is an error")
+  t.check(host.log[1].message:find("the transport root " .. rpc .. " could not be created", 1, true),
+    "both: the line names the fallback, the last place tried: " .. host.log[1].message)
+  t.eq(mode(env, rpc), "file", "both: the file in the way is left alone")
+end
+
 --------------------------------------------------------------------------------
 -- The sweep
 --------------------------------------------------------------------------------
