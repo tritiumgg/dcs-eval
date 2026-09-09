@@ -16,9 +16,19 @@
 -- host with `type(DCS)` instead of `rawget` and the export state raises
 -- inside the load, where the `pcall` swallows it: nothing is chained, and
 -- the export section goes red on its first read of `LuaExportStart`.
+--
+-- The directories are a sandbox's, because a load that gets past detection
+-- creates its session directory. What it creates is `executor/session`'s to
+-- prove; here it only has to land somewhere that is not a real install.
 local t = ...
 
 local NAME = "DcsEvalExecutor"
+
+-- A host whose directories are under a fresh sandbox.
+local function sandboxed()
+  local box = t.sandbox()
+  return { writedir = box .. [[\Saved Games\DCS\]], tempdir = box .. [[\Temp\DCS\]] }
+end
 
 -- The check's copy of the list, kept apart from the executor's on purpose:
 -- one table read by both would agree with itself whatever it said.
@@ -44,7 +54,7 @@ end
 --------------------------------------------------------------------------------
 
 do
-  local host = {}
+  local host = sandboxed()
   local env = t.state("hook", host)
   t.load_executor(env)()
 
@@ -99,7 +109,7 @@ local EXPORT_CALLBACKS = {
 
 -- An empty Export.lua: nothing holds the four names before the load.
 do
-  local host = {}
+  local host = sandboxed()
   local env = t.state("export", host)
   t.load_executor(env)()
 
@@ -122,13 +132,13 @@ do
   rawget(env, "LuaExportStop")()
   t.eq(E.phase, "stopped", "export: after LuaExportStop the phase is stopped")
   t.eq(E.raised, 0, "export: every callback takes a call without raising")
-  t.eq(next(host), nil, "export: nothing in the model is written")
+  t.eq(keys(host), 2, "export: the model holds the two directories the suite set and nothing else")
 end
 
 -- A crowded Export.lua: another exporter holds two of the names, one of them
 -- raising, and something that is not a function holds a third.
 do
-  local host = {}
+  local host = sandboxed()
   local env = t.state("export", host)
   local seen = {}
   env.LuaExportStart = function(...)
@@ -191,7 +201,7 @@ end
 --------------------------------------------------------------------------------
 
 do
-  local host = {}
+  local host = sandboxed()
   local env = t.state("hook", host)
   env.DCS.setUserCallbacks = function()
     error("boom\nline two")
@@ -205,6 +215,6 @@ do
   t.eq(host.log[1].level, env.log.ERROR, "mutation: the line is an error")
   t.check(host.log[1].message:find("boom", 1, true), "mutation: the line carries the reason")
   t.eq(host.log[1].message:find("\n", 1, true), nil, "mutation: the line is one line")
-  t.eq(keys(host), 1, "mutation: the host table holds the log line and nothing else")
+  t.eq(keys(host), 3, "mutation: the host table holds the two directories, the log line and nothing else")
   t.eq(rawget(_G, NAME), nil, "mutation: the harness's own globals are untouched")
 end

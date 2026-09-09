@@ -4,13 +4,13 @@
 --
 -- Four things are proved. On the directories DCS hands back the output is
 -- `<writedir>\Logs\DcsEval\<host>` and the transport root is
--- `<tempdir>\dcs-eval\<host>`, in both hosts, and nothing is created. A
--- temp candidate inside the install, relative, or inside `Saved Games` and
--- not under `Logs\` is refused and the transport goes to `<output>\rpc`,
--- while one under `Logs\` is kept. An output that fails the same test stops
--- the load: one `dcs.log` line, nothing registered, nothing published. And
--- an unreadable `lfs.writedir()` stops the load the same way, where an
--- unreadable `lfs.tempdir()` or `lfs.currentdir()` does not.
+-- `<tempdir>\dcs-eval\<host>`, in both hosts. A temp candidate inside the
+-- install, relative, or inside `Saved Games` and not under `Logs\` is
+-- refused and the transport goes to `<output>\rpc`, while one under `Logs\`
+-- is kept. An output that fails the same test stops the load: one `dcs.log`
+-- line, nothing registered, nothing published. And an unreadable
+-- `lfs.writedir()` stops the load the same way, where an unreadable
+-- `lfs.tempdir()` or `lfs.currentdir()` does not.
 --
 -- The mutations this suite exists to catch, and where each shows. Drop the
 -- relative test and the relative section reads `lfs.tempdir` where it
@@ -20,6 +20,13 @@
 -- `C:\..\Program Files` case is admitted. Match a root without a segment
 -- boundary and `LogsX` passes as `Logs`. Append the boundary to a root
 -- that already ends in one and a drive on its own contains nothing.
+--
+-- The suite proves the choice and runs over a stub filesystem that makes and
+-- removes nothing. A load that gets past the choice creates its session
+-- directory, and the cases here name real places, a drive root among them,
+-- that no sandbox can stand in for. `executor/session` proves what is
+-- created; here every path is a directory that exists and a call that would
+-- change one raises.
 local t = ...
 
 local NAME = "DcsEvalExecutor"
@@ -41,10 +48,36 @@ local function keys(tbl)
   return n
 end
 
+-- The stub filesystem: every path is a directory that exists, every
+-- directory is empty, and the calls that would make or remove one raise.
+local function refuse(call)
+  return function()
+    error("containment: " .. call .. " was called; this suite proves the choice and touches nothing", 0)
+  end
+end
+
+local function dry(env)
+  env.lfs.attributes = function(_, request)
+    if request == "mode" then
+      return "directory"
+    end
+    return { mode = "directory" }
+  end
+  env.lfs.dir = function()
+    return function()
+      return nil
+    end
+  end
+  env.lfs.mkdir = refuse("lfs.mkdir")
+  env.lfs.rmdir = refuse("lfs.rmdir")
+  env.os.remove = refuse("os.remove")
+  return env
+end
+
 -- Load the executor into a fresh hook state over `host` and return the
 -- namespace it published, or nil when it refused.
 local function load(host, state)
-  local env = t.state(state or "hook", host)
+  local env = dry(t.state(state or "hook", host))
   t.load_executor(env)()
   return rawget(env, NAME), env
 end
@@ -100,7 +133,7 @@ do
   t.eq(E.install_guard, CWD, "hook: the install guard is the working directory")
   t.eq(E.lfs_tempdir, TEMP, "hook: the raw tempdir is kept as DCS spelt it")
   t.eq(host.log, nil, "hook: a good load writes nothing to dcs.log")
-  t.eq(keys(host), 1, "hook: the callbacks are all the model saw, so nothing was created")
+  t.eq(keys(host), 1, "hook: the callbacks are all the model saw")
 end
 
 do
@@ -118,7 +151,7 @@ end
 -- reported absent and the load goes on without it.
 do
   local host = {}
-  local env = t.state("export", host)
+  local env = dry(t.state("export", host))
   env.lfs.currentdir = function()
     error("no currentdir here", 0)
   end
@@ -147,7 +180,7 @@ stops("install", { writedir = CWD .. [[\Saved Games\DCS\]] }, "inside the instal
 -- is kept. The guard is the working directory and nothing else.
 do
   local host = { tempdir = CWD .. [[\Temp\]] }
-  local env = t.state("hook", host)
+  local env = dry(t.state("hook", host))
   env.lfs.currentdir = function()
     return nil
   end
@@ -229,7 +262,7 @@ stops("unreadable", { writedir = "" }, "lfs.writedir() is unreadable")
 
 do
   local host = {}
-  local env = t.state("hook", host)
+  local env = dry(t.state("hook", host))
   env.lfs.writedir = function()
     error("boom", 0)
   end
@@ -244,7 +277,7 @@ end
 -- is chained, nothing is published, and the model saw nothing.
 do
   local host = { writedir = false }
-  local env = t.state("export", host)
+  local env = dry(t.state("export", host))
   t.load_executor(env)()
   t.eq(rawget(env, NAME), nil, "unreadable: the export state publishes nothing")
   t.eq(rawget(env, "LuaExportStart"), nil, "unreadable: and chains nothing")
@@ -263,7 +296,7 @@ end
 
 do
   local host = {}
-  local env = t.state("hook", host)
+  local env = dry(t.state("hook", host))
   env.lfs.tempdir = function()
     error("boom", 0)
   end
