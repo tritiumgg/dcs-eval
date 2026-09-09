@@ -185,10 +185,12 @@ end
 -- `..` resolved against the segment before it. The anchor, a drive or a
 -- leading separator, is never popped: Windows reads `C:\..\x` as `C:\x`,
 -- and a normaliser that let `..` eat the drive would let
--- `C:\..\Program Files\...` past the install check. A relative path is
--- refused before it gets here, and spells itself under `.` if it does.
+-- `C:\..\Program Files\...` past the install check. A drive on its own is
+-- an anchor too: `tidy` leaves `C:\` as `C:`, and a root spelt that way
+-- still holds everything on the drive. A relative path is refused before
+-- it gets here, and spells itself under `.` if it does.
 local function normalise(p)
-  local drive = p:match("^(%a:)[/\\]")
+  local drive = p:match("^(%a:)[/\\]") or p:match("^(%a:)$")
   local anchor = drive and drive:lower() or (p:find("^[/\\]") and "" or ".")
   local rest = drive and p:sub(3) or p
   local out = {}
@@ -204,10 +206,13 @@ local function normalise(p)
   return anchor .. "/" .. table.concat(out, "/")
 end
 
--- `path` is `root` or lies under it, at a segment boundary.
+-- `path` is `root` or lies under it, at a segment boundary. A root with no
+-- segment, a drive or the bare separator, already ends in the boundary;
+-- appending another would spell a prefix no path has.
 local function inside(path, root)
   local p, r = normalise(path), normalise(root)
-  return p == r or p:sub(1, #r + 1) == r .. "/"
+  local boundary = r:sub(-1) == "/" and r or r .. "/"
+  return p == r or p:sub(1, #boundary) == boundary
 end
 
 -- Whether `dir` may be written into, given the write directory and the

@@ -18,7 +18,8 @@
 -- the same. Replace the `Logs` rule with a spelling test and the
 -- `Logs\..\Config` case is admitted. Let `..` pop the drive and the
 -- `C:\..\Program Files` case is admitted. Match a root without a segment
--- boundary and `LogsX` passes as `Logs`.
+-- boundary and `LogsX` passes as `Logs`. Append the boundary to a root
+-- that already ends in one and a drive on its own contains nothing.
 local t = ...
 
 local NAME = "DcsEvalExecutor"
@@ -189,6 +190,27 @@ keeps("saved games", WD:lower() .. [[logs\temp\]], WD:lower() .. [[logs\temp\dcs
 keeps("saved games", WD .. [[Config\..\Logs\Temp\]], WD .. [[Config\..\Logs\Temp\dcs-eval\hook]])
 keeps("saved games", [[C:\Users\harness\Saved Games\DCS.openbeta\Temp\]],
   [[C:\Users\harness\Saved Games\DCS.openbeta\Temp\dcs-eval\hook]])
+
+-- A root that is a drive on its own has no segment for the boundary to sit
+-- after, and `lfs` hands it back as `C:\`. It still holds the whole drive.
+do
+  local host = { cwd = [[D:\]], tempdir = [[D:\Temp\]] }
+  local E = load(host)
+  t.eq(E and E.transport_source, "fallback: beside the output", "drive root: an install at a drive root holds the candidate")
+  t.check(E.transport_refusal:find("inside the install", 1, true), "drive root: and the refusal names the install")
+end
+
+-- With the install at the drive Saved Games is on, the output is inside it
+-- too, and the load stops.
+stops("drive root", { cwd = [[C:\]] }, "inside the install")
+
+do
+  local host = { writedir = [[C:\]] }
+  local E = load(host)
+  t.eq(E and E.output, [[C:\Logs\DcsEval\hook]], "drive root: a write directory at the drive root puts the output under its Logs")
+  t.eq(E.transport_source, "fallback: beside the output", "drive root: and the temp directory is inside it and not under Logs")
+  t.check(E.transport_refusal:find(OUTSIDE, 1, true), "drive root: with the Saved Games rule named")
+end
 
 -- The write directory's own spelling does not decide the test.
 do
