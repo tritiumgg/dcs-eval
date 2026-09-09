@@ -68,9 +68,10 @@ local EXPORT_CALLBACKS = {
 -- `res` and `arm` paths under it, and how many earlier sessions the load
 -- swept. `sweep_left` appears when one could not be removed, and
 -- `last_raise` on the first raise a guard catches. Once the session exists
--- it also carries the operations on it, `frame`, `publish` and `reply`, so
--- that a driver off DCS can frame and publish a reply before the tick loop
--- exists, and the tick loop, when it comes, reads them from the same place.
+-- it also carries the operations on it, `frame`, `publish`, `reply` and
+-- `take`, with `max_request_bytes` beside them, so that a driver off DCS
+-- can take a request and publish a reply before the tick loop exists, and
+-- the tick loop, when it comes, reads them from the same place.
 local E
 
 local function nothing() end
@@ -589,6 +590,48 @@ local function reply(id, status, headers, body)
   return publish(E.res .. SEP .. id .. ".res", bytes)
 end
 
+-- The most a request may be. Past it the request is answered `bad-request`
+-- and never read, so no client can have the executor hold a chunk of that
+-- size in a frame. Published on the namespace for the handshake to name.
+local MAX_REQUEST_BYTES = 262144
+
+-- One request off the disk: its bytes, with the file gone before they are
+-- returned, so that a chunk which kills the process cannot run again at
+-- the next listing. The size comes from a stat, and a request over the
+-- limit is removed without ever being opened. A file that is not there, or
+-- that will not open, is `gone`: it went between the listing and this, or
+-- is not a file, and there is nothing to answer and nothing to answer to.
+-- A file read whole that cannot then be removed is `error`, and its bytes
+-- are withheld, because a chunk that runs now and again at the next
+-- listing is the case the remove exists to prevent.
+--
+-- The bytes, or nil, a status and a message.
+local function take(path)
+  local lfs, io, os = rawget(_G, "lfs"), rawget(_G, "io"), rawget(_G, "os")
+  local size, why = lfs.attributes(path, "size")
+  if type(size) ~= "number" then
+    return nil, "gone", path .. ": " .. tostring(why)
+  end
+  if size > MAX_REQUEST_BYTES then
+    os.remove(path)
+    return nil, "bad-request",
+      "the request is " .. size .. " bytes, over the " .. MAX_REQUEST_BYTES .. "-byte limit, and was not read"
+  end
+  local fh
+  fh, why = io.open(path, "rb")
+  if not fh then
+    return nil, "gone", path .. ": " .. tostring(why)
+  end
+  local bytes = fh:read("*a")
+  fh:close()
+  local ok
+  ok, why = os.remove(path)
+  if not ok then
+    return nil, "error", path .. " was read and could not be removed: " .. tostring(why)
+  end
+  return bytes
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -602,7 +645,8 @@ local function main()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
-  E.frame, E.publish, E.reply = frame, publish, reply
+  E.frame, E.publish, E.reply, E.take = frame, publish, reply, take
+  E.max_request_bytes = MAX_REQUEST_BYTES
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then
     register_hook(DCS)

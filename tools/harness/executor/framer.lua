@@ -28,6 +28,17 @@
 -- hold lets the remove through and fails the rename instead, and ends the
 -- same way.
 --
+-- A request is taken off the disk: opened for bytes, read whole, and
+-- removed before the bytes come back, so what it holds cannot run twice.
+-- Its size comes from a stat, so a request over 262,144 bytes is removed
+-- and refused `bad-request` with both numbers and no open of it in the
+-- log; exactly the limit is taken. A request that is not there, or a
+-- directory under a request's name, is `gone`; one that reads but cannot
+-- be removed is `error` with its bytes withheld. `loadstring` is replaced
+-- for the whole suite with one that fails a check: nothing here compiles
+-- anything yet, so this is a guard for the dispatcher to come, not what
+-- catches the size mutation, which the refusals and the absent open do.
+--
 -- The mutations this suite exists to catch. Escape a newline instead of
 -- refusing it and the CR/LF case reads bytes where it wants nil. Frame from
 -- a map with `pairs` and the order case fails on whichever run reorders it.
@@ -36,7 +47,11 @@
 -- red on its first line. Drop the `os.remove` before the rename and the
 -- rewrite-in-place case goes red on this host, where the rename refuses.
 -- Leave the `.tmp` behind after a failed rename and the held case reads a
--- file where it wants nothing.
+-- file where it wants nothing. Drop the size test in `take` and the 300 KiB
+-- case reads bytes where it wants nil; read the file before testing its
+-- size and the case reads an open in the log where it wants a remove
+-- alone. Return the bytes before the remove and the held request case
+-- reads them where it wants nil.
 local t = ...
 
 local NAME = "DcsEvalExecutor"
@@ -131,6 +146,9 @@ local function spied(state, host)
   env.os.rename = function(from, to)
     log[#log + 1] = { call = { "rename", from, to }, listing = entries(env, parent(to)) }
     return rename(from, to)
+  end
+  env.loadstring = function()
+    t.check(false, "the executor compiled something: nothing under this suite may be parsed as code")
   end
   t.load_executor(env)()
   local E = rawget(env, NAME)
@@ -283,4 +301,94 @@ do
   t.eq(entries(env, E.res), "1-a.res", "held: and no .tmp survives")
   t.eq(ops(log), published(final) .. "\nremove " .. final .. ".tmp",
     "held: the remove and the rename were tried, then the .tmp was removed")
+end
+
+--------------------------------------------------------------------------------
+-- A request, taken off the disk
+--------------------------------------------------------------------------------
+
+-- One request under `E.req`, written through the runner's own `io` so the
+-- log holds nothing of it. Returns the path.
+local function request(E, name, content)
+  local path = E.req .. "\\" .. name
+  local fh = assert(io.open(path, "wb"))
+  fh:write(content)
+  fh:close()
+  return path
+end
+
+do
+  local E, env, _, log = spied("hook")
+  t.eq(type(E.take), "function", "the namespace carries take")
+  t.eq(E.max_request_bytes, 262144, "and the request limit")
+  local body = "for: " .. E.stamp .. "\r\nop: eval\r\n\r\nreturn '\0\255\128'\n"
+  local path = request(E, "1-a.req", body)
+  t.eq(E.take(path), body, "a request comes back byte for byte")
+  t.eq(ops(log), "open rb " .. path .. "\nremove " .. path, "opened for bytes, then removed")
+  t.eq(mode(env, path), nil, "the request is gone")
+  t.eq(entries(env, E.req), "", "and req is empty")
+end
+
+-- The limit is a bound on the bytes: exactly 262,144 is taken and one more
+-- is refused.
+do
+  local E, env, _, log = spied("hook")
+  local at = request(E, "at.req", string.rep("x", 262144))
+  local over = request(E, "over.req", string.rep("x", 262145))
+  t.eq(#E.take(at), 262144, "limit: a request of exactly the limit is taken")
+  for i = #log, 1, -1 do
+    log[i] = nil
+  end
+  local bytes, status, why = E.take(over)
+  t.eq(bytes, nil, "limit: one byte over is not")
+  t.eq(status, "bad-request", "limit: it is bad-request")
+  t.check(why:find("262145 bytes", 1, true) and why:find("262144-byte limit", 1, true),
+    "limit: the message carries both numbers: " .. tostring(why))
+  t.eq(ops(log), "remove " .. over, "limit: the file was removed and never opened")
+  t.eq(entries(env, E.req), "", "limit: both are gone")
+end
+
+-- A 300 KiB request: refused without a byte of it read.
+do
+  local E, env, _, log = spied("hook")
+  local code = "for: x\n\n" .. string.rep("x", 307200 - 8)
+  t.eq(#code, 307200, "big: the request is 300 KiB")
+  local big = request(E, "big.req", code)
+  local bytes, status, why = E.take(big)
+  t.eq(bytes, nil, "big: refused")
+  t.eq(status, "bad-request", "big: as bad-request")
+  t.check(why:find("307200 bytes", 1, true), "big: naming its size: " .. tostring(why))
+  t.eq(ops(log), "remove " .. big, "big: never opened, the size came from a stat, and the file was removed")
+  t.eq(mode(env, big), nil, "big: the file is gone")
+end
+
+-- A request that went between the listing and the take, and a directory
+-- under a request's name: nothing to answer and nothing to answer to.
+do
+  local E, env, _, log = spied("hook")
+  local bytes, status, why = E.take(E.req .. "\\vanished.req")
+  t.eq(bytes, nil, "gone: a request that is not there is not taken")
+  t.eq(status, "gone", "gone: and is gone, not bad")
+  t.check(why:find("vanished.req", 1, true), "gone: named: " .. tostring(why))
+  t.eq(#log, 0, "gone: nothing was opened or removed")
+  assert(env.lfs.mkdir(E.req .. "\\dir.req"))
+  bytes, status = E.take(E.req .. "\\dir.req")
+  t.eq(bytes, nil, "dir: a directory under a request's name is not taken")
+  t.eq(status, "gone", "dir: and is gone")
+  t.eq(mode(env, E.req .. "\\dir.req"), "directory", "dir: and is left alone")
+end
+
+-- A request something holds open reads, because the hold shares reading,
+-- and then cannot be removed: the bytes are withheld.
+do
+  local E, env, _, log = spied("hook")
+  local path = request(E, "held.req", "return 1")
+  local held = assert(io.open(path, "rb"))
+  local bytes, status, why = E.take(path)
+  held:close()
+  t.eq(bytes, nil, "held: a request that cannot be removed is not returned")
+  t.eq(status, "error", "held: it is an error")
+  t.check(why:find("could not be removed", 1, true), "held: saying so: " .. tostring(why))
+  t.eq(mode(env, path), "file", "held: the file stays")
+  t.eq(ops(log), "open rb " .. path .. "\nremove " .. path, "held: it was read and the remove was tried")
 end
