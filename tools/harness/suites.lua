@@ -6,4 +6,5 @@ return {
   "selftest",
   "stubs",
   "executor/load",
+  "executor/containment",
 }

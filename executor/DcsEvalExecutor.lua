@@ -7,8 +7,9 @@
 -- `Saved Games\DCS\Scripts\Export.lua` in the export state, where one
 -- `dofile` line points here; that state has no `DCS` and no `net`, and the
 -- way in is the four `LuaExport*` globals, which other exporters also hold.
--- The top level tells the two apart and registers the tail the state wants.
--- Everything past registration is one implementation.
+-- The top level tells the two apart, decides where the file may write, and
+-- registers the tail the state wants. Everything past registration is one
+-- implementation.
 --
 -- The whole top level runs under one `pcall`. An installed executor must
 -- never be the reason DCS fails to start, so a build on which the load
@@ -61,7 +62,9 @@ local EXPORT_CALLBACKS = {
 
 -- The namespace: what this file publishes as the global `DcsEvalExecutor`,
 -- and only once registration has succeeded, so a failed load leaves no
--- trace of itself. `last_raise` appears on the first raise a guard catches.
+-- trace of itself. It carries the host, the phase, the raise count and the
+-- two write roots with how each was chosen. `last_raise` appears on the
+-- first raise a guard catches.
 local E
 
 local function nothing() end
@@ -148,6 +151,140 @@ local function detect()
   error("no host: DCS is " .. type(DCS) .. ", net is " .. type(net) .. ", lfs is " .. type(lfs), 0)
 end
 
+-- Where this file may write, decided before anything is registered. Two
+-- directories come out. The output, `<lfs.writedir()>\Logs\DcsEval\<host>`,
+-- is where the durable files go: under `Logs\`, the one subtree of
+-- `Saved Games` that DCS writes and does not read, so nothing left there
+-- can change what the next launch loads. The transport root is where a
+-- session's requests and replies will go: `<lfs.tempdir()>\dcs-eval\<host>`
+-- when that passes the same test as the output, and `<output>\rpc` when it
+-- does not. Both are inferred, because nothing configures this file: the
+-- installer places it under one name and appends one line, and no
+-- environment reaches a Lua state DCS starts.
+--
+-- Containment here is textual. Case is folded, `.` and `..` are collapsed,
+-- and a root matches only at a segment boundary, so `LogsX` is not under
+-- `Logs`. An 8.3 short name or a junction is not seen through, because
+-- nothing in a DCS Lua state can resolve one; the client resolves a real
+-- path before it trusts what the handshake names.
+
+local SEP = "\\"
+
+-- Without trailing separators. `lfs.writedir()` answers with one.
+local function tidy(p)
+  return (p:gsub("[/\\]+$", ""))
+end
+
+-- A drive with a separator after it, or a leading separator. `C:foo` is
+-- relative to the drive's current directory and is not absolute.
+local function absolute(p)
+  return p:find("^%a:[/\\]") ~= nil or p:find("^[/\\]") ~= nil
+end
+
+-- One spelling for a path: forward slashes, lower case, `.` dropped and
+-- `..` resolved against the segment before it. The anchor, a drive or a
+-- leading separator, is never popped: Windows reads `C:\..\x` as `C:\x`,
+-- and a normaliser that let `..` eat the drive would let
+-- `C:\..\Program Files\...` past the install check. A relative path is
+-- refused before it gets here, and spells itself under `.` if it does.
+local function normalise(p)
+  local drive = p:match("^(%a:)[/\\]")
+  local anchor = drive and drive:lower() or (p:find("^[/\\]") and "" or ".")
+  local rest = drive and p:sub(3) or p
+  local out = {}
+  for segment in rest:gmatch("[^/\\]+") do
+    if segment == ".." then
+      if #out > 0 then
+        table.remove(out)
+      end
+    elseif segment ~= "." then
+      out[#out + 1] = segment:lower()
+    end
+  end
+  return anchor .. "/" .. table.concat(out, "/")
+end
+
+-- `path` is `root` or lies under it, at a segment boundary.
+local function inside(path, root)
+  local p, r = normalise(path), normalise(root)
+  return p == r or p:sub(1, #r + 1) == r .. "/"
+end
+
+-- Whether `dir` may be written into, given the write directory and the
+-- install, which is nil where `lfs.currentdir()` does not answer. `true`,
+-- or `false` and one line naming the rule that refused it and the path.
+-- Inside `Saved Games` the rule is written as "inside the write directory
+-- and not inside its `Logs`", not as a spelling test on the path, so
+-- `Logs\..\Config` is refused.
+local function may_write(dir, wd, install)
+  if not absolute(dir) then
+    return false, dir .. " is relative, and would resolve against the install"
+  end
+  if install and inside(dir, install) then
+    return false, dir .. " is inside the install, " .. install
+  end
+  if inside(dir, wd) and not inside(dir, wd .. SEP .. "Logs") then
+    return false, dir .. " is inside Saved Games and not under Logs"
+  end
+  return true
+end
+
+-- One directory read from `lfs`, as DCS spelt it, or nil where the read
+-- raises or answers something that is not a path. Each read is guarded on
+-- its own: the export state's `lfs.currentdir()` is not known to answer,
+-- and a read that raises must not take the others with it.
+local function read_dir(lfs, name)
+  local ok, value = pcall(function()
+    return lfs[name]()
+  end)
+  if ok and type(value) == "string" and value ~= "" then
+    return value
+  end
+  return nil
+end
+
+-- The two roots for `host`, or a raise saying why there are none. The
+-- output is refused outright: it is where the handshake goes, and a file
+-- that quietly worked somewhere else would be reporting from a place
+-- nobody reads. The temp candidate is refused quietly: `lfs.tempdir()` is
+-- a guess DCS handed back, not what anybody meant, and it can land inside
+-- the install or beside `Config\`. Where it does, the transport goes beside
+-- the output, which has already passed. Nothing is created here; the
+-- session directory is made when the session starts.
+local function roots(host)
+  local lfs = rawget(_G, "lfs")
+  local wd = read_dir(lfs, "writedir")
+  if not wd then
+    error("lfs.writedir() is unreadable, so nothing says where this file may write", 0)
+  end
+  wd = tidy(wd)
+  local install = read_dir(lfs, "currentdir")
+  install = install and tidy(install)
+  local output = wd .. SEP .. "Logs" .. SEP .. "DcsEval" .. SEP .. host
+  local allowed, why = may_write(output, wd, install)
+  if not allowed then
+    error("the output directory " .. why, 0)
+  end
+  local r = { output = output, install_guard = install or "ABSENT" }
+  local temp = read_dir(lfs, "tempdir")
+  r.lfs_tempdir = temp or "ABSENT"
+  if temp then
+    local candidate = tidy(temp) .. SEP .. "dcs-eval" .. SEP .. host
+    allowed, why = may_write(candidate, wd, install)
+    if allowed then
+      r.transport_root, r.transport_source = candidate, "lfs.tempdir"
+    else
+      r.transport_refusal = why
+    end
+  else
+    r.transport_refusal = "lfs.tempdir() is unreadable"
+  end
+  if not r.transport_root then
+    r.transport_root, r.transport_source = output .. SEP .. "rpc", "fallback: beside the output"
+  end
+  return r
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -158,7 +295,8 @@ local function main()
     return
   end
   local host, DCS = detect()
-  E = { host = host, phase = host == "hook" and "menu" or "loaded", raised = 0 }
+  E = roots(host)
+  E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then
     register_hook(DCS)
   else
