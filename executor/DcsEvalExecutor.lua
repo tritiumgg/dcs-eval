@@ -388,6 +388,13 @@ end
 -- state has none, which is why the namespace carries it. A file directly
 -- under the root is not a session and is left alone. Nothing under the
 -- output is ever swept.
+--
+-- The listing of the root itself is not guarded: the root was made or
+-- found a moment ago, so a listing that raises says the filesystem is not
+-- what it just was, and that stops the load with its reason rather than
+-- going on to write there. Every name listed is checked as a path under
+-- the root before anything is done to it, so a listing that answered for
+-- some other directory would remove nothing.
 local function sweep(E, lfs, os, log)
   local root = E.transport_root
   local names = {}
