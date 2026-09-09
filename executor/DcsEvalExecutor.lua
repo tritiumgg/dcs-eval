@@ -67,7 +67,10 @@ local EXPORT_CALLBACKS = {
 -- with the time and pid it was built from, its directory with the `req`,
 -- `res` and `arm` paths under it, and how many earlier sessions the load
 -- swept. `sweep_left` appears when one could not be removed, and
--- `last_raise` on the first raise a guard catches.
+-- `last_raise` on the first raise a guard catches. Once the session exists
+-- it also carries the operations on it, `frame` first among them, so that
+-- a driver off DCS can frame a reply before the tick loop exists, and the
+-- tick loop, when it comes, reads them from the same place.
 local E
 
 local function nothing() end
@@ -462,6 +465,63 @@ local function open_session(E, lfs, os, log)
   end
 end
 
+-- The envelope. A reply, the handshake and the heartbeat are one shape:
+-- header lines, one blank line, then a body that is everything after it,
+-- byte for byte. The shape needs no quoting rule, because the body is the
+-- only place a newline may appear, and that holds only while every header
+-- is checked here: a value carrying one would end its own line early and
+-- the rest would be read as a header nobody wrote. So a bad header is
+-- refused, never escaped, and nothing is written.
+--
+-- `headers` is a list of `{ name, value }` pairs in the order they are
+-- written, never a map: `pairs` orders a table however it likes, and the
+-- client's parser is proved against the bytes this file produces. A name is
+-- `[A-Za-z0-9_-]+`, spelt explicitly rather than with `%w`, which follows
+-- the process locale, and appears once per envelope, read without regard
+-- to case. A value is a string or a number, ASCII, without CR or LF, and
+-- does not begin with whitespace, which a reader strips and would lose.
+-- That is the reader's own rule and no stricter: a reply echoes the
+-- request's `chunkname`, so a writer that refused what a request may carry
+-- would fail a legal request at reply time. The body is a string, or nil
+-- for none, and is never inspected.
+--
+-- The bytes, or nil and a reason naming the header.
+local function frame(headers, body)
+  local lines, seen = {}, {}
+  for i, header in ipairs(headers) do
+    local name, value = header[1], header[2]
+    if type(name) ~= "string" or not name:find("^[A-Za-z0-9_%-]+$") then
+      return nil, "header " .. i .. ": the name " .. tostring(name) .. " is not [A-Za-z0-9_-]+"
+    end
+    local key = name:lower()
+    if seen[key] then
+      return nil, name .. ": repeated"
+    end
+    seen[key] = true
+    if type(value) == "number" then
+      value = tostring(value)
+    elseif type(value) ~= "string" then
+      return nil, name .. ": the value is a " .. type(value) .. ", not a string"
+    end
+    if value:find("[\r\n]") then
+      return nil, name .. ": the value carries a CR or LF"
+    end
+    if value:find("[\128-\255]") then
+      return nil, name .. ": the value is not ASCII"
+    end
+    if value:find("^[ \t\v\f]") then
+      return nil, name .. ": the value begins with whitespace, which a reader strips"
+    end
+    lines[#lines + 1] = name .. ": " .. value .. "\n"
+  end
+  if body == nil then
+    body = ""
+  elseif type(body) ~= "string" then
+    return nil, "the body is a " .. type(body) .. ", not a string"
+  end
+  return table.concat(lines) .. "\n" .. body
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -475,6 +535,7 @@ local function main()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
+  E.frame = frame
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then
     register_hook(DCS)

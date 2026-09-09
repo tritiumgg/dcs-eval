@@ -8,4 +8,5 @@ return {
   "executor/load",
   "executor/containment",
   "executor/session",
+  "executor/framer",
 }
