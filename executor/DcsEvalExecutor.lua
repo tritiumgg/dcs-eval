@@ -62,8 +62,9 @@ local EXPORT_CALLBACKS = {
 
 -- The namespace: what this file publishes as the global `DcsEvalExecutor`,
 -- and only once registration has succeeded, so a failed load leaves no
--- trace of itself. It carries the host, the phase, the raise count and the
--- two write roots with how each was chosen. `last_raise` appears on the
+-- trace of itself. It carries the host, the phase, the raise count, the
+-- two write roots with how each was chosen, and the session: its stamp
+-- with the time and pid it was built from. `last_raise` appears on the
 -- first raise a guard catches.
 local E
 
@@ -254,8 +255,8 @@ end
 -- nobody reads. The temp candidate is refused quietly: `lfs.tempdir()` is
 -- a guess DCS handed back, not what anybody meant, and it can land inside
 -- the install or beside `Config\`. Where it does, the transport goes beside
--- the output, which has already passed. Nothing is created here; the
--- session directory is made when the session starts.
+-- the output, which has already passed. Nothing is created here; that waits
+-- for the stamp.
 local function roots(host)
   local lfs = rawget(_G, "lfs")
   local wd = read_dir(lfs, "writedir")
@@ -290,6 +291,30 @@ local function roots(host)
   return r
 end
 
+-- A session is a directory under the transport root named by a stamp,
+-- `<os.time()>-<os.getpid()>`. The clock keeps two launches apart and the
+-- pid names a process that can be checked for liveness, so a request
+-- addressed to a stamp is addressed to one launch and no other. Without
+-- `os.getpid`, an addition of DCS's that stock Lua lacks, two launches in
+-- one second could share a name and nothing could tell a live session from
+-- a dead one; the file refuses to run rather than fence with the clock
+-- alone, and the refusal is the one `dcs.log` line a stopped load writes.
+--
+-- The time, the pid and the stamp, or a raise saying what is missing.
+local function stamp()
+  local os = rawget(_G, "os")
+  local getpid = type(os) == "table" and rawget(os, "getpid")
+  if type(getpid) ~= "function" then
+    error("os.getpid is absent, so there is no stamp to fence a session with", 0)
+  end
+  local pid = getpid()
+  if type(pid) ~= "number" then
+    error("os.getpid() answered a " .. type(pid) .. ", so there is no stamp to fence a session with", 0)
+  end
+  local started = os.time()
+  return started, pid, string.format("%d-%d", started, pid)
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -301,6 +326,7 @@ local function main()
   end
   local host, DCS = detect()
   E = roots(host)
+  E.started, E.pid, E.stamp = stamp()
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then
     register_hook(DCS)

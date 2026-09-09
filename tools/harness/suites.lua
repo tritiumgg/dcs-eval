@@ -7,4 +7,5 @@ return {
   "stubs",
   "executor/load",
   "executor/containment",
+  "executor/session",
 }
