@@ -64,9 +64,10 @@ local EXPORT_CALLBACKS = {
 -- and only once registration has succeeded, so a failed load leaves no
 -- trace of itself. It carries the host, the phase, the raise count, the
 -- two write roots with how each was chosen, and the session: its stamp
--- with the time and pid it was built from, and its directory with the
--- `req`, `res` and `arm` paths under it. `last_raise` appears on the first
--- raise a guard catches.
+-- with the time and pid it was built from, its directory with the `req`,
+-- `res` and `arm` paths under it, and how many earlier sessions the load
+-- swept. `sweep_left` appears when one could not be removed, and
+-- `last_raise` on the first raise a guard catches.
 local E
 
 local function nothing() end
@@ -338,16 +339,96 @@ local function ensure(lfs, path)
   return true
 end
 
+-- A session is two directories deep, `<stamp>\req` and `<stamp>\res`, with
+-- files in those. The sweep goes no deeper: a directory further down is
+-- not something a session made, and is left with the sibling it is in.
+local SESSION_DEPTH = 2
+
+-- One directory and everything in it: files by `os.remove`, directories by
+-- `lfs.rmdir` once they are empty, stopping at the first refusal. The names
+-- are read before anything is removed, so the listing is not walked while
+-- it changes. `true`, or nil, the path that refused and why.
+local function remove_tree(lfs, os, path, depth)
+  if depth > SESSION_DEPTH then
+    return nil, path, "is deeper than a session goes"
+  end
+  local names = {}
+  for name in lfs.dir(path) do
+    if name ~= "." and name ~= ".." then
+      names[#names + 1] = name
+    end
+  end
+  for _, name in ipairs(names) do
+    local entry = path .. SEP .. name
+    local ok, at, why
+    if lfs.attributes(entry, "mode") == "directory" then
+      ok, at, why = remove_tree(lfs, os, entry, depth + 1)
+    else
+      ok, why = os.remove(entry)
+      at = entry
+    end
+    if not ok then
+      return nil, at, tostring(why)
+    end
+  end
+  local ok, why = lfs.rmdir(path)
+  if not ok then
+    return nil, path, tostring(why)
+  end
+  return true
+end
+
+-- Every sibling of the session under the transport root, removed before
+-- anything is written. Each is a session that has ended, and nothing in it
+-- is addressed to this one, so its requests and replies go together, and a
+-- request left in one is never listed, whatever it says inside. A sibling
+-- that cannot be removed, which on Windows is one a client still holds a
+-- handle on, is left for the next load to try again, named on the
+-- namespace with what refused, and logged where there is a log; the export
+-- state has none, which is why the namespace carries it. A file directly
+-- under the root is not a session and is left alone. Nothing under the
+-- output is ever swept.
+local function sweep(E, lfs, os, log)
+  local root = E.transport_root
+  local names = {}
+  for name in lfs.dir(root) do
+    if name ~= "." and name ~= ".." and name ~= E.stamp then
+      names[#names + 1] = name
+    end
+  end
+  E.swept = 0
+  for _, name in ipairs(names) do
+    local path = root .. SEP .. name
+    if lfs.attributes(path, "mode") == "directory" then
+      local called, ok, at, why = pcall(remove_tree, lfs, os, path, 1)
+      if called and ok then
+        E.swept = E.swept + 1
+      else
+        if not called then
+          at, why = path, tostring(ok)
+        end
+        local left = name .. ": " .. at .. " " .. why
+        E.sweep_left = E.sweep_left or {}
+        E.sweep_left[#E.sweep_left + 1] = left
+        if type(log) == "table" and type(log.write) == "function" then
+          log.write(NAME, log.WARNING, "left a session that could not be removed, " .. left)
+        end
+      end
+    end
+  end
+end
+
 -- The directories, made once the stamp exists: the output, the transport
 -- root, and under the root `<stamp>\req` and `<stamp>\res`, which is the
--- session. The output has already passed containment, so one that cannot
--- be made stops the load, as one that failed containment did. A transport
--- root from `lfs.tempdir()` gets the quiet handling its containment refusal
--- gets: it was a guess DCS handed back, and a guess that cannot be made goes
--- beside the output too; the fallback itself failing stops the load. The
--- arm file is named and not made: a client creates it, and its presence is
--- what wakes the executor, so the executor making it would wake itself.
-local function open_session(E, lfs)
+-- session, with the root swept between. The output has already passed
+-- containment, so one that cannot be made stops the load, as one that
+-- failed containment did. A transport root from `lfs.tempdir()` gets the
+-- quiet handling its containment refusal gets: it was a guess DCS handed
+-- back, and a guess that cannot be made goes beside the output too; the
+-- fallback itself failing stops the load. The arm file is named and not
+-- made: a client creates it, and its presence is what wakes the executor,
+-- so the executor making it would wake itself.
+local function open_session(E, lfs, os, log)
   local ok, at, why = ensure(lfs, E.output)
   if not ok then
     error("the output directory " .. at .. " could not be created: " .. why, 0)
@@ -361,6 +442,7 @@ local function open_session(E, lfs)
   if not ok then
     error("the transport root " .. at .. " could not be created: " .. why, 0)
   end
+  sweep(E, lfs, os, log)
   E.session = E.transport_root .. SEP .. E.stamp
   E.req = E.session .. SEP .. "req"
   E.res = E.session .. SEP .. "res"
@@ -385,7 +467,7 @@ local function main()
   local host, DCS = detect()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
-  open_session(E, rawget(_G, "lfs"))
+  open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then
     register_hook(DCS)

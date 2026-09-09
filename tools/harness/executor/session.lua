@@ -11,7 +11,13 @@
 -- and `<root>\<stamp>\req` and `res`, with every missing parent, and names
 -- the arm file without making it. An output that cannot be made stops the
 -- load; a transport root from `lfs.tempdir()` that cannot be made falls
--- back beside the output, the way one that fails containment does.
+-- back beside the output, the way one that fails containment does. Before
+-- the session is made every sibling directory under the root goes, with
+-- the requests and replies in it, so a request in a foreign session is
+-- never listed; the own stamp is kept, a file under the root is left, and
+-- the other host's root is not touched. A sibling holding a file something
+-- has open stays, named on the namespace and logged where there is a log,
+-- and the load goes on; so does one deeper than a session goes.
 --
 -- The mutations this suite exists to catch. Drop the `os.getpid` test and
 -- the load raises inside the stamp instead of refusing: the mutation section
@@ -19,7 +25,9 @@
 -- `os.getpid`, and a build that fenced with the clock alone would publish a
 -- stamp of one number, which the shape check refuses. Make the arm file
 -- along with the session and the arm check reads a file where it wants
--- nothing.
+-- nothing. Sweep with `os.remove` alone and the planted sibling stays.
+-- Drop the own-stamp test and the own-stamp case reads its request gone.
+-- Let a refusal stop the load and the held case has nothing registered.
 local t = ...
 
 local NAME = "DcsEvalExecutor"
@@ -221,6 +229,134 @@ do
   t.eq(mode(env, box .. [[\Temp\DCS]]), "file", "temp: the file in the way is left alone")
   t.eq(host.log, nil, "temp: a fallback writes nothing to dcs.log")
   t.eq(type(host.callbacks), "table", "temp: and the load went on to register")
+end
+
+--------------------------------------------------------------------------------
+-- The sweep
+--------------------------------------------------------------------------------
+
+-- A state over a sandbox with the clock frozen, before the load, so a case
+-- can plant what an earlier session left.
+local function prepared(state, pid, host)
+  local box
+  host, box = sandboxed(host)
+  host.pid = pid
+  local env = t.state(state, host)
+  env.os.time = function()
+    return CLOCK
+  end
+  return env, box, host
+end
+
+-- Two sessions have ended, one holding a request and a reply. Both go, and
+-- the request is not listed: its directory is not there to list.
+do
+  local env, box, host = prepared("hook", 7)
+  local root = box .. ROOT .. "hook"
+  plant(env, box, ROOT .. [[hook\1000-1\req\0001.req]], "for: 1000-1\n\nreturn 1")
+  plant(env, box, ROOT .. [[hook\1000-1\res\0000.res]])
+  mkdirs(env, box, ROOT .. [[hook\999-2]])
+  t.load_executor(env)()
+  local E = rawget(env, NAME)
+  t.eq(E and E.swept, 2, "sweep: both siblings are counted")
+  t.eq(E.sweep_left, nil, "sweep: nothing was left")
+  t.eq(mode(env, root .. [[\1000-1]]), nil, "sweep: the sibling with the request is gone")
+  t.eq(mode(env, root .. [[\999-2]]), nil, "sweep: the empty sibling is gone")
+  t.eq(entries(env, root), "1000-7", "sweep: the root holds this session and nothing else")
+  t.eq(entries(env, E.req), "", "sweep: nothing is listed in req")
+  t.eq(host.log, nil, "sweep: a clean sweep writes nothing to dcs.log")
+end
+
+-- A file directly under the root is not a session and is left alone.
+do
+  local env, box = prepared("hook", 7)
+  local root = box .. ROOT .. "hook"
+  plant(env, box, ROOT .. [[hook\stray.txt]])
+  t.load_executor(env)()
+  local E = rawget(env, NAME)
+  t.eq(E and E.swept, 0, "stray: a file is not a sibling")
+  t.eq(entries(env, root), "1000-7 stray.txt", "stray: the file stays beside the session")
+end
+
+-- A directory already carrying this load's own stamp is kept with what is
+-- in it, because the sweep goes by name and this is its own name.
+do
+  local env, box = prepared("hook", 7)
+  local kept = plant(env, box, ROOT .. [[hook\1000-7\req\old.req]])
+  t.load_executor(env)()
+  local E = rawget(env, NAME)
+  t.eq(E and E.swept, 0, "own stamp: nothing is swept")
+  t.eq(mode(env, kept), "file", "own stamp: the request under the own stamp is kept")
+  t.eq(entries(env, E.session), "req res", "own stamp: res is made beside it")
+end
+
+-- The other host's root is a sibling of this one's, not under it.
+do
+  local env, box = prepared("hook", 7)
+  local theirs = plant(env, box, ROOT .. [[export\1000-1\req\0001.req]])
+  t.load_executor(env)()
+  local E = rawget(env, NAME)
+  t.eq(E and E.swept, 0, "other host: nothing under the other root is a sibling")
+  t.eq(mode(env, theirs), "file", "other host: the export session is untouched")
+end
+
+-- A second launch: the first session is swept and the second kept.
+do
+  local host, box = sandboxed({ pid = 7 })
+  local root = box .. ROOT .. "hook"
+  local first = load(host, "hook", CLOCK)
+  host.pid = 8
+  local second, env = load(host, "hook", CLOCK + 1)
+  t.eq(first and first.stamp, "1000-7", "relaunch: the first session")
+  t.eq(second and second.stamp, "1001-8", "relaunch: the second session")
+  t.eq(second.swept, 1, "relaunch: the first is swept")
+  t.eq(mode(env, first.session), nil, "relaunch: and is gone")
+  t.eq(entries(env, root), "1001-8", "relaunch: the root holds the second and nothing else")
+end
+
+-- A sibling a client still holds: the suite keeps one of its files open
+-- through the load. It stays, is named with what refused, and is logged in
+-- the hook state, and the load goes on either way.
+for _, state in ipairs({ "hook", "export" }) do
+  local env, box, host = prepared(state, 7)
+  local root = box .. ROOT .. state
+  local held_path = plant(env, box, ROOT .. state .. [[\2000-9\req\held.req]])
+  mkdirs(env, box, ROOT .. state .. [[\2000-8\res]])
+  local held = assert(io.open(held_path, "rb"))
+  local ok, err = pcall(t.load_executor(env))
+  held:close()
+  t.check(ok, state .. " held: the load must not raise, but did: " .. tostring(err))
+  local E = rawget(env, NAME)
+  t.eq(E and E.swept, 1, state .. " held: the sibling nothing holds is swept")
+  t.eq(E.sweep_left and #E.sweep_left, 1, state .. " held: one sibling is left")
+  t.check(E.sweep_left[1]:find("^2000%-9: "), state .. " held: it is named: " .. E.sweep_left[1])
+  t.check(E.sweep_left[1]:find(held_path, 1, true), state .. " held: with the path that refused")
+  t.eq(mode(env, held_path), "file", state .. " held: the held file stays")
+  t.eq(entries(env, root), "1000-7 2000-9", state .. " held: the root holds this session and the one left")
+  if state == "hook" then
+    t.eq(host.log and #host.log, 1, "hook held: one dcs.log line")
+    t.eq(host.log[1].subsystem, NAME, "hook held: under the file's name")
+    t.eq(host.log[1].level, env.log.WARNING, "hook held: a warning, not an error")
+    t.check(host.log[1].message:find("2000-9", 1, true), "hook held: naming the sibling")
+    t.eq(type(host.callbacks), "table", "hook held: and the load went on to register")
+  else
+    t.eq(host.log, nil, "export held: nowhere to log, so the namespace is where it shows")
+    t.eq(E.chained, 4, "export held: and the load went on to chain")
+  end
+end
+
+-- A sibling deeper than a session goes is not something a session made.
+-- It is left, named, and the load goes on.
+do
+  local env, box, host = prepared("hook", 7)
+  local deep = plant(env, box, ROOT .. [[hook\3000-1\req\deeper\x.txt]])
+  t.load_executor(env)()
+  local E = rawget(env, NAME)
+  t.eq(E and E.swept, 0, "deep: the sibling is not swept")
+  t.check(E.sweep_left and E.sweep_left[1]:find("deeper than a session", 1, true),
+    "deep: and the reason says so: " .. tostring(E.sweep_left and E.sweep_left[1]))
+  t.eq(mode(env, deep), "file", "deep: what lies below is untouched")
+  t.eq(host.log and #host.log, 1, "deep: one dcs.log line")
 end
 
 --------------------------------------------------------------------------------
