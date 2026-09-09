@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T06 landed on `main`; T07 has not started.
+Nothing. T07 landed on `main`; T08 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,27 +25,27 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T07** — containment and the two roots: `containment: 179 checks`, both hosts,
+  each refusal as a temp candidate that falls back and a write directory that stops the load. Nothing is created yet.
 - **T06** — the load shell: `load: 79 checks` over both hosts, four non-host
   states and a raising `setUserCallbacks`; no `pcall`, or `type(DCS)` detection, reddens it.
 - **T05** — the CI workflow, built at setup, closed on observation: main run
   34277046532 printed both counts; run 34278109722, the interpreter steps removed, went red at the guard.
-- **T04** — the state stubs: `stubs: 149 checks`, one per surface cell, per name
-  `types/dcs.lua` declares, and the behaviour; an evaluating stub reddens it.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T07** — executor containment and transport-root selection with the
-`Logs\` fallback. Done when `lua5.1 tools/harness.lua executor/containment`
-prints its check count; the mutations are a path inside the install, a
-relative path, and `Saved Games` outside `Logs\` (`Logs\..\Config` included),
-each of which must be refused, and allowing any one reddens the suite. Needs
-T06. It extends `executor/DcsEvalExecutor.lua` past registration and its suite
-goes beside `executor/load.lua`.
+**Task T08** — the session directory, the `<os.time>-<os.getpid>` stamp, and
+the sibling sweep at load. Done when `lua5.1 tools/harness.lua executor/session`
+shows a sibling removed at load and the own stamp kept; mutations: an absent
+`os.getpid` must refuse to run (a visible failure, not a weaker fence), and a
+request in a foreign sibling is never listed. Needs T07. It creates the
+directories T07 only chose, so `executor/load.lua` and `executor/containment.lua`
+then point `host.writedir` and `host.tempdir` at `t.sandbox()`.
 
-**An agent verifies** it: the harness runs off DCS under the T04 stubs, with
-`host.writedir` and `host.cwd` pointed where each mutation needs.
+**An agent verifies** it: the harness runs off DCS under the T04 stubs, with a
+sandbox for the directories and `host.pid` for the stamp.
 
 ## After that
 
