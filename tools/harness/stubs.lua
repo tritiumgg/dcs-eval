@@ -146,6 +146,20 @@ end, "cannot open", "dir raises for a file")
 t.eq(hook.os.remove(box .. "\\a\\req.txt"), true, "os.remove is stock")
 t.eq(hook.lfs.attributes(box .. "\\a\\req.txt"), nil, "and the file is gone")
 
+-- rmdir takes one empty directory and nothing else. A file the suite holds
+-- open resists os.remove until it is closed, which is what the executor's
+-- sweep meets when a client still watches a session, so it is pinned here.
+t.eq(hook.lfs.rmdir(box .. "\\nope"), nil, "rmdir refuses a directory that is not there")
+local held = assert(hook.io.open(box .. "\\a\\b\\held.txt", "wb"))
+t.eq(hook.lfs.rmdir(box .. "\\a\\b"), nil, "rmdir refuses a directory with an entry")
+t.eq(hook.os.remove(box .. "\\a\\b\\held.txt"), nil, "os.remove refuses a file that is held open")
+t.eq(hook.lfs.attributes(box .. "\\a\\b\\held.txt", "mode"), "file", "and the held file stays")
+held:close()
+t.eq(hook.os.remove(box .. "\\a\\b\\held.txt"), true, "a closed file is removed")
+t.eq(hook.lfs.rmdir(box .. "\\a\\b\\"), true, "rmdir removes an empty directory, trailing separator and all")
+t.eq(hook.lfs.attributes(box .. "\\a\\b"), nil, "and it is gone")
+t.eq(hook.lfs.rmdir(box .. "\\a\\b"), nil, "rmdir refuses it a second time")
+
 -- DCS and log answer from the host and record into it.
 local callbacks = {}
 hook.DCS.setUserCallbacks(callbacks)

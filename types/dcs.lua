@@ -59,6 +59,13 @@ function lfs.currentdir() end
 ---@return string? error
 function lfs.mkdir(path) end
 
+--- Remove one empty directory. Fails when it has entries, or when a handle is
+--- held on it, which on Windows is what a client watching it does.
+---@param path string
+---@return boolean|nil
+---@return string? error
+function lfs.rmdir(path) end
+
 --- The user's writable DCS directory: `Saved Games\DCS*\`, with a trailing
 --- separator. ED's addition. The transport root is chosen under it.
 ---@return string

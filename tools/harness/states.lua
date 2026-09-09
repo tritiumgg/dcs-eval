@@ -125,8 +125,19 @@ end
 
 -- Renaming a path to itself succeeds for a file and for a directory, and
 -- fails for nothing else, so it is the existence test the interpreter has.
+-- It also fails for a file something holds open, which Windows will not
+-- rename either; such a file still opens for reading, so that is the second
+-- test.
 local function present(path)
-  return os.rename(path, path) and true or false
+  if os.rename(path, path) then
+    return true
+  end
+  local fh = io.open(path, "rb")
+  if fh then
+    fh:close()
+    return true
+  end
+  return false
 end
 
 -- A file opens for reading; a directory that exists refuses to. Only `mode`
@@ -195,6 +206,27 @@ local function mkdir(t, state, path)
   return true
 end
 
+-- One empty directory, like the library's: a directory with entries is
+-- refused before the shell is asked. cmd's `rmdir` does not reliably say
+-- whether it removed anything, so the answer is whether the path is still
+-- there afterwards, which is what a handle held on it looks like.
+local function rmdir(t, state, path)
+  local p = strip(path)
+  if attributes(t, state, p, "mode") ~= "directory" then
+    return nil, "No such file or directory"
+  end
+  for name in dir(t, state, p) do
+    if name ~= "." and name ~= ".." then
+      return nil, "Directory not empty"
+    end
+  end
+  os.execute('rmdir "' .. p .. '" >nul 2>&1')
+  if present(p) then
+    return nil, "Permission denied"
+  end
+  return true
+end
+
 --------------------------------------------------------------------------------
 -- The libraries, one builder each
 --------------------------------------------------------------------------------
@@ -244,6 +276,9 @@ function MAKE.lfs(state, host, t)
     end,
     mkdir = function(path)
       return mkdir(t, state, path)
+    end,
+    rmdir = function(path)
+      return rmdir(t, state, path)
     end,
     currentdir = function()
       return answer(host, "cwd")
