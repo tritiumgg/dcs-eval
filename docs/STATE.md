@@ -25,7 +25,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T08** — the session: `session: 127 checks`, both hosts, under a sandbox. The
+- **T08** — the session: `session: 133 checks`, both hosts, under a sandbox. The
   stamp, the directories made, siblings swept, a held one left and logged; no `os.getpid` stops the load.
 - **T07** — containment and the two roots: `containment: 193 checks`, both hosts,
   each refusal as a temp candidate that falls back and a write directory that stops the load.
