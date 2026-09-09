@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-08
+**Last updated:** 2026-09-09
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T07 landed on `main`; T08 has not started.
+Nothing. T08 landed on `main`; T09 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,27 +25,27 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T08** — the session: `session: 127 checks`, both hosts, under a sandbox. The
+  stamp, the directories made, siblings swept, a held one left and logged; no `os.getpid` stops the load.
 - **T07** — containment and the two roots: `containment: 193 checks`, both hosts,
-  each refusal as a temp candidate that falls back and a write directory that stops the load. Nothing is created yet.
+  each refusal as a temp candidate that falls back and a write directory that stops the load.
 - **T06** — the load shell: `load: 79 checks` over both hosts, four non-host
   states and a raising `setUserCallbacks`; no `pcall`, or `type(DCS)` detection, reddens it.
-- **T05** — the CI workflow, built at setup, closed on observation: main run
-  34277046532 printed both counts; run 34278109722, the interpreter steps removed, went red at the guard.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T08** — the session directory, the `<os.time>-<os.getpid>` stamp, and
-the sibling sweep at load. Done when `lua5.1 tools/harness.lua executor/session`
-shows a sibling removed at load and the own stamp kept; mutations: an absent
-`os.getpid` must refuse to run (a visible failure, not a weaker fence), and a
-request in a foreign sibling is never listed. Needs T07. It creates the
-directories T07 only chose, so `executor/load.lua` and `executor/containment.lua`
-then point `host.writedir` and `host.tempdir` at `t.sandbox()`.
+**Task T09** — the reply framer: header, blank line, body; publish by rename
+with the `.tmp` in the destination directory; `os.remove` before `os.rename`;
+a request over 262,144 bytes refused unread. Done when
+`lua5.1 tools/harness.lua executor/framer` prints its count; mutations: writing
+the final `.res` name directly reddens the half-written-not-collected pair, and
+a 300 KiB request parsed as code reddens the size refusal. Needs T08, which
+left `E.req`, `E.res` and `E.session` on the namespace as the places to write.
 
-**An agent verifies** it: the harness runs off DCS under the T04 stubs, with a
-sandbox for the directories and `host.pid` for the stamp.
+**An agent verifies** it: the harness writes and reads back under a sandbox,
+the way `executor/session` does.
 
 ## After that
 
@@ -80,6 +80,9 @@ entries at most: an eleventh means something here is finished, or belongs in
   raising stub sits on the frame path. Whether the export state survives
   between missions is unmeasured; the load sentinel covers both answers, and
   Stage 9 can settle it.
+- **The held sibling is a held file.** The sweep's "cannot be removed" path is
+  proved with a file the suite keeps open; a client's directory handle from
+  `ReadDirectoryChangesW` is only seen at Stage 9, with the real client.
 - **`docs/PLAN.md`'s DR-1 and DR-2 are still the record for what they cover** —
   one repository, and Windows as the target. Neither was copied into
   `docs/decisions/`; a record that restates the plan is a second place to keep
