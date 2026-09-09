@@ -25,7 +25,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T07** — containment and the two roots: `containment: 179 checks`, both hosts,
+- **T07** — containment and the two roots: `containment: 193 checks`, both hosts,
   each refusal as a temp candidate that falls back and a write directory that stops the load. Nothing is created yet.
 - **T06** — the load shell: `load: 79 checks` over both hosts, four non-host
   states and a raising `setUserCallbacks`; no `pcall`, or `type(DCS)` detection, reddens it.
