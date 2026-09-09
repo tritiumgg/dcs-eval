@@ -64,8 +64,9 @@ local EXPORT_CALLBACKS = {
 -- and only once registration has succeeded, so a failed load leaves no
 -- trace of itself. It carries the host, the phase, the raise count, the
 -- two write roots with how each was chosen, and the session: its stamp
--- with the time and pid it was built from. `last_raise` appears on the
--- first raise a guard catches.
+-- with the time and pid it was built from, and its directory with the
+-- `req`, `res` and `arm` paths under it. `last_raise` appears on the first
+-- raise a guard catches.
 local E
 
 local function nothing() end
@@ -315,6 +316,63 @@ local function stamp()
   return started, pid, string.format("%d-%d", started, pid)
 end
 
+-- One directory, with its missing parents. `lfs.mkdir` makes one level and
+-- fails under a parent that is not there, so the walk goes up to the first
+-- directory that exists, or to the drive, and makes each on the way back.
+-- `true`, or nil, the path that refused and the library's reason.
+local function ensure(lfs, path)
+  if lfs.attributes(path, "mode") == "directory" then
+    return true
+  end
+  local parent = path:match("^(.+)[/\\][^/\\]+$")
+  if parent and not parent:find("^%a:$") then
+    local ok, at, why = ensure(lfs, parent)
+    if not ok then
+      return nil, at, why
+    end
+  end
+  local ok, why = lfs.mkdir(path)
+  if not ok then
+    return nil, path, tostring(why)
+  end
+  return true
+end
+
+-- The directories, made once the stamp exists: the output, the transport
+-- root, and under the root `<stamp>\req` and `<stamp>\res`, which is the
+-- session. The output has already passed containment, so one that cannot
+-- be made stops the load, as one that failed containment did. A transport
+-- root from `lfs.tempdir()` gets the quiet handling its containment refusal
+-- gets: it was a guess DCS handed back, and a guess that cannot be made goes
+-- beside the output too; the fallback itself failing stops the load. The
+-- arm file is named and not made: a client creates it, and its presence is
+-- what wakes the executor, so the executor making it would wake itself.
+local function open_session(E, lfs)
+  local ok, at, why = ensure(lfs, E.output)
+  if not ok then
+    error("the output directory " .. at .. " could not be created: " .. why, 0)
+  end
+  ok, at, why = ensure(lfs, E.transport_root)
+  if not ok and E.transport_source == "lfs.tempdir" then
+    E.transport_refusal = at .. " could not be created: " .. why
+    E.transport_root, E.transport_source = E.output .. SEP .. "rpc", "fallback: beside the output"
+    ok, at, why = ensure(lfs, E.transport_root)
+  end
+  if not ok then
+    error("the transport root " .. at .. " could not be created: " .. why, 0)
+  end
+  E.session = E.transport_root .. SEP .. E.stamp
+  E.req = E.session .. SEP .. "req"
+  E.res = E.session .. SEP .. "res"
+  E.arm = E.session .. SEP .. "arm"
+  for _, dir in ipairs({ E.req, E.res }) do
+    ok, at, why = ensure(lfs, dir)
+    if not ok then
+      error("the session directory " .. at .. " could not be created: " .. why, 0)
+    end
+  end
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -327,6 +385,7 @@ local function main()
   local host, DCS = detect()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
+  open_session(E, rawget(_G, "lfs"))
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then
     register_hook(DCS)
