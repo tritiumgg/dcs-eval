@@ -476,7 +476,8 @@ end
 --
 -- `headers` is a list of `{ name, value }` pairs in the order they are
 -- written, never a map: `pairs` orders a table however it likes, and the
--- client's parser is proved against the bytes this file produces. A name is
+-- client's parser, when it comes, is checked against the bytes this file
+-- produces. A name is
 -- `[A-Za-z0-9_-]+`, spelt explicitly rather than with `%w`, which follows
 -- the process locale, and appears once per envelope, read without regard
 -- to case. A value is a string or a number, ASCII, without CR or LF, and
@@ -601,6 +602,9 @@ local MAX_REQUEST_BYTES = 262144
 -- limit is removed without ever being opened. A file that is not there, or
 -- that will not open, is `gone`: it went between the listing and this, or
 -- is not a file, and there is nothing to answer and nothing to answer to.
+-- A directory stats with a size and is `gone` because `io.open` refuses
+-- it, which it does on this host; were one to open, the remove after the
+-- read would refuse instead, and the bytes would be withheld either way.
 -- A file read whole that cannot then be removed is `error`, and its bytes
 -- are withheld, because a chunk that runs now and again at the next
 -- listing is the case the remove exists to prevent.
