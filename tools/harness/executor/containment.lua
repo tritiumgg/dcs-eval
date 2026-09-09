@@ -128,3 +128,125 @@ do
   t.eq(E.transport_source, "lfs.tempdir", "export: and the temp candidate is still kept")
 end
 
+--------------------------------------------------------------------------------
+-- Inside the install
+--------------------------------------------------------------------------------
+
+falls_back("install", CWD .. [[\Temp\]], "inside the install")
+falls_back("install", [[c:\program files\EAGLE DYNAMICS\dcs world\BIN\Temp\]], "inside the install")
+falls_back("install", [[C:\..\Program Files\Eagle Dynamics\DCS World\bin\Temp\]], "inside the install")
+falls_back("install", [[C:/Program Files/Eagle Dynamics/DCS World/bin/Temp/]], "inside the install")
+falls_back("install", CWD, "inside the install")
+keeps("install", [[C:\Program Files\Eagle Dynamics\DCS World\bin2\]],
+  [[C:\Program Files\Eagle Dynamics\DCS World\bin2\dcs-eval\hook]])
+
+stops("install", { writedir = CWD .. [[\Saved Games\DCS\]] }, "inside the install")
+
+-- With no install guard the install test cannot run, and the same candidate
+-- is kept. The guard is the working directory and nothing else.
+do
+  local host = { tempdir = CWD .. [[\Temp\]] }
+  local env = t.state("hook", host)
+  env.lfs.currentdir = function()
+    return nil
+  end
+  t.load_executor(env)()
+  local E = rawget(env, NAME)
+  t.eq(E and E.install_guard, "ABSENT", "install: a nil working directory is an absent guard")
+  t.eq(E.transport_source, "lfs.tempdir", "install: without the guard the candidate is kept")
+end
+
+--------------------------------------------------------------------------------
+-- Relative
+--------------------------------------------------------------------------------
+
+falls_back("relative", [[Temp\]], "is relative")
+falls_back("relative", [[.\Temp]], "is relative")
+falls_back("relative", [[..\Temp]], "is relative")
+falls_back("relative", [[C:Temp\]], "is relative")
+
+stops("relative", { writedir = [[Saved Games\DCS\]] }, "is relative")
+
+--------------------------------------------------------------------------------
+-- Inside Saved Games and not under Logs
+--------------------------------------------------------------------------------
+
+local OUTSIDE = "inside Saved Games and not under Logs"
+
+falls_back("saved games", WD .. [[Temp\]], OUTSIDE)
+falls_back("saved games", WD .. [[Logs\..\Config\]], OUTSIDE)
+falls_back("saved games", WD .. [[Logs\.\..\Config\]], OUTSIDE)
+falls_back("saved games", WD .. [[Logs\Temp\..\..\Config\]], OUTSIDE)
+falls_back("saved games", WD .. [[LogsX\]], OUTSIDE)
+falls_back("saved games", WD .. [[Logs..\]], OUTSIDE)
+falls_back("saved games", WD, OUTSIDE)
+falls_back("saved games", WD:lower(), OUTSIDE)
+falls_back("saved games", [[C:\Users\harness\Saved Games\DCS]], OUTSIDE)
+
+keeps("saved games", WD .. [[Logs\Temp\]], WD .. [[Logs\Temp\dcs-eval\hook]])
+keeps("saved games", WD .. [[Logs\]], WD .. [[Logs\dcs-eval\hook]])
+keeps("saved games", WD:lower() .. [[logs\temp\]], WD:lower() .. [[logs\temp\dcs-eval\hook]])
+keeps("saved games", WD .. [[Config\..\Logs\Temp\]], WD .. [[Config\..\Logs\Temp\dcs-eval\hook]])
+keeps("saved games", [[C:\Users\harness\Saved Games\DCS.openbeta\Temp\]],
+  [[C:\Users\harness\Saved Games\DCS.openbeta\Temp\dcs-eval\hook]])
+
+-- The write directory's own spelling does not decide the test.
+do
+  local host = { writedir = WD:upper(), tempdir = WD .. [[Temp\]] }
+  local E = load(host)
+  t.eq(E and E.transport_source, "fallback: beside the output", "saved games: the write directory is matched case-folded")
+  t.eq(E.output, WD:upper() .. [[Logs\DcsEval\hook]], "saved games: the output keeps the spelling DCS gave")
+end
+
+--------------------------------------------------------------------------------
+-- Unreadable
+--------------------------------------------------------------------------------
+
+stops("unreadable", { writedir = false }, "lfs.writedir() is unreadable")
+stops("unreadable", { writedir = "" }, "lfs.writedir() is unreadable")
+
+do
+  local host = {}
+  local env = t.state("hook", host)
+  env.lfs.writedir = function()
+    error("boom", 0)
+  end
+  t.load_executor(env)()
+  t.eq(rawget(env, NAME), nil, "unreadable: a writedir that raises publishes nothing")
+  t.eq(host.callbacks, nil, "unreadable: and registers nothing")
+  t.check(host.log and host.log[1].message:find("lfs.writedir() is unreadable", 1, true),
+    "unreadable: and the line says the write directory is unreadable")
+end
+
+-- The export state has no `log`, so the refusal there is silent: nothing
+-- is chained, nothing is published, and the model saw nothing.
+do
+  local host = { writedir = false }
+  local env = t.state("export", host)
+  t.load_executor(env)()
+  t.eq(rawget(env, NAME), nil, "unreadable: the export state publishes nothing")
+  t.eq(rawget(env, "LuaExportStart"), nil, "unreadable: and chains nothing")
+  t.eq(host.log, nil, "unreadable: and has nowhere to say so")
+  t.eq(keys(host), 1, "unreadable: the model holds what the suite set and nothing else")
+end
+
+do
+  local host = { tempdir = false }
+  local E = load(host)
+  t.eq(E and E.transport_source, "fallback: beside the output", "unreadable: an unreadable tempdir falls back")
+  t.eq(E.lfs_tempdir, "ABSENT", "unreadable: and is reported absent")
+  t.check(E.transport_refusal:find("lfs.tempdir() is unreadable", 1, true), "unreadable: and the refusal says why")
+  t.eq(host.log, nil, "unreadable: and nothing is written to dcs.log")
+end
+
+do
+  local host = {}
+  local env = t.state("hook", host)
+  env.lfs.tempdir = function()
+    error("boom", 0)
+  end
+  t.load_executor(env)()
+  local E = rawget(env, NAME)
+  t.eq(E and E.transport_source, "fallback: beside the output", "unreadable: a tempdir that raises falls back")
+  t.eq(type(host.callbacks), "table", "unreadable: and the load went on to register")
+end
