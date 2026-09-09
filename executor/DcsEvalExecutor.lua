@@ -68,9 +68,9 @@ local EXPORT_CALLBACKS = {
 -- `res` and `arm` paths under it, and how many earlier sessions the load
 -- swept. `sweep_left` appears when one could not be removed, and
 -- `last_raise` on the first raise a guard catches. Once the session exists
--- it also carries the operations on it, `frame` first among them, so that
--- a driver off DCS can frame a reply before the tick loop exists, and the
--- tick loop, when it comes, reads them from the same place.
+-- it also carries the operations on it, `frame`, `publish` and `reply`, so
+-- that a driver off DCS can frame and publish a reply before the tick loop
+-- exists, and the tick loop, when it comes, reads them from the same place.
 local E
 
 local function nothing() end
@@ -522,6 +522,73 @@ local function frame(headers, body)
   return table.concat(lines) .. "\n" .. body
 end
 
+-- One file, published by rename. The bytes go to `<path>.tmp`, in the
+-- directory the file will live in so the rename never crosses a device,
+-- and the final name appears whole or not at all: a reader that lists
+-- nothing but an exact suffix never meets a half-written file. `os.remove`
+-- of the final name comes first, because Windows will not rename onto an
+-- existing name, and its answer is discarded: a fresh reply has no final to
+-- remove, and a hold on the final that makes the remove fail makes the
+-- rename fail after it, which is where the verdict is read. From the moment
+-- the open succeeds a `.tmp` exists, and no failure past that point leaves
+-- it behind. `write` and `close` are checked apart, because in Lua 5.1 a
+-- buffered write can fail only at the close.
+--
+-- `true`, or nil and what refused.
+local function publish(path, bytes)
+  local io, os = rawget(_G, "io"), rawget(_G, "os")
+  local tmp = path .. ".tmp"
+  local fh, why = io.open(tmp, "wb")
+  if not fh then
+    return nil, tmp .. ": " .. tostring(why)
+  end
+  local ok
+  ok, why = fh:write(bytes)
+  if ok then
+    ok, why = fh:close()
+  else
+    fh:close()
+  end
+  if ok then
+    os.remove(path)
+    ok, why = os.rename(tmp, path)
+  end
+  if not ok then
+    os.remove(tmp)
+    return nil, path .. ": " .. tostring(why)
+  end
+  return true
+end
+
+-- The reply to `id`: the session's headers, then the caller's, then the
+-- body, published as `<res>\<id>.res`. `status` comes first so a reader
+-- with one line has the verdict; `protocol` is the envelope's version;
+-- `host`, `stamp` and `phase` say which session answered and what it was
+-- doing; `id` echoes the name the request came under, which is only a
+-- filename here, so the reply takes it whatever it spells. The session's
+-- headers are read off the namespace as the reply is framed, so a count
+-- the session learns to keep later lands here without the caller changing.
+--
+-- `true`, or nil and what refused, in which case nothing was written.
+local function reply(id, status, headers, body)
+  local all = {
+    { "status", status },
+    { "protocol", 2 },
+    { "host", E.host },
+    { "stamp", E.stamp },
+    { "phase", E.phase },
+    { "id", id },
+  }
+  for _, header in ipairs(headers or {}) do
+    all[#all + 1] = header
+  end
+  local bytes, why = frame(all, body)
+  if not bytes then
+    return nil, why
+  end
+  return publish(E.res .. SEP .. id .. ".res", bytes)
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -535,7 +602,7 @@ local function main()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
-  E.frame = frame
+  E.frame, E.publish, E.reply = frame, publish, reply
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then
     register_hook(DCS)
