@@ -123,15 +123,17 @@ local function strip(path)
   return p
 end
 
--- Renaming a path to itself succeeds for a file and for a directory, and
--- fails for nothing else, so it is the existence test the interpreter has.
--- It also fails for a file something holds open, which Windows will not
--- rename either; such a file still opens for reading, so that is the second
--- test.
-local function present(path)
-  if os.rename(path, path) then
-    return true
-  end
+-- cmd's `if exist "<dir>\*"` holds for a directory and for nothing else,
+-- and holds whether or not something has a file in it open. Renaming a
+-- path to itself, the test the interpreter has on its own, fails for a
+-- directory in that state, and for one the user may not rename, such as
+-- `C:\Users`.
+local function is_directory(path)
+  return os.execute('if exist "' .. path .. '\\*" (exit 0) else (exit 1)') == 0
+end
+
+-- A file opens for reading, held open by something else or not.
+local function is_file(path)
   local fh = io.open(path, "rb")
   if fh then
     fh:close()
@@ -140,21 +142,24 @@ local function present(path)
   return false
 end
 
--- A file opens for reading; a directory that exists refuses to. Only `mode`
--- and `size` are modelled, and a read of any other attribute raises, naming
--- it, so a use of one is a decision rather than a nil.
+local function present(path)
+  return is_directory(path) or is_file(path)
+end
+
+-- Only `mode` and `size` are modelled, and a read of any other attribute
+-- raises, naming it, so a use of one is a decision rather than a nil.
 local function attributes(t, state, path, request)
   local p = strip(path)
-  if not present(p) then
-    return nil, path .. ": No such file or directory"
-  end
   local attr
-  local fh = io.open(p, "rb")
-  if fh then
+  if is_directory(p) then
+    attr = { mode = "directory", size = 0 }
+  else
+    local fh = io.open(p, "rb")
+    if not fh then
+      return nil, path .. ": No such file or directory"
+    end
     attr = { mode = "file", size = fh:seek("end") }
     fh:close()
-  else
-    attr = { mode = "directory", size = 0 }
   end
   attr = t.strict(state .. ".lfs.attributes(" .. path .. ")", attr)
   if type(request) == "string" then
