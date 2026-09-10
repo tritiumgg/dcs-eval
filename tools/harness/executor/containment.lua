@@ -25,8 +25,9 @@
 -- removes nothing. A load that gets past the choice creates its session
 -- directory, and the cases here name real places, a drive root among them,
 -- that no sandbox can stand in for. `executor/session` proves what is
--- created; here every path is a directory that exists and a call that would
--- change one raises.
+-- created; here every path is a directory that exists, the handshake goes
+-- to a handle that keeps nothing, and any other call that would change
+-- something raises.
 local t = ...
 
 local NAME = "DcsEvalExecutor"
@@ -50,10 +51,19 @@ end
 
 -- The stub filesystem: every path is a directory that exists, every
 -- directory is empty, and the calls that would make or remove one raise.
+-- The handshake is the one file a load writes, and it is dried the same
+-- way: the open of its `.tmp` answers a handle that keeps nothing, the
+-- remove of its final name answers as for a file that is not there, the
+-- rename of the one onto the other answers true, and any other path
+-- raises. `executor/handshake` proves what is written.
 local function refuse(call)
   return function()
     error("containment: " .. call .. " was called; this suite proves the choice and touches nothing", 0)
   end
+end
+
+local function leaf(path)
+  return tostring(path):match("[^/\\]+$")
 end
 
 local function dry(env)
@@ -70,7 +80,31 @@ local function dry(env)
   end
   env.lfs.mkdir = refuse("lfs.mkdir")
   env.lfs.rmdir = refuse("lfs.rmdir")
-  env.os.remove = refuse("os.remove")
+  env.io.open = function(path, mode)
+    if mode == "wb" and leaf(path) == "executor.txt.tmp" then
+      return {
+        write = function()
+          return true
+        end,
+        close = function()
+          return true
+        end,
+      }
+    end
+    return refuse("io.open(" .. tostring(path) .. ")")()
+  end
+  env.os.remove = function(path)
+    if leaf(path) == "executor.txt" then
+      return nil, "No such file or directory"
+    end
+    return refuse("os.remove(" .. tostring(path) .. ")")()
+  end
+  env.os.rename = function(from, to)
+    if leaf(from) == "executor.txt.tmp" and leaf(to) == "executor.txt" then
+      return true
+    end
+    return refuse("os.rename(" .. tostring(from) .. ")")()
+  end
   return env
 end
 

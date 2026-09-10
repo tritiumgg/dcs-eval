@@ -159,7 +159,7 @@ do
   t.eq(entries(env, E.session), "req res", "hook: the session holds req and res and nothing else")
   t.eq(entries(env, root), "1000-7", "hook: the root holds the session and nothing else")
   t.eq(mode(env, box .. OUTPUT .. "hook"), "directory", "hook: the output directory is made")
-  t.eq(entries(env, box .. OUTPUT .. "hook"), "", "hook: and holds nothing yet")
+  t.eq(entries(env, box .. OUTPUT .. "hook"), "executor.txt", "hook: and holds the handshake and nothing else")
   t.eq(E.transport_source, "lfs.tempdir", "hook: the transport root is still the temp candidate")
   t.eq(E.transport_refusal, nil, "hook: nothing was refused")
   t.eq(entries(env, box), "Saved Games Temp", "hook: the sandbox holds the two trees the host named")

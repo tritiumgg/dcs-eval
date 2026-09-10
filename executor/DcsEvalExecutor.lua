@@ -22,6 +22,53 @@
 
 local NAME = "DcsEvalExecutor"
 
+-- The figures a client reads from the handshake and the executor holds
+-- itself to. Each is a constant here rather than anything configured,
+-- because nothing configures this file: the installer places it and
+-- appends one line, and no environment reaches a Lua state DCS starts. All
+-- of them are published from the first load, before the paths that spend
+-- them exist, so the client is written once against the whole shape and a
+-- later path reads its figure from here and nowhere else. The most a
+-- request may be is enforced: past it a request is answered `bad-request`
+-- and never read, so no client can have the executor hold a chunk of that
+-- size in a frame. The two instruction figures are provisional: the
+-- specification names neither, and the count hook that spends them is not
+-- built.
+local PROTOCOL = 2
+local ALLOW_EVAL = true
+local TICK_BUDGET_MS = 8
+local INSTRUCTION_BUDGET = 1000000
+local INSTRUCTION_CEILING = 50000000
+local PROBE_EVERY = 8
+local QUIET_S = 3
+local MAX_REQUEST_BYTES = 262144
+local MAX_RESULT_BYTES = 65536
+
+-- What each host answers for each state, as the handshake and every ping
+-- reply declare it: the carrier that reaches the state, whether a result
+-- comes back as any Lua value or as a string, and what has to be true of
+-- the simulator first. The hook host reaches its own state directly, five
+-- more through `net.dostring_in`, which answers a string, and
+-- `missionscripting` through the mission state's door, which answers a
+-- string too. The export host has no `net` and answers its own state
+-- alone. `server` is a second name for `scripting` and is not listed
+-- twice. Declared before the carriers are built, for the reason the
+-- figures above are.
+local STATES = {
+  hook = {
+    { "hook", "local", "any", "always" },
+    { "gui", "dostring_in", "string", "menu" },
+    { "scripting", "dostring_in", "string", "menu" },
+    { "mission", "dostring_in", "string", "menu" },
+    { "config", "dostring_in", "string", "menu" },
+    { "export", "dostring_in", "string", "slot" },
+    { "missionscripting", "a_do_script", "string", "mission" },
+  },
+  export = {
+    { "export", "local", "any", "always" },
+  },
+}
+
 -- The hook callbacks registered, and the phase each one moves the executor
 -- to, where it moves one. Every callback is guarded, so a raise inside it
 -- never reaches DCS, and none returns a value. The `try*` variants are not
@@ -72,7 +119,7 @@ local EXPORT_CALLBACKS = {
 -- `take`, `parse` and `admit`, with `max_request_bytes` beside them, so that
 -- a driver off DCS can take a request, read it and publish a reply before
 -- the tick loop exists, and the tick loop, when it comes, reads them from
--- the same place.
+-- the same place. `handshake` is the path of the file a client reads first.
 local E
 
 local function nothing() end
@@ -576,7 +623,7 @@ end
 local function reply(id, status, headers, body)
   local all = {
     { "status", status },
-    { "protocol", 2 },
+    { "protocol", PROTOCOL },
     { "host", E.host },
     { "stamp", E.stamp },
     { "phase", E.phase },
@@ -591,11 +638,6 @@ local function reply(id, status, headers, body)
   end
   return publish(E.res .. SEP .. id .. ".res", bytes)
 end
-
--- The most a request may be. Past it the request is answered `bad-request`
--- and never read, so no client can have the executor hold a chunk of that
--- size in a frame. Published on the namespace for the handshake to name.
-local MAX_REQUEST_BYTES = 262144
 
 -- One request off the disk: its bytes, with the file gone before they are
 -- returned, so that a chunk which kills the process cannot run again at
@@ -766,6 +808,104 @@ local function admit(path)
   return nil, status, why
 end
 
+-- The `states` header for `host`: one entry per state it answers, in the
+-- order declared, each `name:carrier=…,returns=…,needs=…`. The entries
+-- are separated by one space, because the comma is taken inside them.
+local function states(host)
+  local entries = {}
+  for i, row in ipairs(STATES[host]) do
+    entries[i] = row[1] .. ":carrier=" .. row[2] .. ",returns=" .. row[3] .. ",needs=" .. row[4]
+  end
+  return table.concat(entries, " ")
+end
+
+-- The leaf of the file DCS loaded, read off the debug library rather than
+-- assumed, because the installer decides the name and a copy under
+-- another one should say so. A chunk that did not come from a file, or a
+-- state whose debug library will not say, is `ABSENT`.
+local function source()
+  local debug = rawget(_G, "debug")
+  local ok, info = pcall(function()
+    return debug.getinfo(1, "S")
+  end)
+  local from = ok and type(info) == "table" and rawget(info, "source")
+  if type(from) == "string" and from:sub(1, 1) == "@" then
+    local path = from:sub(2)
+    return path:match("[^/\\]+$") or path
+  end
+  return "ABSENT"
+end
+
+-- The running build, `_APP_VERSION`, read with `rawget` and never called:
+-- the string it is, `ABSENT` where the state has none, and its type where
+-- it is something else, so a build that made it a function is reported
+-- rather than run.
+local function app_version()
+  local v = rawget(_G, "_APP_VERSION")
+  if type(v) == "string" then
+    return v
+  elseif v == nil then
+    return "ABSENT"
+  end
+  return type(v)
+end
+
+-- The handshake, `<output>\executor.txt`: what a client reads to find this
+-- session. It is published once the session exists and before anything is
+-- registered, so a file a client can read names a session that is whole,
+-- and it is one envelope with no body, rewritten in place at every load
+-- through `publish`, so a reader never meets a half-written one and the
+-- last launch's is replaced rather than added to. The first line names
+-- this project: the specification's table inherited `bridge: dcs-api` from
+-- the project this one replaces, and ADR 0002 moves every name off that
+-- project's; the identity line of a file under `Logs\DcsEval` is a name
+-- too. The fields then follow the specification's table in its order.
+-- `started` is the clock the stamp was built from, as a wall-clock time
+-- for a person reading the file; `install_guard` and `lfs_tempdir` are
+-- `ABSENT` where their read did not answer, as `roots` left them. Every
+-- value goes through the framer, so a path DCS spelt with a byte past
+-- ASCII refuses the file and stops the load with the header named: the
+-- wire has no spelling for one.
+--
+-- `true`, or nil and what refused.
+local function handshake()
+  local os = rawget(_G, "os")
+  local headers = {
+    { "executor", "dcs-eval" },
+    { "protocol", PROTOCOL },
+    { "host", E.host },
+    { "stamp", E.stamp },
+    { "pid", E.pid },
+    { "started", os.date("%Y-%m-%d %H:%M:%S", E.started) },
+    { "transport", E.session },
+    { "req", E.req },
+    { "res", E.res },
+    { "arm", E.arm },
+    { "output", E.output },
+    { "eval", ALLOW_EVAL and "allowed" or "disabled" },
+    { "ops", ALLOW_EVAL and "ping,eval" or "ping" },
+    { "states", states(E.host) },
+    { "namespace", NAME },
+    { "source", source() },
+    { "lfs_tempdir", E.lfs_tempdir },
+    { "transport_source", E.transport_source },
+    { "install_guard", E.install_guard },
+    { "tick_budget_ms", TICK_BUDGET_MS },
+    { "instruction_budget", INSTRUCTION_BUDGET },
+    { "instruction_ceiling", INSTRUCTION_CEILING },
+    { "probe_every", PROBE_EVERY },
+    { "quiet_s", QUIET_S },
+    { "app_version", app_version() },
+    { "max_request_bytes", MAX_REQUEST_BYTES },
+    { "max_result_bytes", MAX_RESULT_BYTES },
+  }
+  local bytes, why = frame(headers)
+  if not bytes then
+    return nil, why
+  end
+  return publish(E.handshake, bytes)
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -782,6 +922,14 @@ local function main()
   E.frame, E.publish, E.reply, E.take, E.parse, E.admit = frame, publish, reply, take, parse, admit
   E.max_request_bytes = MAX_REQUEST_BYTES
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
+  -- The handshake is how a client finds the session, so one that cannot be
+  -- written stops the load the way an output directory that cannot be made
+  -- does: an executor nothing can find is not running.
+  E.handshake = E.output .. SEP .. "executor.txt"
+  local ok, why = handshake()
+  if not ok then
+    error("the handshake could not be published: " .. why, 0)
+  end
   if host == "hook" then
     register_hook(DCS)
   else

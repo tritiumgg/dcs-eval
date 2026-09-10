@@ -188,3 +188,12 @@ function DCS.exportToMiz(path) end
 ---@param code string
 ---@return any
 function a_do_script(code) end
+
+--------------------------------------------------------------------------------
+-- The running build
+--------------------------------------------------------------------------------
+
+--- The DCS build, as a dotted string. The handshake records it, read with
+--- `rawget` and never called; nil where a state does not carry it.
+---@type string|nil
+_APP_VERSION = nil
