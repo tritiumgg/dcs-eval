@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T09 landed on `main`; T10 has not started.
+Nothing. T10 is on its branch, waiting on its pull request; T11 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,27 +25,27 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T10** — the parser: `request: 261 checks`, both hosts, under a sandbox. The
+  envelope read back, `admit` from a path to a request or a `bad-request` on disk; eight mutations seen red.
 - **T09** — the framer: `framer: 104 checks`, both hosts, under a sandbox. The
   envelope's bytes, publish by rename read off an operation log, a 300 KiB request refused unread; six mutations seen red.
 - **T08** — the session: `session: 133 checks`, both hosts, under a sandbox. The
   stamp, the directories made, siblings swept, a held one left and logged; no `os.getpid` stops the load.
-- **T07** — containment and the two roots: `containment: 193 checks`, both hosts,
-  each refusal as a temp candidate that falls back and a write directory that stops the load.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T10** — the request parser: `name: value` headers read without regard
-to case, first colon wins, `\r\n` normalised in the header block and the body
-untouched; `for` required; an empty body `bad-request`; the id name-agnostic.
-Done when `lua5.1 tools/harness.lua executor/request` prints its count;
-mutations: a request missing `for` that runs anyway reddens the fence
-precursor, and an empty body answered `ok` reddens `bad-request`. Needs T09,
-which left `take` (the bytes off the disk) and `reply` on the namespace.
+**Task T11** — the handshake writer, `executor.txt` under the output
+directory: every field of the specification's files table (`spec.sh read
+BRIDGE 7.2`), `protocol: 2`, rewritten in place at load through `publish`.
+Done when `lua5.1 tools/harness.lua executor/handshake` asserts every
+required key present and `protocol: 2`; mutation: dropping `transport` or
+`stamp` reddens the key-presence check. Needs T08. A field whose counter is
+not built yet is a choice: a constant now, or absent until its task.
 
-**An agent verifies** it: the harness plants a request and reads the reply
-back under a sandbox, the way `executor/framer` does.
+**An agent verifies** it: the harness loads the executor over a sandbox and
+reads the file back, the way `executor/session` does.
 
 ## After that
 
@@ -87,6 +87,11 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is
   proved with a file the suite keeps open; a client's directory handle from
   `ReadDirectoryChangesW` is only seen at Stage 9, with the real client.
+- **A wrong `for` and an unknown op are admitted.** `admit` refuses a missing
+  stamp or op and passes a wrong stamp (the fence, T25) and an unknown op
+  (the op table, T12) through; the suite pins both until each task lands.
+- **A read-but-unremovable request stays on the disk.** `admit` answers it
+  `error` once per call; the tick loop (T12) must not take that name again.
 - **`docs/PLAN.md`'s DR-1 and DR-2 are still the record for what they cover** —
   one repository, and Windows as the target. Neither was copied into
   `docs/decisions/`; a record that restates the plan is a second place to keep
