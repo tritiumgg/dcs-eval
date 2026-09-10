@@ -68,10 +68,11 @@ local EXPORT_CALLBACKS = {
 -- `res` and `arm` paths under it, and how many earlier sessions the load
 -- swept. `sweep_left` appears when one could not be removed, and
 -- `last_raise` on the first raise a guard catches. Once the session exists
--- it also carries the operations on it, `frame`, `publish`, `reply`, `take`
--- and `parse`, with `max_request_bytes` beside them, so that a driver off
--- DCS can take a request, read it and publish a reply before the tick loop
--- exists, and the tick loop, when it comes, reads them from the same place.
+-- it also carries the operations on it, `frame`, `publish`, `reply`,
+-- `take`, `parse` and `admit`, with `max_request_bytes` beside them, so that
+-- a driver off DCS can take a request, read it and publish a reply before
+-- the tick loop exists, and the tick loop, when it comes, reads them from
+-- the same place.
 local E
 
 local function nothing() end
@@ -702,6 +703,69 @@ local function parse(bytes)
   end
 end
 
+-- The ops whose body is the thing they run, so an empty one is a request
+-- to run nothing and is refused before it gets that far. A `ping` carries
+-- no body and whatever it carries is ignored.
+local BODY_REQUIRED = { eval = true }
+
+-- One request, from its path to the point of running it or to the reply
+-- that refuses it. The id is the filename with `.req` taken off and is
+-- never checked against the shape of an id: the name is only a filename
+-- here, and whatever it spells, the reply is published under it.
+--
+-- `take` has the bytes with the file gone. A request that went before it
+-- could be taken is nothing to answer, and nothing is written. One read
+-- that cannot be removed is answered `error` with `stage: bridge`, the
+-- wire's word for the executor's own failure, and its bytes are withheld,
+-- so the client learns rather than waits; what the tick loop does with a
+-- file that stays is its own. An oversize request is answered with the
+-- refusal `take` made without opening it.
+--
+-- Past the envelope, three things are checked here and no more. A request
+-- must name the session it is for: one without `for`, or with an empty
+-- one, carries no stamp for the fence to judge, and is refused before any
+-- comparison. It must name an op, though which ops exist is the
+-- dispatcher's to know, so an unknown one passes through to be refused
+-- there. And an op that runs its body must have one. What an op makes of
+-- its other headers is that op's.
+--
+-- The request as its id, headers and body, for the caller to run; or nil,
+-- a status and a message, the reply already on the disk where there was
+-- one to write, and a reply that could not be published reported as
+-- `error` with the reason, because the request is gone from the disk by
+-- then and a client waiting on it must not be left to wait.
+local function admit(path)
+  local id = path:match("[^/\\]+$") or path
+  id = id:match("^(.*)%.req$") or id
+  local bytes, status, why = take(path)
+  if bytes then
+    local headers, body = parse(bytes)
+    if not headers then
+      why = body
+    elseif headers["for"] == nil or headers["for"] == "" then
+      why = "no for: the request does not name the session stamp it is for"
+    elseif headers.op == nil or headers.op == "" then
+      why = "no op"
+    elseif BODY_REQUIRED[headers.op] and body == "" then
+      why = "the body is empty, and " .. headers.op .. " runs it"
+    else
+      return { id = id, headers = headers, body = body }
+    end
+    status = "bad-request"
+  elseif status == "gone" then
+    return nil, status, why
+  end
+  local headers
+  if status == "error" then
+    headers = { { "stage", "bridge" } }
+  end
+  local ok, failed = reply(id, status, headers, why)
+  if not ok then
+    return nil, "error", "the " .. status .. " reply to " .. id .. " was not published: " .. tostring(failed)
+  end
+  return nil, status, why
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -715,7 +779,7 @@ local function main()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
-  E.frame, E.publish, E.reply, E.take, E.parse = frame, publish, reply, take, parse
+  E.frame, E.publish, E.reply, E.take, E.parse, E.admit = frame, publish, reply, take, parse, admit
   E.max_request_bytes = MAX_REQUEST_BYTES
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then
