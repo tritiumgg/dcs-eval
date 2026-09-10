@@ -68,10 +68,10 @@ local EXPORT_CALLBACKS = {
 -- `res` and `arm` paths under it, and how many earlier sessions the load
 -- swept. `sweep_left` appears when one could not be removed, and
 -- `last_raise` on the first raise a guard catches. Once the session exists
--- it also carries the operations on it, `frame`, `publish`, `reply` and
--- `take`, with `max_request_bytes` beside them, so that a driver off DCS
--- can take a request and publish a reply before the tick loop exists, and
--- the tick loop, when it comes, reads them from the same place.
+-- it also carries the operations on it, `frame`, `publish`, `reply`, `take`
+-- and `parse`, with `max_request_bytes` beside them, so that a driver off
+-- DCS can take a request, read it and publish a reply before the tick loop
+-- exists, and the tick loop, when it comes, reads them from the same place.
 local E
 
 local function nothing() end
@@ -636,6 +636,72 @@ local function take(path)
   return bytes
 end
 
+-- The start of a line for a message, so a refusal names what it saw
+-- without carrying a whole line of a request into the reply.
+local function excerpt(line)
+  if #line > 80 then
+    return line:sub(1, 80) .. "..."
+  end
+  return line
+end
+
+-- A request's envelope read back: header lines, one blank line, then the
+-- body, which is everything after it byte for byte. The header block is
+-- read one line at a time and the body is never scanned: a request is
+-- mostly body, and a chunk may hold anything, including a line shaped like
+-- a header. A line ends at LF, and one CR before the LF is dropped, which is
+-- the whole of the CRLF normalisation and reads a block that mixes the two
+-- endings. The empty line ends the headers, and bytes without one, or none
+-- at all, are not an envelope and are refused.
+--
+-- A header line is `name: value`. The name is `[A-Za-z0-9_-]+`, spelt as
+-- the framer spells it, and is read without regard to case, so the map holds
+-- it lowered; one that repeats is refused, as the framer refuses to write
+-- one. The value is everything after the first colon, so a value may carry
+-- colons of its own, with leading blanks dropped, the ones the framer
+-- refuses to write, and trailing ones kept; it may be empty. A value with a
+-- byte past ASCII or a CR inside it is refused here rather than at reply
+-- time, because a reply echoes what the request carried, and the framer
+-- would refuse it then, after the request had run.
+--
+-- The headers as a map of lowered names, and the body; or nil and a reason
+-- naming the line.
+local function parse(bytes)
+  local headers, pos, n = {}, 1, 0
+  while true do
+    local nl = bytes:find("\n", pos, true)
+    if not nl then
+      return nil, "the headers never end: no blank line before the bytes ran out, after " .. n .. " header lines"
+    end
+    local last = nl - 1
+    if last >= pos and bytes:byte(last) == 13 then
+      last = last - 1
+    end
+    if last < pos then
+      return headers, bytes:sub(nl + 1)
+    end
+    n = n + 1
+    local line = bytes:sub(pos, last)
+    local name, value = line:match("^([A-Za-z0-9_%-]+):(.*)$")
+    if not name then
+      return nil, "line " .. n .. " is not a header: " .. excerpt(line)
+    end
+    value = value:gsub("^[ \t\v\f]+", "")
+    if value:find("\r", 1, true) then
+      return nil, "line " .. n .. ": " .. name .. ": the value carries a CR"
+    end
+    if value:find("[\128-\255]") then
+      return nil, "line " .. n .. ": " .. name .. ": the value is not ASCII"
+    end
+    local key = name:lower()
+    if headers[key] ~= nil then
+      return nil, "line " .. n .. ": " .. name .. ": repeated"
+    end
+    headers[key] = value
+    pos = nl + 1
+  end
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -649,7 +715,7 @@ local function main()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
-  E.frame, E.publish, E.reply, E.take = frame, publish, reply, take
+  E.frame, E.publish, E.reply, E.take, E.parse = frame, publish, reply, take, parse
   E.max_request_bytes = MAX_REQUEST_BYTES
   E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
   if host == "hook" then

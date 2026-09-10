@@ -9,4 +9,5 @@ return {
   "executor/containment",
   "executor/session",
   "executor/framer",
+  "executor/request",
 }
