@@ -26,12 +26,13 @@ mid-task is recorded here in the same commit that resolves it.
 | What it is called on disk | The specifications name the hook `DcsApi.lua` (§6.2), the transport root `<temp>/dcs-api/<host>/` (§4.2) and the output leaf `Logs/DcsApi/<host>/` (§6.2) — all three inherited from the project this one replaces. | ADR 0002. `DcsEvalExecutor.lua`, `<temp>/dcs-eval/<host>/`, `Logs/DcsEval/<host>/`. The first is a safety fix: `DcsApi.lua` sits four characters from the incumbent's `DcsApiEval.lua` in a shared directory. |
 | How many hook callbacks | `bridge.md` §6.2 registers "sixteen guarded callbacks, `try*` variants never" and cites the prior `DcsApiEval.lua:2150-2181` for them; those lines register eighteen. | `executor/DcsEvalExecutor.lua`, in its own comment. The eighteen the cited lines register, `try*` still absent, and `tools/harness/executor/load.lua` pins the count. |
 | A configured transport | `bridge.md` §9: "A configured transport that is refused stops the bridge; an inferred one — `lfs.tempdir()` is a guess DCS handed back — falls back beside the output", and the install guard refuses `lfs.currentdir()` "or `EXTRA_FORBIDDEN`". Neither document says how a transport is configured or that list filled, and nothing that could reaches a Lua state DCS starts. | `executor/DcsEvalExecutor.lua`, in its own comment. Both roots are inferred and only the inferred behaviour is built: a refused output stops the load, a refused temp candidate falls back to `<output>\rpc`. The install guard is `lfs.currentdir()` alone. |
+| The handshake's identity line | `bridge.md` §7.2 opens the handshake with `bridge: dcs-api`, the file is `bridge.txt`, and ADR 0002 says the headers are untouched while every on-disk name moves off `dcs-api`. This header is both: a header, and the name of the project that wrote the file. | `executor/DcsEvalExecutor.lua`, in its own comment. The file is `executor.txt`, as the plan names it, and its first line is `executor: dcs-eval`: the substitution ADR 0002 tells a reader to make, made. `tools/harness/executor/handshake.lua` pins both. |
 
 ## Open
 
 | Subject | The question | Where it is settled |
 |---|---|---|
-| — | Nothing recorded yet. | — |
+| A path with a byte past ASCII | `bridge.md` §7.1: "Header values are ASCII and **may not contain CR or LF**; a writer refuses one rather than escaping it". The handshake carries five paths under `Saved Games`, and a Windows user name past ASCII puts such a byte in every one. Neither document says what the wire does with one. | Not settled. The executor refuses the handshake and stops the load with the header named in `dcs.log`, a visible failure rather than a file the client's parser would refuse. Where the answer lands is the client's parser (T13) or a decision record; `docs/STATE.md` carries it. |
 
 ## What each document says it could not determine
 
