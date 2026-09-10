@@ -191,7 +191,7 @@ do
   local headers = E.parse("chunkname: a:b:c\nx: C:\\y.lua\n\n")
   t.eq(headers and headers.chunkname, "a:b:c", "the first colon splits and the rest is the value")
   t.eq(headers and headers.x, "C:\\y.lua", "a drive letter survives")
-  headers = E.parse("a:x\nb:   x\nc:\tx\nd: x \ne:\nf: \ng: a\tb\n\n")
+  headers = E.parse("a:x\nb:   x\nc:\tx\nd: x \ne:\nf: \ng: a\tb\nh:\vx\ni:\fx\nj: \127\n\n")
   t.eq(headers and headers.a, "x", "no blank after the colon")
   t.eq(headers and headers.b, "x", "several blanks after the colon are dropped")
   t.eq(headers and headers.c, "x", "a tab after the colon is dropped")
@@ -199,6 +199,9 @@ do
   t.eq(headers and headers.e, "", "an empty value is read as empty")
   t.eq(headers and headers.f, "", "and so is one that is a blank")
   t.eq(headers and headers.g, "a\tb", "a tab inside a value is kept")
+  t.eq(headers and headers.h, "x", "a vertical tab after the colon is dropped, as the framer refuses to write one")
+  t.eq(headers and headers.i, "x", "and so is a form feed")
+  t.eq(headers and headers.j, "\127", "DEL is the last byte of ASCII and is kept")
 end
 
 -- Refusals, each naming the line.
@@ -218,6 +221,8 @@ do
   refused(": x\n\n", "line 1 is not a header", "an empty name")
   refused("for: x\nop: a\nFOR: y\n\n", "line 3: FOR: repeated", "a name repeated in another case")
   refused("for: caf\233\n\n", "line 1: for: the value is not ASCII", "a value past ASCII")
+  refused("for: x\128\n\n", "line 1: for: the value is not ASCII", "the first byte past ASCII")
+  refused("for: x\255\n\n", "line 1: for: the value is not ASCII", "the last byte")
   refused("for: a\rb\n\n", "line 1: for: the value carries a CR", "a CR inside a value")
   refused("for: x\n\r\r\n\n", "line 2 is not a header", "a line of one CR is not blank")
   refused("", "the headers never end", "no bytes")
@@ -453,6 +458,17 @@ do
   t.check(why and why:find("the bad-request reply to 4-a was not published", 1, true),
     "unpublished: naming the reply that was lost: " .. tostring(why))
   t.eq(entries(env, E.req), "", "unpublished: the request is gone all the same")
+  -- The same with a request that could not be removed: the error reply is
+  -- the one lost, and the file stays for the loop to see.
+  path = request(E, "4-b.req", "op: eval\nfor: " .. E.stamp .. "\n\nx")
+  local held = assert(io.open(path, "rb"))
+  req, status, why = E.admit(path)
+  held:close()
+  t.eq(req, nil, "unpublished, held: nothing is handed back")
+  t.eq(status, "error", "unpublished, held: it is error")
+  t.check(why and why:find("the error reply to 4-b was not published", 1, true),
+    "unpublished, held: naming the reply that was lost: " .. tostring(why))
+  t.eq(entries(env, E.req), "4-b.req", "unpublished, held: the file stays")
 end
 
 -- The export state: the same path, under its own host and phase.
