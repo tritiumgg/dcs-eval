@@ -856,7 +856,7 @@ end
 -- and it is one envelope with no body, rewritten in place at every load
 -- through `publish`, so a reader never meets a half-written one and the
 -- last launch's is replaced rather than added to. The first line names
--- this project: the specification's table inherited `bridge: dcs-api` from
+-- this project: the specification's table opens the file with the name of
 -- the project this one replaces, and ADR 0002 moves every name off that
 -- project's; the identity line of a file under `Logs\DcsEval` is a name
 -- too. The fields then follow the specification's table in its order.
