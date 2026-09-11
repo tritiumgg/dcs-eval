@@ -58,8 +58,9 @@ const EXPORT_STATES: &str = "export:carrier=local,returns=any,needs=always";
 /// The bytes of an envelope in the stand-in's dialect: each header as
 /// `name: value` ending in CRLF, a CRLF alone to end the block, then the
 /// body byte for byte. A refusal covers what a value taken from a filename
-/// can carry, a line break or a byte past ASCII, and nothing more: every
-/// other header is this module's own composition.
+/// can carry, a line break, a byte past ASCII or a leading blank, in the
+/// executor's words and its order, and nothing more: every other header is
+/// this module's own composition.
 pub fn encode(headers: &[(&str, &str)], body: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = Vec::with_capacity(body.len() + 256);
     for &(name, value) in headers {
@@ -68,6 +69,11 @@ pub fn encode(headers: &[(&str, &str)], body: &[u8]) -> Result<Vec<u8>, String> 
         }
         if !value.is_ascii() {
             return Err(format!("{name}: the value is not ASCII"));
+        }
+        if value.starts_with([' ', '\t', '\u{0B}', '\u{0C}']) {
+            return Err(format!(
+                "{name}: the value begins with whitespace, which a reader strips"
+            ));
         }
         out.extend_from_slice(name.as_bytes());
         out.extend_from_slice(b": ");
@@ -451,6 +457,20 @@ mod tests {
         assert_eq!(
             encode(&[("id", "caf\u{e9}")], b"").expect_err("a byte past ASCII"),
             "id: the value is not ASCII"
+        );
+        // A filename may begin with a blank, and the executor's framer
+        // refuses one before the reader loses it.
+        for id in [" a", "\ta", "\u{0B}a", "\u{0C}a"] {
+            assert_eq!(
+                encode(&[("id", id)], b"").expect_err(id),
+                "id: the value begins with whitespace, which a reader strips",
+                "{id:?}"
+            );
+        }
+        assert_eq!(
+            encode(&[("id", " \u{e9}")], b"").expect_err("two faults"),
+            "id: the value is not ASCII",
+            "checked in the executor's order"
         );
     }
 
