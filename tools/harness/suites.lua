@@ -11,4 +11,5 @@ return {
   "executor/framer",
   "executor/request",
   "executor/handshake",
+  "executor/ping",
 }
