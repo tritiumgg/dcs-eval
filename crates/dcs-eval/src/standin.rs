@@ -204,7 +204,10 @@ impl Standin {
         let res = session.join("res");
         fs::create_dir_all(&req)?;
         fs::create_dir_all(&res)?;
-        let phase = if host == "export" { "loaded" } else { "menu" };
+        // The executor's own branch: `menu` on the hook host and `loaded`
+        // on any other, so a host spelt some third way lands where it
+        // would there.
+        let phase = if host == "hook" { "menu" } else { "loaded" };
         Ok(Self {
             host: host.to_owned(),
             phase: phase.to_owned(),
@@ -657,6 +660,11 @@ mod tests {
             ("hook", "menu", 0)
         );
         assert_eq!(opened(&Sandbox::new(), "export").phase, "loaded");
+        assert_eq!(
+            opened(&Sandbox::new(), "other").phase,
+            "loaded",
+            "the executor's branch: menu on hook, loaded on anything else"
+        );
     }
 
     // ---- the round trip -----------------------------------------------------
