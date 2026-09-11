@@ -28,6 +28,8 @@
 //! be published and the `dcs.log` line for one, the dormant probe on the
 //! arm file, which the executor does not have yet either, and the
 //! handshake and heartbeat files, which arrive with the readers for them.
+//! A request name that is not UTF-16 is read lossily where the executor
+//! reads bytes; no client mints one.
 
 use std::fs::{self, File};
 use std::io::{self, Write};
