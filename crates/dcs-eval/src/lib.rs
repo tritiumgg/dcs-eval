@@ -9,3 +9,6 @@
 
 pub mod protocol;
 pub mod publish;
+
+#[cfg(test)]
+pub(crate) mod testing;
