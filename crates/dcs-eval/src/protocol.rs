@@ -493,4 +493,301 @@ mod tests {
         let (err, _) = refused(&[("a", " \u{e9}")]);
         assert!(matches!(err, FrameError::NotAscii { .. }));
     }
+
+    // ---- an envelope read back --------------------------------------------
+
+    fn parsed(bytes: &[u8]) -> Envelope {
+        parse(bytes).expect("the envelope parses")
+    }
+
+    /// The reason `parse` refused, as the executor would spell it.
+    fn unparsed(bytes: &[u8]) -> (ParseError, String) {
+        let err = parse(bytes).expect_err("the bytes are refused");
+        let why = err.to_string();
+        (err, why)
+    }
+
+    fn lines(headers: &Headers) -> Vec<(&str, &str)> {
+        headers.iter().collect()
+    }
+
+    #[test]
+    fn parse_an_lf_block_into_headers_and_a_body() {
+        let e = parsed(b"op: eval\nfor: 123-4\n\nreturn 1\n");
+        assert_eq!(lines(&e.headers), [("op", "eval"), ("for", "123-4")]);
+        assert_eq!(e.headers.get("op"), Some("eval"));
+        assert_eq!(e.headers.get("for"), Some("123-4"));
+        assert_eq!(e.headers.len(), 2);
+        assert!(!e.headers.is_empty());
+        assert_eq!(e.body, b"return 1\n");
+    }
+
+    #[test]
+    fn parse_reads_names_without_regard_to_case() {
+        let e = parsed(b"Op: ping\nFOR: x\nChunkName: =a\n\n");
+        assert_eq!(
+            lines(&e.headers),
+            [("Op", "ping"), ("FOR", "x"), ("ChunkName", "=a")]
+        );
+        assert_eq!(e.headers.get("op"), Some("ping"));
+        assert_eq!(e.headers.get("for"), Some("x"));
+        assert_eq!(e.headers.get("chunkname"), Some("=a"));
+        assert_eq!(e.headers.get("CHUNKNAME"), Some("=a"));
+        assert_eq!(e.body, b"");
+    }
+
+    #[test]
+    fn headers_get_misses_an_absent_name() {
+        let e = parsed(b"status: ok\n\n");
+        assert_eq!(e.headers.get("armed"), None);
+        assert_eq!(e.headers.get(""), None);
+    }
+
+    #[test]
+    fn parse_a_body_shaped_like_headers_is_not_read() {
+        let chunk = b"line\r\nnul\0x\xff\x80 for: fake\n\n\nend";
+        let mut input = b"for: x\n\n".to_vec();
+        input.extend_from_slice(chunk);
+        let e = parsed(&input);
+        assert_eq!(lines(&e.headers), [("for", "x")]);
+        assert_eq!(e.body, chunk);
+    }
+
+    #[test]
+    fn parse_a_whole_crlf_block() {
+        let e = parsed(b"op: eval\r\nfor: x\r\n\r\nreturn 'a\r\nb'");
+        assert_eq!(lines(&e.headers), [("op", "eval"), ("for", "x")]);
+        assert_eq!(e.body, b"return 'a\r\nb'");
+    }
+
+    #[test]
+    fn parse_a_block_mixing_endings_keeps_the_bodys_blank_lines() {
+        let e = parsed(b"op: eval\r\nfor: x\n\r\n\n\nx");
+        assert_eq!(lines(&e.headers), [("op", "eval"), ("for", "x")]);
+        assert_eq!(e.body, b"\n\nx");
+    }
+
+    #[test]
+    fn parse_a_blank_line_first_is_no_headers() {
+        let e = parsed(b"\nanything");
+        assert!(e.headers.is_empty());
+        assert_eq!(e.body, b"anything");
+    }
+
+    #[test]
+    fn parse_the_first_colon_splits() {
+        let e = parsed(b"chunkname: a:b:c\nx: C:\\y.lua\n\n");
+        assert_eq!(e.headers.get("chunkname"), Some("a:b:c"));
+        assert_eq!(e.headers.get("x"), Some("C:\\y.lua"));
+    }
+
+    #[test]
+    fn parse_drops_leading_blanks_and_keeps_trailing_ones() {
+        let e =
+            parsed(b"a:x\nb:   x\nc:\tx\nd: x \ne:\nf: \ng: a\tb\nh:\x0bx\ni:\x0cx\nj: \x7f\n\n");
+        let h = &e.headers;
+        assert_eq!(h.get("a"), Some("x"), "no blank after the colon");
+        assert_eq!(h.get("b"), Some("x"), "several blanks are dropped");
+        assert_eq!(h.get("c"), Some("x"), "a tab is dropped");
+        assert_eq!(h.get("d"), Some("x "), "a trailing blank is kept");
+        assert_eq!(h.get("e"), Some(""), "an empty value");
+        assert_eq!(h.get("f"), Some(""), "a value that is one blank is empty");
+        assert_eq!(h.get("g"), Some("a\tb"), "a tab inside a value is kept");
+        assert_eq!(h.get("h"), Some("x"), "a vertical tab is dropped");
+        assert_eq!(h.get("i"), Some("x"), "a form feed is dropped");
+        assert_eq!(
+            h.get("j"),
+            Some("\x7f"),
+            "DEL is the last byte of ASCII and is kept"
+        );
+    }
+
+    #[test]
+    fn parse_the_body_byte_for_byte_a_cp1251_body() {
+        // Six bytes of cp1251, then 0xFF and NUL: not UTF-8 and not meant to
+        // be read as anything. A parser that decoded the body on the way
+        // in, lossily or through a code page, would hand back other bytes.
+        let input = b"status: ok\n\n\xcf\xf0\xe8\xe2\xe5\xf2\xff\0";
+        let e = parsed(input);
+        assert_eq!(e.body, &input[12..]);
+        assert_eq!(e.body, b"\xcf\xf0\xe8\xe2\xe5\xf2\xff\0");
+        // UTF-8 the same way: bytes, not text.
+        assert_eq!(
+            parsed(b"status: ok\n\n\xd0\x9f\xd1\x80").body,
+            b"\xd0\x9f\xd1\x80"
+        );
+    }
+
+    #[test]
+    fn parse_the_protocol_header_against_the_constant() {
+        let e = parsed(b"status: ok\nprotocol: 2\n\n");
+        let version = e
+            .headers
+            .get("protocol")
+            .and_then(|v| v.parse::<u32>().ok());
+        assert_eq!(version, Some(PROTOCOL));
+    }
+
+    // ---- refusals, each naming the line -----------------------------------
+
+    #[test]
+    fn parse_refuses_a_line_that_is_not_a_header() {
+        let cases: [(&[u8], usize, &str); 6] = [
+            (b"for: x\nnocolon\n\n", 2, "nocolon"),
+            (b"for : x\n\n", 1, "for : x"),
+            (b" for: x\n\n", 1, " for: x"),
+            (b"a b: x\n\n", 1, "a b: x"),
+            (b": x\n\n", 1, ": x"),
+            (b"for: x\n\r\r\n\n", 2, "\r"),
+        ];
+        for (bytes, line, excerpt) in cases {
+            let (err, why) = unparsed(bytes);
+            assert_eq!(
+                err,
+                ParseError::NotAHeader {
+                    line,
+                    excerpt: excerpt.into()
+                },
+                "{bytes:?}"
+            );
+            assert_eq!(why, format!("line {line} is not a header: {excerpt}"));
+        }
+        // A name past ASCII is not a header either; the excerpt is display
+        // only, and shows the bytes as text where they read as any.
+        let (err, _) = unparsed(b"f\xc3\xb6r: x\n\n");
+        assert_eq!(
+            err,
+            ParseError::NotAHeader {
+                line: 1,
+                excerpt: "f\u{f6}r: x".into()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_refuses_a_name_repeated_in_another_case() {
+        let (err, why) = unparsed(b"for: x\nop: a\nFOR: y\n\n");
+        assert_eq!(
+            err,
+            ParseError::Repeated {
+                line: 3,
+                name: "FOR".into()
+            }
+        );
+        assert_eq!(why, "line 3: FOR: repeated");
+    }
+
+    #[test]
+    fn parse_refuses_a_value_past_ascii() {
+        let cases: [&[u8]; 3] = [b"for: caf\xe9\n\n", b"for: x\x80\n\n", b"for: x\xff\n\n"];
+        for bytes in cases {
+            let (err, why) = unparsed(bytes);
+            assert_eq!(
+                err,
+                ParseError::NotAscii {
+                    line: 1,
+                    name: "for".into()
+                },
+                "{bytes:?}"
+            );
+            assert_eq!(why, "line 1: for: the value is not ASCII");
+        }
+    }
+
+    #[test]
+    fn parse_refuses_a_cr_inside_a_value() {
+        let (err, why) = unparsed(b"for: a\rb\n\n");
+        assert_eq!(
+            err,
+            ParseError::CarriageReturn {
+                line: 1,
+                name: "for".into()
+            }
+        );
+        assert_eq!(why, "line 1: for: the value carries a CR");
+    }
+
+    #[test]
+    fn parse_refuses_headers_that_never_end() {
+        let cases: [(&[u8], usize); 5] = [
+            (b"", 0),
+            (b"for: x\n", 1),
+            (b"for: x\nop: eval", 1),
+            (b"for: x\r\n", 1),
+            (b"for: x\r\n\r", 1),
+        ];
+        for (bytes, lines) in cases {
+            let (err, why) = unparsed(bytes);
+            assert_eq!(err, ParseError::NoBlankLine { lines }, "{bytes:?}");
+            assert!(why.starts_with("the headers never end"), "{why}");
+            assert!(
+                why.ends_with(&format!("after {lines} header lines")),
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_excerpts_a_long_line_to_80_bytes() {
+        let mut input = vec![b'x'; 200];
+        input.extend_from_slice(b"\n\n");
+        let (err, why) = unparsed(&input);
+        let want = format!("{}...", "x".repeat(80));
+        assert_eq!(
+            err,
+            ParseError::NotAHeader {
+                line: 1,
+                excerpt: want
+            }
+        );
+        assert_eq!(why.len(), "line 1 is not a header: ".len() + 83);
+    }
+
+    // ---- round trips ------------------------------------------------------
+
+    /// The executor's reply shape with a caller's header after it.
+    const REPLY: [(&str, &str); 8] = [
+        ("status", "ok"),
+        ("protocol", "2"),
+        ("host", "hook"),
+        ("stamp", "0000000001-abcd"),
+        ("phase", "menu"),
+        ("id", "0000000001-abcd"),
+        ("tick", "0"),
+        ("result_type", "string"),
+    ];
+
+    #[test]
+    fn round_trip_the_reply_shape() {
+        let body = b"\xcf\xf0\xe8\xe2\xe5\xf2\r\nstatus: fake\n\n";
+        let e = parsed(&framed(&REPLY, body));
+        assert_eq!(lines(&e.headers), REPLY);
+        assert_eq!(e.headers.get("STATUS"), Some("ok"));
+        assert_eq!(e.body, body);
+    }
+
+    #[test]
+    fn round_trip_survives_crlf_in_the_header_block() {
+        // The same envelope with every line ending in the header block
+        // turned to CRLF, the body left alone, reads the same. The block
+        // ends at the first LF pair, which no header value can move.
+        let body = b"a\nb\r\nc";
+        let bytes = framed(&REPLY, body);
+        let end = bytes
+            .windows(2)
+            .position(|w| w == b"\n\n")
+            .expect("the blank line")
+            + 2;
+        let mut crlf = Vec::new();
+        for &b in &bytes[..end] {
+            if b == b'\n' {
+                crlf.push(b'\r');
+            }
+            crlf.push(b);
+        }
+        crlf.extend_from_slice(&bytes[end..]);
+        assert_ne!(crlf, bytes);
+        assert_eq!(parsed(&crlf), parsed(&bytes));
+        assert_eq!(parsed(&crlf).body, body);
+    }
 }
