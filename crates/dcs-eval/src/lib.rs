@@ -6,3 +6,5 @@
 //! collect, and the game-state reads. It knows nothing about MCP or the
 //! command line: those live in `dcs-mcp`, which links this crate, and so can
 //! any other Rust program that wants to talk to a running DCS.
+
+pub mod protocol;
