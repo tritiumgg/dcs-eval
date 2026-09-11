@@ -132,6 +132,175 @@ pub fn frame(headers: &[(&str, &str)], body: &[u8]) -> Result<Vec<u8>, FrameErro
     Ok(out)
 }
 
+/// The header lines of an envelope as they were read: in wire order, spelt
+/// as written, and looked up without regard to case. A list rather than a
+/// map, because the order is part of what the wire says and a reader that
+/// wants to show a reply as it came needs it back; a name appears once, so
+/// a lookup has one answer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Headers {
+    lines: Vec<(String, String)>,
+}
+
+impl Headers {
+    /// The value under `name`, compared without regard to case. A name is
+    /// ASCII by construction, so folding ASCII case is the whole comparison.
+    pub fn get(&self, name: &str) -> Option<&str> {
+        self.lines
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// Every `(name, value)` in wire order, the name as it was spelt.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.lines.iter().map(|(n, v)| (n.as_str(), v.as_str()))
+    }
+
+    pub fn len(&self) -> usize {
+        self.lines.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lines.is_empty()
+    }
+}
+
+/// One envelope read back. The body is everything after the blank line,
+/// owned so a reader can drop the buffer it came from, and untouched: the
+/// bytes a chunk returned are the bytes the caller gets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Envelope {
+    pub headers: Headers,
+    pub body: Vec<u8>,
+}
+
+/// Why `parse` found no envelope. `Display` spells each the way the
+/// executor's `parse` does, naming the line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParseError {
+    /// The bytes ran out before a blank line, after `lines` header lines.
+    NoBlankLine { lines: usize },
+    /// A line that is not `name: value`, with its first 80 bytes.
+    NotAHeader { line: usize, excerpt: String },
+    /// A value carrying a CR.
+    CarriageReturn { line: usize, name: String },
+    /// A value with a byte past ASCII.
+    NotAscii { line: usize, name: String },
+    /// A name already read, compared without regard to case.
+    Repeated { line: usize, name: String },
+}
+
+impl fmt::Display for ParseError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NoBlankLine { lines } => write!(
+                f,
+                "the headers never end: no blank line before the bytes ran out, \
+                 after {lines} header lines"
+            ),
+            Self::NotAHeader { line, excerpt } => {
+                write!(f, "line {line} is not a header: {excerpt}")
+            }
+            Self::CarriageReturn { line, name } => {
+                write!(f, "line {line}: {name}: the value carries a CR")
+            }
+            Self::NotAscii { line, name } => {
+                write!(f, "line {line}: {name}: the value is not ASCII")
+            }
+            Self::Repeated { line, name } => write!(f, "line {line}: {name}: repeated"),
+        }
+    }
+}
+
+impl std::error::Error for ParseError {}
+
+/// The start of a line for a message, so a refusal names what it saw
+/// without carrying a whole line of a request into a log. Cut in bytes,
+/// as the executor cuts it, then made printable, which is the one place
+/// here a byte is read as anything but itself.
+fn excerpt(line: &[u8]) -> String {
+    if line.len() > 80 {
+        let mut s = String::from_utf8_lossy(&line[..80]).into_owned();
+        s.push_str("...");
+        s
+    } else {
+        String::from_utf8_lossy(line).into_owned()
+    }
+}
+
+/// ASCII bytes as text. Called only after the bytes were checked, so every
+/// byte is its own character and nothing can fail.
+fn text(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
+
+/// An envelope read back from `bytes`: header lines up to the first blank
+/// line, then the body, which is everything after it and is never scanned.
+/// A request is mostly body and a chunk may hold anything, including a line
+/// shaped like a header, so the header block is read one line at a time
+/// and the read stops at the blank line.
+///
+/// A line ends at LF, and one CR before the LF is dropped, which is the
+/// whole of the CRLF normalisation and reads a block mixing the two
+/// endings; a line of one CR is not blank and not a header. The name is
+/// the run of name bytes before the first colon and the value is
+/// everything after it, so a value may carry colons of its own, with
+/// leading blanks dropped, the ones a writer refuses, and trailing ones
+/// kept. The checks and their wording are the executor's, so the two ends
+/// refuse the same bytes for the same stated reason.
+pub fn parse(bytes: &[u8]) -> Result<Envelope, ParseError> {
+    let mut headers = Headers::default();
+    let mut pos = 0;
+    let mut n = 0;
+    loop {
+        let Some(off) = bytes[pos..].iter().position(|&b| b == b'\n') else {
+            return Err(ParseError::NoBlankLine { lines: n });
+        };
+        let nl = pos + off;
+        let mut end = nl;
+        if end > pos && bytes[end - 1] == b'\r' {
+            end -= 1;
+        }
+        let line = &bytes[pos..end];
+        if line.is_empty() {
+            return Ok(Envelope {
+                headers,
+                body: bytes[nl + 1..].to_vec(),
+            });
+        }
+        n += 1;
+        let name_len = line
+            .iter()
+            .position(|&b| !is_name_byte(b))
+            .unwrap_or(line.len());
+        if name_len == 0 || line.get(name_len) != Some(&b':') {
+            return Err(ParseError::NotAHeader {
+                line: n,
+                excerpt: excerpt(line),
+            });
+        }
+        let name = text(&line[..name_len]);
+        let rest = &line[name_len + 1..];
+        let skip = rest
+            .iter()
+            .position(|&b| !is_leading_blank(b))
+            .unwrap_or(rest.len());
+        let value = &rest[skip..];
+        if value.contains(&b'\r') {
+            return Err(ParseError::CarriageReturn { line: n, name });
+        }
+        if !value.is_ascii() {
+            return Err(ParseError::NotAscii { line: n, name });
+        }
+        if headers.get(&name).is_some() {
+            return Err(ParseError::Repeated { line: n, name });
+        }
+        headers.lines.push((name, text(value)));
+        pos = nl + 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
