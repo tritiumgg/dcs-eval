@@ -18,8 +18,9 @@
 -- also where the directory is listed mid-publish, the moment a collector
 -- reading nothing but `.res` would find nothing, which the frozen
 -- specification says a single-process control cannot see and a spy can.
--- The reply carries `status`, `protocol: 2`, `host`, `stamp`, `phase` and
--- `id` before the caller's headers, and a refused header writes nothing. A
+-- The reply carries `status`, `protocol: 2`, `host`, `stamp`, `phase`, `id`
+-- and `tick` before the caller's headers, and a refused header writes
+-- nothing. A
 -- publish over an existing file replaces it, on the real filesystem, where
 -- Windows refuses a rename onto a name that exists; one into a directory
 -- that is not there refuses and makes nothing; one onto a file something
@@ -227,7 +228,7 @@ do
   t.eq(entries(env, E.res), id .. ".res", "after it the directory holds the reply and no .tmp")
   t.eq(slurp(final),
     "status: ok\nprotocol: 2\nhost: hook\nstamp: " .. E.stamp .. "\nphase: menu\nid: " .. id
-      .. "\nresult_type: string\n\n" .. body,
+      .. "\ntick: 0\nresult_type: string\n\n" .. body,
     "the reply is the session's headers, the caller's, the blank line, the body byte for byte")
 end
 
@@ -235,7 +236,7 @@ do
   local E, _, _, log = spied("export")
   t.eq(E and E.reply("1-a", "error", nil, "no"), true, "export: a reply with no headers of the caller's is published")
   t.eq(slurp(E.res .. "\\1-a.res"),
-    "status: error\nprotocol: 2\nhost: export\nstamp: " .. E.stamp .. "\nphase: loaded\nid: 1-a\n\nno",
+    "status: error\nprotocol: 2\nhost: export\nstamp: " .. E.stamp .. "\nphase: loaded\nid: 1-a\ntick: 0\n\nno",
     "export: the reply names its host and phase")
   t.eq(ops(log), published(E.res .. "\\1-a.res"), "export: the same sequence")
 end

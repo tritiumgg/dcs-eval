@@ -479,6 +479,6 @@ do
   refused(E, env, log, "5-b.req", "op: ping\n\n", "no for", "export, no for")
   local path = request(E, "5-c.req", "op: ping\n\n")
   E.admit(path)
-  local head = "status: bad-request\nprotocol: 2\nhost: export\nstamp: " .. E.stamp .. "\nphase: loaded\nid: 5-c\n\n"
+  local head = "status: bad-request\nprotocol: 2\nhost: export\nstamp: " .. E.stamp .. "\nphase: loaded\nid: 5-c\ntick: 0\n\n"
   t.eq((slurp(E.res .. "\\5-c.res") or ""):sub(1, #head), head, "export: the reply names its host and phase")
 end

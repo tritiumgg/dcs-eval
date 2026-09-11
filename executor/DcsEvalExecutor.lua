@@ -110,6 +110,7 @@ local EXPORT_CALLBACKS = {
 -- The namespace: what this file publishes as the global `DcsEvalExecutor`,
 -- and only once registration has succeeded, so a failed load leaves no
 -- trace of itself. It carries the host, the phase, the raise count, the
+-- tick, which counts frames from 0 at load and stamps every reply, the
 -- two write roots with how each was chosen, and the session: its stamp
 -- with the time and pid it was built from, its directory with the `req`,
 -- `res` and `arm` paths under it, and how many earlier sessions the load
@@ -615,9 +616,12 @@ end
 -- with one line has the verdict; `protocol` is the envelope's version;
 -- `host`, `stamp` and `phase` say which session answered and what it was
 -- doing; `id` echoes the name the request came under, which is only a
--- filename here, so the reply takes it whatever it spells. The session's
--- headers are read off the namespace as the reply is framed, so a count
--- the session learns to keep later lands here without the caller changing.
+-- filename here, so the reply takes it whatever it spells; `tick` is the
+-- frame counter as the reply is framed, so two replies carrying the same
+-- one shared a frame, and one made before any frame carries 0. The
+-- session's headers are read off the namespace as the reply is framed, so
+-- a figure the session learns to keep later lands here without the caller
+-- changing; the CPU cost of a reply is one such, not yet measured.
 --
 -- `true`, or nil and what refused, in which case nothing was written.
 local function reply(id, status, headers, body)
@@ -628,6 +632,7 @@ local function reply(id, status, headers, body)
     { "stamp", E.stamp },
     { "phase", E.phase },
     { "id", id },
+    { "tick", E.tick },
   }
   for _, header in ipairs(headers or {}) do
     all[#all + 1] = header
@@ -921,7 +926,7 @@ local function main()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
   E.frame, E.publish, E.reply, E.take, E.parse, E.admit = frame, publish, reply, take, parse, admit
   E.max_request_bytes = MAX_REQUEST_BYTES
-  E.host, E.phase, E.raised = host, host == "hook" and "menu" or "loaded", 0
+  E.host, E.phase, E.raised, E.tick = host, host == "hook" and "menu" or "loaded", 0, 0
   -- The handshake is how a client finds the session, so one that cannot be
   -- written stops the load the way an output directory that cannot be made
   -- does: an executor nothing can find is not running.
