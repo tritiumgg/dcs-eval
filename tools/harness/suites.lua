@@ -10,4 +10,5 @@ return {
   "executor/session",
   "executor/framer",
   "executor/request",
+  "executor/handshake",
 }
