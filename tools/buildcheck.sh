@@ -13,9 +13,13 @@ cd "$root"
 
 # --- Rust -------------------------------------------------------------------
 
+# Clippy with every feature on: a feature nothing in the workspace builds
+# yet, the library's stand-in until the binary's tests drive it, would
+# otherwise rot unseen. The build and the tests run with the defaults,
+# which is what a user gets.
 echo "cargo: fmt, clippy, build, test"
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo build --workspace --all-targets
 cargo test --workspace
 
