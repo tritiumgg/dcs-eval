@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T14 is on its branch, waiting on its pull request; T15 has not started.
+Nothing. T15 is on its branch, waiting on its pull request; T16 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,34 +25,34 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T15** — the stand-in: `standin: 19 checks` under cargo. `crates/dcs-eval/src/standin.rs`
+  behind the `standin` feature, its encoder a CRLF dialect and its decoder and disk side its own; the client's `send` round-trips a `ping`; the frame-swap mutation seen red.
 - **T14** — the client's send: `publish: 17 checks` under cargo. `publish`, `arm` and `send`
   in `crates/dcs-eval`, a request through `<id>.req.tmp` to its final name, the arm file made when absent and never removed; both mutations seen red.
 - **T13** — the client's envelope: `protocol: 35 checks` under cargo. `frame` and `parse`
   in `crates/dcs-eval`, cases mirroring the harness, refusals in the executor's words; both named mutations seen red.
-- **T12** — the tick and `ping`: `ping: 305 checks`, both hosts, under a sandbox. The
-  frame lists `req`, admits in name order, dispatches through `ops`; `tick` on every reply; the missing-`status` mutation seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T15** — the Rust stand-in executor in `crates/dcs-eval`, its encoder
-deliberately not the client's. Done when `cargo test -p dcs-eval standin`
-drives a full round trip against it; mutation: the stand-in's encoder replaced
-by the client's serialiser reddens the "encoder is not the client's"
-assertion. Needs T13. What it is for and must not share: `spec.sh find MCP
-stand-in`; it stands in for the executor's `tick` and `reply`; the client's
-`send` and `protocol::parse` are its other end.
+**Task T16** — the interop control: the shipped `executor/DcsEvalExecutor.lua`'s
+own bytes, produced under the harness by `lua5.1`, parse under the Rust
+client. Done when `cargo test -p dcs-eval interop` is green with `lua5.1`
+present; mutations: shifting one byte of the shipped Lua reddens it, and an
+empty `net.dostring_in` answer must arrive as an empty answer. Needs T04, T12,
+T13. What it defends: `spec.sh find MCP interop`; the harness's `ping` suite
+is how the executor is driven off DCS, and `protocol::parse` is the reader.
 
-**An agent verifies** it: cargo drives both halves in one process over a
-temporary directory.
+**An agent verifies** it: cargo spawns the interpreter through `mise exec`;
+CI's windows job already builds and checks `lua5.1` before `mise run check`.
 
 ## After that
 
 - **Stages 0 and 1 are closed.** Stage 2 (T12–T17) is `ping` and the wire
   proven: the client half in Rust, the stand-in, and the interop controls.
 - **Milestone A** is Stages 0–2: the wire proven off DCS, the interop control
-  first and the stand-in second. The CI interop job arrives with T15.
+  and the stand-in. CI already carries the interpreter; the interop test lands with T16.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
   Everything provable off DCS is proved before it.
 
