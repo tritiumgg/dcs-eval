@@ -29,8 +29,9 @@
 -- that went before it could be taken is `gone` and nothing is written; one
 -- read that cannot be removed is answered `error` with `stage: bridge`, the
 -- wire's word for the executor's own failure, and its bytes withheld; a
--- reply that cannot be published comes back as `error` with the reason, so
--- a request already consumed is not lost in silence. `loadstring` and
+-- reply that cannot be published comes back as `error` with the reason and
+-- a fourth value saying so, so a request already consumed is not lost in
+-- silence. `loadstring` and
 -- `net.dostring_in` are replaced for the whole suite with ones that fail a
 -- check: nothing here runs anything, so they are a guard for the dispatcher
 -- to come, and a request refused here can never have reached one.
@@ -409,10 +410,11 @@ do
   local E, env, _, log = spied("hook")
   local path = request(E, "held.req", "op: eval\nfor: " .. E.stamp .. "\n\nreturn 1")
   local held = assert(io.open(path, "rb"))
-  local req, status, why = E.admit(path)
+  local req, status, why, unpublished = E.admit(path)
   held:close()
   t.eq(req, nil, "held: nothing is handed back")
   t.eq(status, "error", "held: it is error")
+  t.eq(unpublished, nil, "held: the reply was published, so no fourth value")
   local got, echoed, body, stage = answered(E, "held", "stage")
   t.eq(got, "error", "held: the reply says error")
   t.eq(stage, "bridge", "held: with stage bridge")
@@ -452,9 +454,10 @@ do
   local E, env, box = spied("hook")
   local path = request(E, "4-a.req", "op: eval\n\nx")
   E.res = box .. "\\nowhere"
-  local req, status, why = E.admit(path)
+  local req, status, why, unpublished = E.admit(path)
   t.eq(req, nil, "unpublished: nothing is handed back")
   t.eq(status, "error", "unpublished: it is error")
+  t.eq(unpublished, true, "unpublished: and a fourth value says the reply was not published")
   t.check(why and why:find("the bad-request reply to 4-a was not published", 1, true),
     "unpublished: naming the reply that was lost: " .. tostring(why))
   t.eq(entries(env, E.req), "", "unpublished: the request is gone all the same")
@@ -462,10 +465,11 @@ do
   -- the one lost, and the file stays for the loop to see.
   path = request(E, "4-b.req", "op: eval\nfor: " .. E.stamp .. "\n\nx")
   local held = assert(io.open(path, "rb"))
-  req, status, why = E.admit(path)
+  req, status, why, unpublished = E.admit(path)
   held:close()
   t.eq(req, nil, "unpublished, held: nothing is handed back")
   t.eq(status, "error", "unpublished, held: it is error")
+  t.eq(unpublished, true, "unpublished, held: the fourth value says so here too")
   t.check(why and why:find("the error reply to 4-b was not published", 1, true),
     "unpublished, held: naming the reply that was lost: " .. tostring(why))
   t.eq(entries(env, E.req), "4-b.req", "unpublished, held: the file stays")

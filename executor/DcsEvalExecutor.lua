@@ -69,20 +69,28 @@ local STATES = {
   },
 }
 
--- The hook callbacks registered, and the phase each one moves the executor
--- to, where it moves one. Every callback is guarded, so a raise inside it
--- never reaches DCS, and none returns a value. The `try*` variants are not
--- here on purpose: their return value overrides DCS's own handling and every
--- other hook checking the same thing, so registering one would change
--- behaviour for every tool on the machine. The names past the simulation set
--- were offered in a measured session and not all seen to fire, which is "did
--- not fire" rather than "does not exist"; each costs one table entry.
+-- The hook callbacks registered: each row is the name, the phase it moves
+-- the executor to where it moves one, and its kind. `tick` marks the one
+-- callback that is the frame: it advances the tick and serves the session,
+-- and records nothing, because the frame path is where the dormant cost is
+-- counted. `frame` marks another per-frame callback that does neither.
+-- Every other callback is rare and records itself, so that `ping` can say
+-- which fired last, at what tick, and every name seen this session, which
+-- is how a client learns what the simulator has been doing without the
+-- executor calling a `DCS.*` reader, which it never does. Every callback is
+-- guarded, so a raise inside it never reaches DCS, and none returns a
+-- value. The `try*` variants are not here on purpose: their return value
+-- overrides DCS's own handling and every other hook checking the same
+-- thing, so registering one would change behaviour for every tool on the
+-- machine. The names past the simulation set were offered in a measured
+-- session and not all seen to fire, which is "did not fire" rather than
+-- "does not exist"; each costs one table entry.
 local HOOK_CALLBACKS = {
   { "onMissionLoadBegin", "load" },
   { "onMissionLoadProgress" },
   { "onMissionLoadEnd" },
   { "onSimulationStart", "sim" },
-  { "onSimulationFrame" },
+  { "onSimulationFrame", nil, "tick" },
   { "onSimulationPause", "paused" },
   { "onSimulationResume", "sim" },
   { "onSimulationStop", "menu" },
@@ -98,12 +106,15 @@ local HOOK_CALLBACKS = {
   { "onShowMultiplayer" },
 }
 
--- The export globals chained onto. `LuaExportActivityNextEvent` is not here:
--- it returns the time DCS should call it next, and DCS acts on that return.
+-- The export globals chained onto, in the same shape. The frame here is the
+-- callback after the frame rather than the one before it, so that a chunk
+-- evaluated in this state reads a frame DCS has finished stepping.
+-- `LuaExportActivityNextEvent` is not here: it returns the time DCS should
+-- call it next, and DCS acts on that return.
 local EXPORT_CALLBACKS = {
   { "LuaExportStart", "sim" },
-  { "LuaExportBeforeNextFrame" },
-  { "LuaExportAfterNextFrame" },
+  { "LuaExportBeforeNextFrame", nil, "frame" },
+  { "LuaExportAfterNextFrame", nil, "tick" },
   { "LuaExportStop", "stopped" },
 }
 
@@ -118,23 +129,50 @@ local EXPORT_CALLBACKS = {
 -- `last_raise` on the first raise a guard catches. Once the session exists
 -- it also carries the operations on it, `frame`, `publish`, `reply`,
 -- `take`, `parse` and `admit`, with `max_request_bytes` beside them, so that
--- a driver off DCS can take a request, read it and publish a reply before
--- the tick loop exists, and the tick loop, when it comes, reads them from
--- the same place. `handshake` is the path of the file a client reads first.
+-- a driver off DCS can take a request, read it and publish a reply as the
+-- tick does, and `ops`, the table the tick dispatches through. The
+-- callback record is `callbacks`, every name seen in the order first seen,
+-- with `last_callback_name` and `last_callback_tick` once one has fired;
+-- `unpublished` counts the replies the tick could not publish, with
+-- `last_unpublished` the reason for the latest. `handshake` is the path of
+-- the file a client reads first.
 local E
 
 local function nothing() end
 
+-- The frame, defined once the session operations it drives exist.
+local tick
+
+-- The callback names seen this session, as a set beside the list the
+-- namespace publishes, so a rare callback firing again is one lookup.
+local seen = {}
+
 -- One wrapper per callback, built here once. DCS calls the wrapper and the
 -- wrapper pcalls a body that already exists. Nothing is allocated per call,
--- because one of these is `onSimulationFrame` and the dormant budget is
--- counted in VM instructions. A raise in the body is counted and kept, not
--- rethrown: a raise escaping into a DCS callback takes the session with it.
-local function guard(name, phase)
-  local body = nothing
-  if phase then
+-- because one of these is the frame and the dormant budget is counted in
+-- VM instructions. A rare callback's body moves the phase where the row
+-- says, then records itself: its name and the tick it fired at, which is
+-- what `ping` reports as the last callback, and its name in the list of
+-- those seen, once. A raise in the body is counted and kept, not rethrown:
+-- a raise escaping into a DCS callback takes the session with it.
+local function guard(name, phase, kind)
+  local body
+  if kind == "tick" then
     body = function()
-      E.phase = phase
+      tick()
+    end
+  elseif kind == "frame" then
+    body = nothing
+  else
+    body = function()
+      if phase then
+        E.phase = phase
+      end
+      E.last_callback_name, E.last_callback_tick = name, E.tick
+      if not seen[name] then
+        seen[name] = true
+        E.callbacks[#E.callbacks + 1] = name
+      end
     end
   end
   return function(...)
@@ -149,7 +187,7 @@ end
 local function register_hook(DCS)
   local callbacks = {}
   for _, row in ipairs(HOOK_CALLBACKS) do
-    callbacks[row[1]] = guard(row[1], row[2])
+    callbacks[row[1]] = guard(row[1], row[2], row[3])
   end
   DCS.setUserCallbacks(callbacks)
 end
@@ -164,12 +202,12 @@ end
 -- and replacing it would discard whatever was meant by it. The number of
 -- slots chained is published, so three of four is visible rather than
 -- claimed as four.
-local function chain(name, phase)
+local function chain(name, phase, kind)
   local previous = rawget(_G, name)
   if previous ~= nil and type(previous) ~= "function" then
     return false
   end
-  local ours = guard(name, phase)
+  local ours = guard(name, phase, kind)
   if previous then
     rawset(_G, name, function(...)
       ours(...)
@@ -184,7 +222,7 @@ end
 local function register_export()
   local chained = 0
   for _, row in ipairs(EXPORT_CALLBACKS) do
-    if chain(row[1], row[2]) then
+    if chain(row[1], row[2], row[3]) then
       chained = chained + 1
     end
   end
@@ -779,8 +817,10 @@ local BODY_REQUIRED = { eval = true }
 -- The request as its id, headers and body, for the caller to run; or nil,
 -- a status and a message, the reply already on the disk where there was
 -- one to write, and a reply that could not be published reported as
--- `error` with the reason, because the request is gone from the disk by
--- then and a client waiting on it must not be left to wait.
+-- `error` with the reason and a fourth value, true, because the request
+-- is gone from the disk by then and a client waiting on it must not be
+-- left to wait; the fourth value is for a caller that counts such losses,
+-- so it need not read the message to know one happened.
 local function admit(path)
   local id = path:match("[^/\\]+$") or path
   id = id:match("^(.*)%.req$") or id
@@ -808,7 +848,7 @@ local function admit(path)
   end
   local ok, failed = reply(id, status, headers, why)
   if not ok then
-    return nil, "error", "the " .. status .. " reply to " .. id .. " was not published: " .. tostring(failed)
+    return nil, "error", "the " .. status .. " reply to " .. id .. " was not published: " .. tostring(failed), true
   end
   return nil, status, why
 end
@@ -822,6 +862,122 @@ local function states(host)
     entries[i] = row[1] .. ":carrier=" .. row[2] .. ",returns=" .. row[3] .. ",needs=" .. row[4]
   end
   return table.concat(entries, " ")
+end
+
+-- The ops, by the name a request spells, each taking an admitted request
+-- and answering what `reply` answers. The table is published on the
+-- namespace, so a driver off DCS can hang an op on it and see the tick
+-- carry it.
+--
+-- `ping` answers with what the session is doing: the phase and tick every
+-- reply carries, `states` as the handshake declares them, and the callback
+-- record. `last_callback` is `<name>@<tick>`, the last callback other than
+-- the frame to fire; `callbacks` is every name seen this session in the
+-- order first seen, comma separated. Both are empty until one has fired,
+-- an empty value being the wire's spelling for none, where `ABSENT` is its
+-- spelling for a read that did not answer. The body is `pong`, whatever
+-- the request carried.
+local OPS = {}
+
+function OPS.ping(req)
+  local last = ""
+  if E.last_callback_name then
+    last = E.last_callback_name .. "@" .. E.last_callback_tick
+  end
+  return reply(req.id, "ok", {
+    { "states", states(E.host) },
+    { "last_callback", last },
+    { "callbacks", table.concat(E.callbacks, ",") },
+  }, "pong")
+end
+
+-- One admitted request to its reply. `eval` is declared in the handshake
+-- and not yet served, so it is `unsupported`, the wire's word for an op
+-- this install does not run, rather than unknown; any other name the table
+-- lacks is `bad-request`. An op that raises is answered `error` under
+-- `stage: bridge`, the wire's word for the executor's own failure, with
+-- the message as the body, and the raise goes no further: the request is
+-- already off the disk, so one that escaped would leave its client waiting
+-- on a reply that never comes, and would end the tick for every request
+-- listed after it.
+--
+-- `true`, or nil and what refused, as `reply` answers.
+local function dispatch(req)
+  local op = OPS[req.headers.op]
+  if op then
+    local called, ok, why = pcall(op, req)
+    if called then
+      return ok, why
+    end
+    return reply(req.id, "error", { { "stage", "bridge" } }, tostring(ok))
+  elseif req.headers.op == "eval" then
+    return reply(req.id, "unsupported", nil, "eval is declared and not yet served by this executor")
+  end
+  return reply(req.id, "bad-request", nil, "unknown op: " .. req.headers.op)
+end
+
+-- The names of requests answered `error` because they were read and could
+-- not be removed. Each stays on the disk, and is skipped while it is
+-- listed, so it is neither answered again nor, worse, run again; it is
+-- forgotten once it is gone, so the same name can come back as a new
+-- request.
+local held = {}
+
+-- The frame. Every frame the request directory is listed and every request
+-- in it is answered, in name order, so replies come back in the order
+-- requests were published, and a client that publishes several shares the
+-- tick between them. Only a name ending in exactly `.req` is a request: a
+-- client publishes by rename from `.req.tmp`, and a reader with a looser
+-- suffix would meet a half-written file. Listing every frame is the armed
+-- shape; the dormant one, which lists nothing until a client wakes it, is
+-- not built, and neither is the budget that stops the tick taking more
+-- once it has spent its share of the frame.
+--
+-- A request `admit` answered `error` and left on the disk is held, whether
+-- or not its reply reached the disk. A reply that could not be published,
+-- `admit`'s own or an op's, is counted, with its reason kept, and noted in
+-- `dcs.log` where there is one; the tick goes on, because one lost reply
+-- is no reason to lose the rest. A request gone between the listing and
+-- the take is nothing to answer, and nothing is counted.
+tick = function()
+  E.tick = E.tick + 1
+  local lfs = rawget(_G, "lfs")
+  local names, listed = {}, {}
+  for name in lfs.dir(E.req) do
+    if name:sub(-4) == ".req" then
+      listed[name] = true
+      if not held[name] then
+        names[#names + 1] = name
+      end
+    end
+  end
+  for name in pairs(held) do
+    if not listed[name] then
+      held[name] = nil
+    end
+  end
+  table.sort(names)
+  for _, name in ipairs(names) do
+    local path = E.req .. SEP .. name
+    local req, status, why, unpublished = admit(path)
+    local lost = unpublished and why
+    if req then
+      local ok, failed = dispatch(req)
+      if not ok then
+        lost = failed
+      end
+    elseif status == "error" and lfs.attributes(path, "mode") == "file" then
+      held[name] = true
+    end
+    if lost then
+      E.unpublished = E.unpublished + 1
+      E.last_unpublished = lost
+      local log = rawget(_G, "log")
+      if type(log) == "table" and type(log.write) == "function" then
+        log.write(NAME, log.WARNING, "a reply was not published: " .. tostring(lost))
+      end
+    end
+  end
 end
 
 -- The leaf of the file DCS loaded, read off the debug library rather than
@@ -926,6 +1082,7 @@ local function main()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
   E.frame, E.publish, E.reply, E.take, E.parse, E.admit = frame, publish, reply, take, parse, admit
   E.max_request_bytes = MAX_REQUEST_BYTES
+  E.ops, E.callbacks, E.unpublished = OPS, {}, 0
   E.host, E.phase, E.raised, E.tick = host, host == "hook" and "menu" or "loaded", 0, 0
   -- The handshake is how a client finds the session, so one that cannot be
   -- written stops the load the way an output directory that cannot be made
