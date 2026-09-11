@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T12 is on its branch, waiting on its pull request; T13 has not started.
+Nothing. T13 is on its branch, waiting on its pull request; T14 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,27 +25,27 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T13** — the client's envelope: `protocol: 35 checks` under cargo. `frame` and `parse`
+  in `crates/dcs-eval`, cases mirroring the harness, refusals in the executor's words; both named mutations seen red.
 - **T12** — the tick and `ping`: `ping: 305 checks`, both hosts, under a sandbox. The
   frame lists `req`, admits in name order, dispatches through `ops`; `tick` on every reply; the missing-`status` mutation seen red.
 - **T11** — the handshake: `handshake: 320 checks`, both hosts, under a sandbox. Every
   field in the table's order, `protocol: 2`, by rename before registration, a stale one replaced; the two named mutations and `protocol: 1` seen red.
-- **T10** — the parser: `request: 261 checks`, both hosts, under a sandbox. The
-  envelope read back, `admit` from a path to a request or a `bad-request` on disk; eight mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T13** — the client half of the wire in `crates/dcs-eval`: protocol
-framing, encode and decode, a latin1 body, CRLF-normalised headers, a CR or
-LF in a value refused. Done when `cargo test -p dcs-eval protocol` prints its
-count; mutations: a header value carrying `\n` written rather than refused
-reddens the injection guard; a cp1251 body decoded on the way in reddens the
-byte-for-byte check. Needs T02. The bytes to agree with are the executor's
-`frame` and `parse`; the envelope is `spec.sh read BRIDGE 7.1`.
+**Task T14** — the client's send in `crates/dcs-eval`: a request published by
+rename, and the arm file made when absent, never removed. Done when
+`cargo test -p dcs-eval publish` shows a request landing only under its final
+name and the arm file created when absent; mutation: a client that removes
+the arm file reddens the never-removes check. Needs T13. The disk discipline
+to mirror is the executor's `publish`; the arm file and what it means are
+`spec.sh find BRIDGE "arm file"`; the bytes come from `protocol::frame`.
 
-**An agent verifies** it: cargo runs the tests and prints the count; the
-executor's bytes meet the client's at T16, not here.
+**An agent verifies** it: cargo runs the tests over a temporary directory; a
+real executor reads the file at T17.
 
 ## After that
 
@@ -85,8 +85,9 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A path with a byte past ASCII stops the load.** Header values are ASCII,
   a user name past ASCII puts such a byte in every path the handshake names,
   and the executor refuses the file with the header named in `dcs.log`. The
-  specification says nothing (`docs/audit.md`, Open); T13's parser is where
-  an answer would land.
+  specification says nothing (`docs/audit.md`, Open). The client's parser
+  refuses such a value as the executor does, the maintainer's call at T13;
+  a spelling for such a path on the wire is the writer's side, unsettled.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is
   proved with a file the suite keeps open; a client's directory handle from
   `ReadDirectoryChangesW` is only seen at Stage 9, with the real client.
