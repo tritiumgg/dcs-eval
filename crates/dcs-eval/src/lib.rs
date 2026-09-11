@@ -10,5 +10,11 @@
 pub mod protocol;
 pub mod publish;
 
+// The stand-in is a test double: the crate's own tests always have it, and
+// another crate's tests get it through the `standin` feature. A user's
+// binary never links it.
+#[cfg(any(test, feature = "standin"))]
+pub mod standin;
+
 #[cfg(test)]
 pub(crate) mod testing;

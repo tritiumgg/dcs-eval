@@ -8,3 +8,9 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+
+[features]
+# The stand-in executor, a test double that plays the executor's side of the
+# wire in-process. The crate's own tests always compile it; a crate that
+# drives it from its tests enables this in its dev-dependency on dcs-eval.
+standin = []
