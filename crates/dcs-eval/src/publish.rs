@@ -20,6 +20,8 @@ use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+use crate::protocol::{FrameError, frame};
+
 /// A step on the disk that refused: the path it was about, and what the OS
 /// said. `Display` is `<path>: <reason>`, the executor's shape for the same
 /// refusal, so a log line from either end reads the same way; the reason is
@@ -109,6 +111,79 @@ pub fn arm(path: &Path) -> Result<(), DiskError> {
             source,
         }),
     }
+}
+
+/// Whether `id` is `<seq>-<tag>`: ten digits, one dash, four to twelve
+/// letters or digits. The shape the client mints, so ids sort in
+/// publication order and two clients sharing a session never collide. It
+/// is also the containment check on the way to the disk: the id becomes
+/// `<req>/<id>.req`, and this alphabet admits no dot, slash or backslash,
+/// so no id names a path outside the request directory.
+pub fn is_id(id: &str) -> bool {
+    let b = id.as_bytes();
+    let Some(dash) = b.iter().position(|&c| c == b'-') else {
+        return false;
+    };
+    let (seq, tag) = (&b[..dash], &b[dash + 1..]);
+    seq.len() == 10
+        && seq.iter().all(u8::is_ascii_digit)
+        && (4..=12).contains(&tag.len())
+        && tag.iter().all(u8::is_ascii_alphanumeric)
+}
+
+/// Why `send` landed no request, or landed one the executor may not be
+/// looking for. The first three write nothing that was not there; the
+/// last says the request is on the disk.
+#[derive(Debug)]
+pub enum SendError {
+    /// Not `<seq>-<tag>`, so not a name this side will put in a path.
+    Id { id: String },
+    /// A header the executor's `parse` would refuse, refused before the
+    /// disk is touched.
+    Frame(FrameError),
+    /// The request did not land; the arm file was not touched.
+    Publish(DiskError),
+    /// The request landed and the arm file could not be made, so a dormant
+    /// executor has nothing to wake it. The request stays where it is.
+    Arm(DiskError),
+}
+
+impl fmt::Display for SendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Id { id } => write!(f, "the id {id} is not [0-9]{{10}}-[A-Za-z0-9]{{4,12}}"),
+            Self::Frame(err) => write!(f, "{err}"),
+            Self::Publish(err) => write!(f, "the request was not published: {err}"),
+            Self::Arm(err) => {
+                write!(f, "the request is published but the arm file is not: {err}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
+/// A request to the executor: `headers` and `body` framed as an envelope,
+/// published as `<req>/<id>.req` by rename, then the arm file at
+/// `arm_path` ensured. In that order, so a request that did not land arms
+/// nothing, and the executor's own order on the way to sleep, remove the
+/// arm file and then list once more, meets a request that is either
+/// already listed or has recreated the file behind it. Every header is the
+/// caller's, the session stamp under `for` included; nothing is added, so
+/// what lands is what was asked for.
+pub fn send(
+    req: &Path,
+    arm_path: &Path,
+    id: &str,
+    headers: &[(&str, &str)],
+    body: &[u8],
+) -> Result<(), SendError> {
+    if !is_id(id) {
+        return Err(SendError::Id { id: id.to_owned() });
+    }
+    let bytes = frame(headers, body).map_err(SendError::Frame)?;
+    publish(&req.join(format!("{id}.req")), &bytes).map_err(SendError::Publish)?;
+    arm(arm_path).map_err(SendError::Arm)
 }
 
 #[cfg(test)]
@@ -307,5 +382,176 @@ mod tests {
         assert_eq!(err.path, path);
         assert_eq!(err.source.kind(), io::ErrorKind::NotFound);
         assert_eq!(entries(&b.path), "", "nothing is made");
+    }
+
+    // ---- a request, sent --------------------------------------------------
+
+    const ID: &str = "0000000001-abcd";
+    const PING: [(&str, &str); 2] = [("op", "ping"), ("for", "0000000001-abcd")];
+
+    /// A session directory: `req/` made, the arm path beside it, nothing
+    /// else.
+    fn session(b: &Sandbox) -> (PathBuf, PathBuf) {
+        let req = b.join("req");
+        fs::create_dir(&req).expect("the request directory");
+        (req, b.join("arm"))
+    }
+
+    #[test]
+    fn send_lands_the_envelope_under_the_id_and_makes_the_arm_file() {
+        let b = Sandbox::new();
+        let (req, arm_path) = session(&b);
+        send(&req, &arm_path, ID, &PING, b"").expect("the request sends");
+        assert_eq!(
+            entries(&req),
+            "0000000001-abcd.req",
+            "the request under its final name, no .tmp"
+        );
+        let want = frame(&PING, b"").expect("the same envelope");
+        assert_eq!(
+            slurp(&req.join("0000000001-abcd.req")),
+            want,
+            "holding what frame writes"
+        );
+        assert!(arm_path.is_file(), "the arm file appears");
+        assert_eq!(slurp(&arm_path), b"", "empty");
+    }
+
+    #[test]
+    fn send_never_removes_the_arm_file() {
+        // The arm file is there before the send, with content nobody here
+        // wrote: after two sends it is still there, as it was. A send that
+        // removed it, or made it afresh, goes red here.
+        let b = Sandbox::new();
+        let (req, arm_path) = session(&b);
+        fs::write(&arm_path, b"present").expect("an arm file already there");
+        send(&req, &arm_path, ID, &PING, b"").expect("the first send");
+        assert!(
+            arm_path.is_file(),
+            "the arm file is still there after one send"
+        );
+        assert_eq!(slurp(&arm_path), b"present", "as it was");
+        send(&req, &arm_path, "0000000002-abcd", &PING, b"return 1").expect("the second send");
+        assert!(arm_path.is_file(), "and after two");
+        assert_eq!(slurp(&arm_path), b"present", "as it was");
+        assert_eq!(entries(&req), "0000000001-abcd.req 0000000002-abcd.req");
+    }
+
+    #[test]
+    fn send_refuses_an_id_that_is_not_one_and_touches_nothing() {
+        let b = Sandbox::new();
+        let (req, arm_path) = session(&b);
+        for id in [
+            "1-a",
+            "0000000001-abc",
+            "0000000001-abcdefghijklm",
+            "00000000001-abcd",
+            "",
+        ] {
+            let err = send(&req, &arm_path, id, &PING, b"").expect_err(id);
+            assert!(
+                matches!(&err, SendError::Id { id: got } if got == id),
+                "{id:?}: {err}"
+            );
+            assert_eq!(
+                err.to_string(),
+                format!("the id {id} is not [0-9]{{10}}-[A-Za-z0-9]{{4,12}}")
+            );
+        }
+        assert_eq!(entries(&req), "", "nothing lands");
+        assert!(!arm_path.exists(), "and nothing arms");
+    }
+
+    #[test]
+    fn send_refuses_a_header_the_framer_refuses_and_touches_nothing() {
+        let b = Sandbox::new();
+        let (req, arm_path) = session(&b);
+        let err = send(&req, &arm_path, ID, &[("op", "ping\nstatus: fake")], b"")
+            .expect_err("the injection guard");
+        assert!(
+            matches!(err, SendError::Frame(FrameError::LineBreak { .. })),
+            "{err}"
+        );
+        assert_eq!(err.to_string(), "op: the value carries a CR or LF");
+        assert_eq!(entries(&req), "", "nothing lands");
+        assert!(!arm_path.exists(), "and nothing arms");
+    }
+
+    #[test]
+    fn send_with_no_request_directory_publishes_nothing_and_arms_nothing() {
+        // Publish first, then arm: a request that did not land wakes no
+        // executor to look for it.
+        let b = Sandbox::new();
+        let req = b.join("req");
+        let arm_path = b.join("arm");
+        let err = send(&req, &arm_path, ID, &PING, b"").expect_err("nowhere to land");
+        let SendError::Publish(inner) = &err else {
+            panic!("a publish refusal, not {err}");
+        };
+        assert_eq!(inner.path, req.join("0000000001-abcd.req.tmp"));
+        assert!(
+            err.to_string()
+                .starts_with("the request was not published: "),
+            "{err}"
+        );
+        assert!(!arm_path.exists(), "the arm file is not made");
+        assert_eq!(entries(&b.path), "", "nothing at all is made");
+    }
+
+    #[test]
+    fn send_that_cannot_arm_says_the_request_is_published() {
+        let b = Sandbox::new();
+        let (req, _) = session(&b);
+        let arm_path = b.join("gone").join("arm");
+        let err = send(&req, &arm_path, ID, &PING, b"").expect_err("nowhere to arm");
+        let SendError::Arm(inner) = &err else {
+            panic!("an arm refusal, not {err}");
+        };
+        assert_eq!(inner.path, arm_path);
+        assert!(
+            err.to_string()
+                .starts_with("the request is published but the arm file is not: "),
+            "{err}"
+        );
+        assert_eq!(
+            entries(&req),
+            "0000000001-abcd.req",
+            "the request is on the disk, no .tmp"
+        );
+    }
+
+    #[test]
+    fn is_id_the_shape_and_the_alphabet() {
+        for id in [
+            "0000000001-abcd",
+            "9999999999-ABCDEFGHIJKL",
+            "0000000000-a1B2",
+            "0000000001-0000",
+        ] {
+            assert!(is_id(id), "{id:?}");
+        }
+        let refused = [
+            "",
+            "1-a",
+            "000000001-abcd",           // nine digits
+            "00000000001-abcd",         // eleven
+            "0000000001-abc",           // a tag of three
+            "0000000001-abcdefghijklm", // of thirteen
+            "0000000001-",              // of none
+            "0000000001-ab-cd",         // a second dash
+            "000000000a-abcd",          // a letter in the sequence
+            "0000000001-caf\u{e9}",     // a byte past ASCII
+            "0000000001-abcd\n",
+            "0000000001_abcd",
+            // The containment cases: nothing here can leave the directory.
+            "../x",
+            "0000000001-../x",
+            "0000000001-a/bc",
+            "0000000001-a\\bc",
+            "0000000001-a.bc",
+        ];
+        for id in refused {
+            assert!(!is_id(id), "{id:?}");
+        }
     }
 }
