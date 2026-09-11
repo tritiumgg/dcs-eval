@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T13 is on its branch, waiting on its pull request; T14 has not started.
+Nothing. T14 is on its branch, waiting on its pull request; T15 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,27 +25,27 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T14** — the client's send: `publish: 17 checks` under cargo. `publish`, `arm` and `send`
+  in `crates/dcs-eval`, a request through `<id>.req.tmp` to its final name, the arm file made when absent and never removed; both mutations seen red.
 - **T13** — the client's envelope: `protocol: 35 checks` under cargo. `frame` and `parse`
   in `crates/dcs-eval`, cases mirroring the harness, refusals in the executor's words; both named mutations seen red.
 - **T12** — the tick and `ping`: `ping: 305 checks`, both hosts, under a sandbox. The
   frame lists `req`, admits in name order, dispatches through `ops`; `tick` on every reply; the missing-`status` mutation seen red.
-- **T11** — the handshake: `handshake: 320 checks`, both hosts, under a sandbox. Every
-  field in the table's order, `protocol: 2`, by rename before registration, a stale one replaced; the two named mutations and `protocol: 1` seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T14** — the client's send in `crates/dcs-eval`: a request published by
-rename, and the arm file made when absent, never removed. Done when
-`cargo test -p dcs-eval publish` shows a request landing only under its final
-name and the arm file created when absent; mutation: a client that removes
-the arm file reddens the never-removes check. Needs T13. The disk discipline
-to mirror is the executor's `publish`; the arm file and what it means are
-`spec.sh find BRIDGE "arm file"`; the bytes come from `protocol::frame`.
+**Task T15** — the Rust stand-in executor in `crates/dcs-eval`, its encoder
+deliberately not the client's. Done when `cargo test -p dcs-eval standin`
+drives a full round trip against it; mutation: the stand-in's encoder replaced
+by the client's serialiser reddens the "encoder is not the client's"
+assertion. Needs T13. What it is for and must not share: `spec.sh find MCP
+stand-in`; it stands in for the executor's `tick` and `reply`; the client's
+`send` and `protocol::parse` are its other end.
 
-**An agent verifies** it: cargo runs the tests over a temporary directory; a
-real executor reads the file at T17.
+**An agent verifies** it: cargo drives both halves in one process over a
+temporary directory.
 
 ## After that
 
