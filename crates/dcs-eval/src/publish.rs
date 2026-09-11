@@ -76,6 +76,41 @@ pub fn publish(path: &Path, bytes: &[u8]) -> Result<(), DiskError> {
     Ok(())
 }
 
+/// The arm file, ensured: the signal to a dormant executor that a request
+/// is waiting. Its existence is the whole signal and its content is
+/// nothing, so it is stat'd first and created empty only when absent. The
+/// executor arms on anything the stat returns, so anything present is left
+/// as it is, a file with content or a directory alike, and a race that
+/// makes the create find one already there is the same as finding it at
+/// the stat. The client never removes it: the executor does, once it has
+/// listed the request directory a last time, and that order is what keeps
+/// a request from being stranded. A parent that is gone, a session
+/// directory removed by the next load, is an error naming the arm path.
+pub fn arm(path: &Path) -> Result<(), DiskError> {
+    match fs::metadata(path) {
+        Ok(_) => return Ok(()),
+        Err(source) if source.kind() != io::ErrorKind::NotFound => {
+            return Err(DiskError {
+                path: path.to_owned(),
+                source,
+            });
+        }
+        Err(_) => {}
+    }
+    match fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(_) => Ok(()),
+        Err(source) if source.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(source) => Err(DiskError {
+            path: path.to_owned(),
+            source,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -221,5 +256,56 @@ mod tests {
         assert_eq!(err.path, final_, "the refusal names the final");
         assert_eq!(slurp(&final_), b"first", "the old bytes stay");
         assert_eq!(entries(&b.path), "1-a.res", "and no .tmp survives");
+    }
+
+    // ---- the arm file -----------------------------------------------------
+
+    #[test]
+    fn arm_creates_the_file_when_absent_and_empty() {
+        let b = Sandbox::new();
+        let path = b.join("arm");
+        arm(&path).expect("the arm file is made");
+        assert!(path.is_file(), "a regular file");
+        assert_eq!(
+            slurp(&path),
+            b"",
+            "with nothing in it: existence is the signal"
+        );
+        assert_eq!(entries(&b.path), "arm");
+    }
+
+    #[test]
+    fn arm_leaves_a_present_file_as_it_is() {
+        let b = Sandbox::new();
+        let path = b.join("arm");
+        fs::write(&path, b"left here by someone").expect("a present arm file");
+        arm(&path).expect("a present arm file is fine");
+        assert_eq!(
+            slurp(&path),
+            b"left here by someone",
+            "its content is not touched"
+        );
+        arm(&path).expect("and again");
+        assert_eq!(slurp(&path), b"left here by someone");
+    }
+
+    #[test]
+    fn arm_takes_a_directory_at_the_path_as_present() {
+        // The executor arms on any answer to its stat; so does this side.
+        let b = Sandbox::new();
+        let path = b.join("arm");
+        fs::create_dir(&path).expect("a directory at the arm path");
+        arm(&path).expect("present is present");
+        assert!(path.is_dir(), "and it is left alone");
+    }
+
+    #[test]
+    fn arm_with_its_parent_gone_names_the_arm_path() {
+        let b = Sandbox::new();
+        let path = b.join("gone").join("arm");
+        let err = arm(&path).expect_err("no directory to make it in");
+        assert_eq!(err.path, path);
+        assert_eq!(err.source.kind(), io::ErrorKind::NotFound);
+        assert_eq!(entries(&b.path), "", "nothing is made");
     }
 }
