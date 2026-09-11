@@ -8,3 +8,4 @@
 //! any other Rust program that wants to talk to a running DCS.
 
 pub mod protocol;
+pub mod publish;
