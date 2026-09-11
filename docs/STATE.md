@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-10
+**Last updated:** 2026-09-11
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T11 is on its branch, waiting on its pull request; T12 has not started.
+Nothing. T12 is on its branch, waiting on its pull request; T13 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,32 +25,32 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T12** — the tick and `ping`: `ping: 305 checks`, both hosts, under a sandbox. The
+  frame lists `req`, admits in name order, dispatches through `ops`; `tick` on every reply; the missing-`status` mutation seen red.
 - **T11** — the handshake: `handshake: 320 checks`, both hosts, under a sandbox. Every
   field in the table's order, `protocol: 2`, by rename before registration, a stale one replaced; the two named mutations and `protocol: 1` seen red.
 - **T10** — the parser: `request: 261 checks`, both hosts, under a sandbox. The
   envelope read back, `admit` from a path to a request or a `bad-request` on disk; eight mutations seen red.
-- **T09** — the framer: `framer: 104 checks`, both hosts, under a sandbox. The
-  envelope's bytes, publish by rename read off an operation log, a 300 KiB request refused unread; six mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T12** — the `ping` op, the first of Stage 2, and with it the tick
-that lists `req` and answers through `admit`. Done when `lua5.1
-tools/harness.lua executor/ping` shows a `ping` answered with `phase`,
-`tick`; mutation: a `ping` reply missing `status` reddens the reply-shape
-check. Needs T10, T11. The reply shape is `spec.sh read BRIDGE 7.4`; every
-`ping` reply carries `states` as the handshake does (`STATES` in the
-executor), with `last_callback` and `callbacks`.
+**Task T13** — the client half of the wire in `crates/dcs-eval`: protocol
+framing, encode and decode, a latin1 body, CRLF-normalised headers, a CR or
+LF in a value refused. Done when `cargo test -p dcs-eval protocol` prints its
+count; mutations: a header value carrying `\n` written rather than refused
+reddens the injection guard; a cp1251 body decoded on the way in reddens the
+byte-for-byte check. Needs T02. The bytes to agree with are the executor's
+`frame` and `parse`; the envelope is `spec.sh read BRIDGE 7.1`.
 
-**An agent verifies** it: the harness drives the registered callback over a
-sandbox and reads the reply back, the way `executor/request` drives `admit`.
+**An agent verifies** it: cargo runs the tests and prints the count; the
+executor's bytes meet the client's at T16, not here.
 
 ## After that
 
-- **Stage 0 is closed.** Stage 1 (T06–T11) is the load shell and the envelope,
-  every task harness-proven off DCS.
+- **Stages 0 and 1 are closed.** Stage 2 (T12–T17) is `ping` and the wire
+  proven: the client half in Rust, the stand-in, and the interop controls.
 - **Milestone A** is Stages 0–2: the wire proven off DCS, the interop control
   first and the stand-in second. The CI interop job arrives with T15.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
@@ -79,8 +79,9 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **Declared before served, and absent before counted.** The handshake
   publishes `ops`, `states`, `eval` and the five figures from the first load,
   the two instruction figures provisional; the task that lands each reads its
-  constant. `tick` and `cpu_ms` are absent from replies until T12 and T23.
-  The interop control at T16 reads none of this as a defect.
+  constant. `eval` is answered `unsupported` until T18 serves it; `cpu_ms`
+  is absent from replies until T23. The interop control at T16 reads none of
+  this as a defect.
 - **A path with a byte past ASCII stops the load.** Header values are ASCII,
   a user name past ASCII puts such a byte in every path the handshake names,
   and the executor refuses the file with the header named in `dcs.log`. The
@@ -89,11 +90,9 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is
   proved with a file the suite keeps open; a client's directory handle from
   `ReadDirectoryChangesW` is only seen at Stage 9, with the real client.
-- **A wrong `for` and an unknown op are admitted.** `admit` refuses a missing
-  stamp or op and passes a wrong stamp (the fence, T25) and an unknown op
-  (the op table, T12) through; the suite pins both until each task lands.
-- **A read-but-unremovable request stays on the disk.** `admit` answers it
-  `error` once per call; the tick loop (T12) must not take that name again.
+- **A wrong `for` is answered.** `admit` passes a wrong stamp through and the
+  tick answers it; `executor/ping` pins that until the fence (T25) answers
+  `stale-session`.
 - **`docs/PLAN.md`'s DR-1 and DR-2 stay the record** for one repository and
   Windows as the target; a copy in `docs/decisions/` would be a second place
   to keep in step.
