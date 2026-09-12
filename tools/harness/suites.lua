@@ -12,4 +12,5 @@ return {
   "executor/request",
   "executor/handshake",
   "executor/ping",
+  "executor/interop",
 }
