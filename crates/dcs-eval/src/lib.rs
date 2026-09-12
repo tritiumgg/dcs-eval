@@ -18,3 +18,8 @@ pub mod standin;
 
 #[cfg(test)]
 pub(crate) mod testing;
+
+// The interop control: the shipped Lua's bytes under this crate's parser.
+// A test module and nothing else, so it lives beside `testing`.
+#[cfg(test)]
+mod interop;
