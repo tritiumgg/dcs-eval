@@ -169,8 +169,10 @@ beyond Windows, so `sha256sum`, `cygpath` and `cmd.exe` are fair
 game.
 
 Leave `.gitattributes` alone. It disables line-ending conversion, without which
-the embedded `DcsEvalExecutor.lua`'s hash, the installer's hash gate and the
-interop control all break against a file nobody edited.
+the embedded `DcsEvalExecutor.lua`'s hash and the installer's hash gate both
+break against a file nobody edited. The interop control is behavioural and
+hashes nothing: a byte of the executor's `frame` that changes the wire reddens
+it, and a byte in a comment does not.
 
 ## Version control
 

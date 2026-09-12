@@ -113,8 +113,8 @@ before it is enabled). Neither blocks Milestones A–C.
   the bytes before anything else is built on them. This is the net for the whole port (`mcp.md`
   §1.4: the interop control first, the stand-in second). *Acceptance:* `cargo test -p dcs-eval
   interop` is green with the interpreter present, and the round-trip control (T17) drives a
-  harnessed `DcsEvalExecutor.lua` to answer a `ping` the client reads back; shifting one byte of the shipped
-  Lua reddens interop. Covers Stages 0–2.
+  harnessed `DcsEvalExecutor.lua` to answer a `ping` the client reads back; a byte of the executor's
+  `frame` that changes the wire reddens interop. Covers Stages 0–2.
 - **Milestone B — The full protocol and its controls.** Someone can trust every §7 behaviour
   without a sortie: line-truth in every carrier, the oversize refusal, the tick and instruction
   budgets, the stamp fence, the dormant budget as a number, the arming race, and the seven-state
@@ -150,7 +150,7 @@ states strictly (an unmodelled name raises where it is read) and runs under the 
 | T02 | The Cargo workspace: `dcs-eval` (lib) and `dcs-mcp` (bin) skeletons | `cargo build` prints both crate names and produces `dcs-mcp.exe`; mutation: removing a crate from the workspace members reddens the build | — | developer-only |
 | T03 | The Lua harness runner: loads `DcsEvalExecutor.lua`, counts checks, exits 2 for "nothing ran", strict-by-default | `lua5.1 tools/harness.lua selftest` prints `selftest: 1 check` and exits 0; mutation: a test with no assertions makes it exit 2 | T01 | developer-only |
 | T04 | The DCS state stubs: seven global tables per §1's surface, `net.dostring_in` returns `''`, `lfs`/`io`/`os`/`debug` models | `lua5.1 tools/harness.lua stubs` prints the modelled-name count and asserts `net.dostring_in` returns empty; mutation: a stub that evaluates instead of returning `''` reddens the empty-answer check | T03 | developer-only |
-| T05 | The CI workflow running the harness under 5.1 and `cargo test` | a CI run prints both suites' check counts; mutation: removing the interpreter step makes the interop job (T15) red, not skipped | T01,T02,T03 | developer-only |
+| T05 | The CI workflow running the harness under 5.1 and `cargo test` | a CI run prints both suites' check counts; mutation: removing the interpreter step makes the interop job (T16) red, not skipped | T01,T02,T03 | developer-only |
 
 **Stage command:** `tools/check-lua && lua5.1 tools/harness.lua selftest stubs && cargo build`.
 
@@ -186,12 +186,12 @@ that prove the two implementations agree on bytes.
 | T13 | Client protocol framing (encode/decode, latin1 body, CRLF-normalised headers, CR/LF-in-value refused) | `cargo test -p dcs-eval protocol` prints its count; mutations: a header value carrying `\n` that is written rather than refused reddens the injection guard; a cp1251 body decoded on the way in reddens the byte-for-byte check | T02 | developer-only |
 | T14 | Client publish-by-rename and arm-file-ensure on send | `cargo test -p dcs-eval publish` shows a request landing only under its final name and the arm file created when absent; mutation: a client that removes the arm file reddens the never-removes check | T13 | developer-only |
 | T15 | The Rust stand-in executor with a deliberately unshared encoder | `cargo test -p dcs-eval standin` drives a full round trip against the stand-in; mutation: replacing the stand-in encoder with the client's serialiser reddens the "encoder is not the client's" assertion | T13 | developer-only |
-| T16 | The interop control: the shipped `DcsEvalExecutor.lua`'s own bytes parse under the Rust client, in CI with the interpreter | `cargo test -p dcs-eval interop` green with `lua5.1` present; mutation: shifting one byte of the shipped Lua reddens it; an empty `net.dostring_in` answer must arrive as an empty answer | T04,T12,T13 | developer-only |
+| T16 | The interop control: the shipped `DcsEvalExecutor.lua`'s own bytes parse under the Rust client, in CI with the interpreter | `cargo test -p dcs-eval interop` green with `lua5.1` present; mutation: a byte of the executor's `frame` that changes the wire reddens it, a comment byte does not; an empty `net.dostring_in` answer must arrive as an empty answer | T04,T12,T13 | developer-only |
 | T17 | The end-to-end round-trip control: Rust client → harnessed `DcsEvalExecutor.lua` → client reads the `ping` reply | `cargo test -p dcs-eval e2e` (spawning `lua5.1` on the shipped file) returns a `pong`/`ok` reply the client parses; mutation: a stamp mismatch injected mid-run surfaces as `superseded`, not a hang | T14,T15,T16 | developer-only |
 
 **Stage command:** `lua5.1 tools/harness.lua executor/ping && cargo test -p dcs-eval
 protocol publish standin interop e2e`.  **Milestone A acceptance:** this command green; the T16
-byte-shift mutation reddens interop.
+`frame` mutation reddens interop.
 
 ---
 

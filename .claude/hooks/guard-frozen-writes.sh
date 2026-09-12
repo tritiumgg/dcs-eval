@@ -7,8 +7,8 @@
 # not an edit. Everything under docs/specs/ is frozen, and nothing else is.
 #
 # .gitattributes disables line-ending conversion. Without it the embedded
-# DcsEvalExecutor.lua's hash, the installer's hash gate and the interop
-# control all break against a file nobody edited.
+# DcsEvalExecutor.lua's hash and the installer's hash gate both break against
+# a file nobody edited.
 #
 # Exit 2 blocks the tool call and hands stderr to the model as the reason.
 
