@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T15 is on its branch, waiting on its pull request; T16 has not started.
+Nothing. T16 is on its branch, waiting on its pull request; T17 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,34 +25,34 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T16** — the interop control: `interop: 4 checks` under cargo. `crates/dcs-eval/src/interop.rs`
+  spawns `lua5.1.exe` on `tools/harness/executor/interop.lua` over a box in `DCS_EVAL_INTEROP`; the handshake, a `ping` and an `eval` reply parse, the stand-in matches; the `frame` and empty-value mutations seen red.
 - **T15** — the stand-in: `standin: 19 checks` under cargo. `crates/dcs-eval/src/standin.rs`
   behind the `standin` feature, its encoder a CRLF dialect and its decoder and disk side its own; the client's `send` round-trips a `ping`; the frame-swap mutation seen red.
 - **T14** — the client's send: `publish: 17 checks` under cargo. `publish`, `arm` and `send`
   in `crates/dcs-eval`, a request through `<id>.req.tmp` to its final name, the arm file made when absent and never removed; both mutations seen red.
-- **T13** — the client's envelope: `protocol: 35 checks` under cargo. `frame` and `parse`
-  in `crates/dcs-eval`, cases mirroring the harness, refusals in the executor's words; both named mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T16** — the interop control: the shipped `executor/DcsEvalExecutor.lua`'s
-own bytes, produced under the harness by `lua5.1`, parse under the Rust
-client. Done when `cargo test -p dcs-eval interop` is green with `lua5.1`
-present; mutations: shifting one byte of the shipped Lua reddens it, and an
-empty `net.dostring_in` answer must arrive as an empty answer. Needs T04, T12,
-T13. What it defends: `spec.sh find MCP interop`; the harness's `ping` suite
-is how the executor is driven off DCS, and `protocol::parse` is the reader.
+**Task T17** — the round-trip control: the client's `send` into the harnessed
+executor's `req`, the Lua answering on its frame, the client reading `pong`/`ok`
+back. Done when `cargo test -p dcs-eval e2e` is green with `lua5.1` present.
+Needs T14, T15, T16. Two things the plan did not see: the interop suite plants
+before its one frame, so this needs a suite that ticks until a `.req` appears
+under a deadline; and the `superseded` mutation needs the fence (T25), so T17
+states what it can observe and carries the rest forward.
 
-**An agent verifies** it: cargo spawns the interpreter through `mise exec`;
-CI's windows job already builds and checks `lua5.1` before `mise run check`.
+**An agent verifies** it: the same spawn as `interop.rs`, `lua5.1.exe` on PATH
+under mise; CI's windows job has it before `mise run check`.
 
 ## After that
 
 - **Stages 0 and 1 are closed.** Stage 2 (T12–T17) is `ping` and the wire
   proven: the client half in Rust, the stand-in, and the interop controls.
 - **Milestone A** is Stages 0–2: the wire proven off DCS, the interop control
-  and the stand-in. CI already carries the interpreter; the interop test lands with T16.
+  and the stand-in. The interop control landed with T16; T17 closes the milestone.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
   Everything provable off DCS is proved before it.
 
@@ -79,9 +79,9 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **Declared before served, and absent before counted.** The handshake
   publishes `ops`, `states`, `eval` and the five figures from the first load,
   the two instruction figures provisional; the task that lands each reads its
-  constant. `eval` is answered `unsupported` until T18 serves it; `cpu_ms`
-  is absent from replies until T23. The interop control at T16 reads none of
-  this as a defect.
+  constant. `eval` is answered `unsupported` until T18, and the interop control
+  reads it so; when T18 serves it, that case flips to an empty body, the stub's
+  `net.dostring_in` answer. `cpu_ms` is absent from replies until T23.
 - **A path with a byte past ASCII stops the load.** Header values are ASCII,
   a user name past ASCII puts such a byte in every path the handshake names,
   and the executor refuses the file with the header named in `dcs.log`. The
