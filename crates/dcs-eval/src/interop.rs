@@ -14,9 +14,9 @@
 //!
 //! The interpreter is `lua5.1.exe` on `PATH`, spelt with its extension:
 //! Windows appends `.exe` to a bare name only when the name has no dot, and
-//! `lua5.1` has one. It is the same resolution the build gate uses for the
-//! harness one line after `cargo test`, and it is on `PATH` because cargo
-//! runs under mise. A missing interpreter is red, never a skip: the failure
+//! `lua5.1` has one. It is found on the same `PATH` entry the build gate's
+//! own harness run uses one line after `cargo test`, and that entry is there
+//! because cargo runs under mise. A missing interpreter is red, never a skip: the failure
 //! names the build step, so a checkout without one cannot read as proven.
 //!
 //! What is asserted empty. `eval` is declared and not yet served, so the

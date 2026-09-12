@@ -61,7 +61,7 @@ local given = os.getenv("DCS_EVAL_INTEROP")
 local box
 if given then
   if not os.rename(given, given) then
-    error("harness: DCS_EVAL_INTEROP names " .. given .. ", which is not a directory", 0)
+    error("harness: DCS_EVAL_INTEROP names " .. given .. ", which does not exist", 0)
   end
   box = given
 else
