@@ -23,3 +23,8 @@ pub(crate) mod testing;
 // A test module and nothing else, so it lives beside `testing`.
 #[cfg(test)]
 mod interop;
+
+// The round-trip control: the client's `send` against the shipped Lua on a
+// live tick. A test module and nothing else.
+#[cfg(test)]
+mod e2e;
