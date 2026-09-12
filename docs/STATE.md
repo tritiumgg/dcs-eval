@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T16 is on its branch, waiting on its pull request; T17 has not started.
+Nothing. T17 is on its branch, waiting on its pull request; T18 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,34 +25,34 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T17** — the round-trip control: `e2e: 1 check` under cargo, `e2e: 10 checks` under the harness.
+  `crates/dcs-eval/src/e2e.rs` spawns `lua5.1.exe` on `tools/harness/executor/e2e.lua` over a box in `DCS_EVAL_E2E`, sends a `ping` through the client's `send` into the live tick and reads `pong` back; a CRLF in `frame` and a suite that stops ticking seen red, the second in 20 s, not a hang.
 - **T16** — the interop control: `interop: 4 checks` under cargo. `crates/dcs-eval/src/interop.rs`
   spawns `lua5.1.exe` on `tools/harness/executor/interop.lua` over a box in `DCS_EVAL_INTEROP`; the handshake, a `ping` and an `eval` reply parse, the stand-in matches; the `frame` and empty-value mutations seen red.
 - **T15** — the stand-in: `standin: 19 checks` under cargo. `crates/dcs-eval/src/standin.rs`
   behind the `standin` feature, its encoder a CRLF dialect and its decoder and disk side its own; the client's `send` round-trips a `ping`; the frame-swap mutation seen red.
-- **T14** — the client's send: `publish: 17 checks` under cargo. `publish`, `arm` and `send`
-  in `crates/dcs-eval`, a request through `<id>.req.tmp` to its final name, the arm file made when absent and never removed; both mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T17** — the round-trip control: the client's `send` into the harnessed
-executor's `req`, the Lua answering on its frame, the client reading `pong`/`ok`
-back. Done when `cargo test -p dcs-eval e2e` is green with `lua5.1` present.
-Needs T14, T15, T16. Two things the plan did not see: the interop suite plants
-before its one frame, so this needs a suite that ticks until a `.req` appears
-under a deadline; and the `superseded` mutation needs the fence (T25), so T17
-states what it can observe and carries the rest forward.
+**Task T18** — the `hook` eval carrier: `loadstring` plus `setfenv` into the
+host `_G`, with a true `chunkname`. Done when `lua5.1 tools/harness.lua
+executor/eval-hook` shows a raise on line 47 reported as `<name>:47`; mutation:
+one line prepended to the body before compiling reddens the line-truth check.
+Needs T12. Serving `eval` flips two pinned answers: the interop control's
+`unsupported` case becomes an empty body, and the stand-in's `eval` answer
+follows the executor's (`standin.rs`, `interop.rs`).
 
-**An agent verifies** it: the same spawn as `interop.rs`, `lua5.1.exe` on PATH
-under mise; CI's windows job has it before `mise run check`.
+**An agent verifies** it: the harness under `lua5.1.exe` on PATH under mise,
+and `cargo test -p dcs-eval interop standin` for the two flips.
 
 ## After that
 
-- **Stages 0 and 1 are closed.** Stage 2 (T12–T17) is `ping` and the wire
-  proven: the client half in Rust, the stand-in, and the interop controls.
-- **Milestone A** is Stages 0–2: the wire proven off DCS, the interop control
-  and the stand-in. The interop control landed with T16; T17 closes the milestone.
+- **Stages 0 to 2 are closed, and Milestone A with them:** the wire proven off
+  DCS, the stand-in, the interop and round-trip controls. T17 closed it.
+- **Stage 3 (T18–T22) is eval and line-truth**, Milestone B: the one op that
+  runs anything, across the four carriers, with `<file>:47` true in every state.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
   Everything provable off DCS is proved before it.
 
@@ -93,7 +93,7 @@ entries at most: an eleventh means something here is finished, or belongs in
   `ReadDirectoryChangesW` is only seen at Stage 9, with the real client.
 - **A wrong `for` is answered.** `admit` passes a wrong stamp through and the
   tick answers it; `executor/ping` pins that until the fence (T25) answers
-  `stale-session`.
+  `stale-session`, and the round-trip's `superseded` mutation waits on it and on the client's wait (T31).
 - **`docs/PLAN.md`'s DR-1 and DR-2 stay the record** for one repository and
   Windows as the target; a copy in `docs/decisions/` would be a second place
   to keep in step.
