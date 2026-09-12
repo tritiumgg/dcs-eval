@@ -35,6 +35,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::protocol::{Envelope, PROTOCOL, parse};
+use crate::publish::send;
+use crate::standin::Standin;
 use crate::testing::{Sandbox, entries, slurp};
 
 const SUITE: &str = "executor/interop";
@@ -254,4 +256,62 @@ fn the_eval_reply_parses_as_unsupported_until_it_is_served() {
         format!("{PING_ID}.res {EVAL_ID}.res"),
         "both replies under their final names, no .tmp"
     );
+}
+
+/// The stand-in's reply to `id`: its bytes and the envelope read from them.
+fn stood_in(s: &Standin, id: &str) -> (Vec<u8>, Envelope) {
+    let bytes = slurp(&s.res().join(format!("{id}.res")));
+    let e =
+        parse(&bytes).unwrap_or_else(|why| panic!("{id}: the client refuses the stand-in: {why}"));
+    (bytes, e)
+}
+
+/// The stand-in against the executor on one reply: the same names in the
+/// same order, every value the same but the session's stamp, the same
+/// body, and bytes that differ, because the stand-in's dialect is not the
+/// Lua's and the parser read both as one envelope.
+fn agree(id: &str, lua: &(Vec<u8>, Envelope), stand_in: &(Vec<u8>, Envelope)) {
+    assert_eq!(
+        names(&stand_in.1),
+        names(&lua.1),
+        "{id}: the same headers in the same order"
+    );
+    for (name, value) in lua.1.headers.iter() {
+        if name != "stamp" {
+            assert_eq!(stand_in.1.headers.get(name), Some(value), "{id}: {name}");
+        }
+    }
+    assert_eq!(stand_in.1.body, lua.1.body, "{id}: the same body");
+    assert_ne!(
+        stand_in.0, lua.0,
+        "{id}: two dialects, not one encoder read twice"
+    );
+}
+
+#[test]
+fn the_stand_in_answers_as_the_shipped_executor_does() {
+    let r = run();
+    let mut s = Standin::open(&r.b.join("standin"), "hook").expect("the stand-in opens");
+    let stamp = s.stamp.clone();
+    // The same two requests the Lua suite plants, answered on one tick as
+    // the Lua answered them on one frame, so the ticks agree too.
+    send(
+        s.req(),
+        s.arm(),
+        PING_ID,
+        &[("op", "ping"), ("for", &stamp)],
+        b"",
+    )
+    .expect("the ping sends");
+    send(
+        s.req(),
+        s.arm(),
+        EVAL_ID,
+        &[("op", "eval"), ("for", &stamp)],
+        b"return 1",
+    )
+    .expect("the eval sends");
+    s.tick();
+    agree(PING_ID, &reply(&r, PING_ID), &stood_in(&s, PING_ID));
+    agree(EVAL_ID, &reply(&r, EVAL_ID), &stood_in(&s, EVAL_ID));
 }
