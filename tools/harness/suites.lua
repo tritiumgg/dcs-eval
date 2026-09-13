@@ -15,4 +15,5 @@ return {
   "executor/interop",
   "executor/e2e",
   "executor/eval-hook",
+  "executor/result",
 }
