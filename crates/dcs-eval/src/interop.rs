@@ -19,12 +19,12 @@
 //! because cargo runs under mise. A missing interpreter is red, never a skip: the failure
 //! names the build step, so a checkout without one cannot read as proven.
 //!
-//! What is asserted empty. `eval` is declared and not yet served, so the
-//! model's `net.dostring_in`, which runs nothing and answers empty, has not
-//! reached the wire yet; the empty values the Lua does write are the
-//! handshake's body and the ping's `last_callback` and `callbacks`, and the
-//! parser must read each as empty, not as absent. When `eval` is served the
-//! eval case here flips from `unsupported` to an empty body.
+//! What is asserted empty. The Lua writes four empty values: the
+//! handshake's body, the ping's `last_callback` and `callbacks`, and the
+//! body of the `eval`, whose chunk returns nil; the parser must read each
+//! as empty, not as absent. The `eval` runs in `hook`, the one state the
+//! executor serves in place; the states behind `net.dostring_in` and the
+//! mission door are answered "not yet served" until their carriers exist.
 //!
 //! A user name with a byte past ASCII puts that byte in every path the
 //! handshake names, and the executor refuses its own handshake: this test
@@ -75,8 +75,8 @@ const HANDSHAKE: [&str; 27] = [
     "max_result_bytes",
 ];
 
-/// The seven headers every reply carries first, and the three a `ping` adds.
-const HEAD: [&str; 7] = ["status", "protocol", "host", "stamp", "phase", "id", "tick"];
+/// The seven headers every reply carries first, then the three a `ping`
+/// adds and the two an `eval` that ran adds.
 const PING: [&str; 10] = [
     "status",
     "protocol",
@@ -88,6 +88,17 @@ const PING: [&str; 10] = [
     "states",
     "last_callback",
     "callbacks",
+];
+const EVAL: [&str; 9] = [
+    "status",
+    "protocol",
+    "host",
+    "stamp",
+    "phase",
+    "id",
+    "tick",
+    "result_type",
+    "chunkname",
 ];
 
 /// The checkout root: two above this crate's manifest.
@@ -236,20 +247,31 @@ fn the_ping_reply_parses_and_an_empty_value_arrives_empty() {
 }
 
 #[test]
-fn the_eval_reply_parses_as_unsupported_until_it_is_served() {
+fn the_eval_reply_parses_as_ok_with_an_empty_body() {
     let r = run();
-    let (_, e) = reply(&r, EVAL_ID);
+    let (bytes, e) = reply(&r, EVAL_ID);
     assert_eq!(
         names(&e),
-        HEAD,
-        "a refusal carries the seven headers and no other"
+        EVAL,
+        "the seven headers, the result's type and the chunkname, no other"
     );
-    assert_eq!(e.headers.get("status"), Some("unsupported"));
+    assert_eq!(e.headers.get("status"), Some("ok"));
     assert_eq!(e.headers.get("id"), Some(EVAL_ID));
-    assert_eq!(e.headers.get("tick"), Some("1"));
     assert_eq!(
-        e.body,
-        b"eval is declared and not yet served by this executor"
+        e.headers.get("tick"),
+        Some("1"),
+        "the same frame as the ping"
+    );
+    assert_eq!(e.headers.get("result_type"), Some("nil"));
+    assert_eq!(
+        e.headers.get("chunkname"),
+        Some("=dcs-eval"),
+        "the request named none, so the executor's default is echoed"
+    );
+    assert_eq!(e.body, b"", "a chunk that returned nil has an empty body");
+    assert!(
+        bytes.ends_with(b"chunkname: =dcs-eval\n\n"),
+        "the empty body is the blank line and nothing after it"
     );
     assert_eq!(
         entries(&r.res),
@@ -307,8 +329,8 @@ fn the_stand_in_answers_as_the_shipped_executor_does() {
         s.req(),
         s.arm(),
         EVAL_ID,
-        &[("op", "eval"), ("for", &stamp)],
-        b"return 1",
+        &[("op", "eval"), ("for", &stamp), ("state", "hook")],
+        b"return nil",
     )
     .expect("the eval sends");
     s.tick();

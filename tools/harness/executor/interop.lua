@@ -15,13 +15,12 @@
 -- guard, and this comment the warning.
 --
 -- What is planted. A `ping` and an `eval`, then one frame. The `eval`
--- carries a body because one without is refused before dispatch; it is
--- answered `unsupported` today, because the op is declared and not served,
--- and when it is served the answer is the model's `net.dostring_in`, which
--- runs nothing and answers empty. That is why `loadstring` and
--- `net.dostring_in` are the model's own here and not the failing ones
--- `executor/ping` installs: the empty answer is what the wire will carry,
--- and the reader must see it as empty.
+-- names `hook`, the state the executor serves in place with the model's
+-- own `loadstring`, and returns nil, so its reply is `ok` with
+-- `result_type: nil` and an empty body: the wire's spelling for a chunk
+-- that answered nothing, which the reader must see as empty and not as
+-- absent. That is why `loadstring` is the model's own here and not the
+-- failing one `executor/ping` installs.
 --
 -- What is proved here is only that the run went where the reader looks:
 -- the load got past containment over this box, nothing reached `dcs.log`,
@@ -76,7 +75,7 @@ t.eq(type(E), "table", "the executor loaded over the box")
 t.eq(host.log, nil, "and nothing reached dcs.log: no refusal, no fallback")
 
 request(E, "0000000001-ping.req", "op: ping\nfor: " .. E.stamp .. "\n\n")
-request(E, "0000000002-eval.req", "op: eval\nfor: " .. E.stamp .. "\n\nreturn 1")
+request(E, "0000000002-eval.req", "op: eval\nfor: " .. E.stamp .. "\nstate: hook\n\nreturn nil")
 host.callbacks.onSimulationFrame()
 
 t.eq(E.tick, 1, "one frame ran")

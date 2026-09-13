@@ -15,9 +15,9 @@
 -- Several requests in one frame are answered in name order and share the
 -- tick; a `.req.tmp` and a file under another name are left alone; a frame
 -- with nothing to answer touches no file. An unknown op is `bad-request`
--- naming it, `eval` is `unsupported` until it is served, and neither runs
--- anything, because `loadstring` and `net.dostring_in` are replaced with
--- ones that fail a check. An op that raises is answered `error` under
+-- naming it, an `eval` for a state no host serves is `unsupported` naming
+-- it, and neither runs anything, because `loadstring` and
+-- `net.dostring_in` are replaced with ones that fail a check. An op that raises is answered `error` under
 -- `stage: bridge` with the message, the next request in the same frame is
 -- answered still, and no raise reaches the guard. A request read and not
 -- removable is answered `error` once and never opened again while it stays,
@@ -301,7 +301,7 @@ end
 do
   local E, env, _, _, host = spied("hook")
   request(E, "4-a.req", "op: nope\nfor: " .. E.stamp .. "\n\n")
-  request(E, "4-b.req", "op: eval\nfor: " .. E.stamp .. "\n\nreturn 1")
+  request(E, "4-b.req", "op: eval\nfor: " .. E.stamp .. "\nstate: nope\n\nreturn 1")
   request(E, "4-c.req", "op: Ping\nfor: " .. E.stamp .. "\n\n")
   host.callbacks.onSimulationFrame()
   t.eq(entries(env, E.req), "", "unknown: every request is taken")
@@ -312,8 +312,8 @@ do
   t.eq(v.tick, "1", "unknown: with the tick")
   order, v, body = read(E, "4-b")
   fields(order, HEAD, "eval")
-  t.eq(v.status, "unsupported", "eval: declared and not served is unsupported, not unknown")
-  t.check(body:find("eval", 1, true) and body:find("not yet served", 1, true), "eval: the body says so: " .. body)
+  t.eq(v.status, "unsupported", "eval: a state no host serves is unsupported, not unknown")
+  t.eq(body, "nope is not a state this host serves", "eval: the body names it, and nothing was compiled")
   _, v, body = read(E, "4-c")
   t.eq(v.status, "bad-request", "case: an op is matched by its spelling")
   t.eq(body, "unknown op: Ping", "case: Ping is not ping")

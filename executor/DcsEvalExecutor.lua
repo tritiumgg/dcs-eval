@@ -44,6 +44,18 @@ local QUIET_S = 3
 local MAX_REQUEST_BYTES = 262144
 local MAX_RESULT_BYTES = 65536
 
+-- What an `eval` is compiled under when the request names nothing, and the
+-- most a request may name. The default is this project's own name and not
+-- the one the specification inherited from the project this one replaces,
+-- for the reason ADR 0002 gives. The `=` form makes Lua report a raise as
+-- `dcs-eval:<line>:`, with no `[string "..."]` around it. The limit exists
+-- because Lua abbreviates a source name over 60 bytes in its messages, so a
+-- name of any length is honoured in the header and only the tail of a long
+-- one appears in the message; past 200 bytes a name is refused, so no reply
+-- carries an unbounded echo.
+local DEFAULT_CHUNKNAME = "=dcs-eval"
+local MAX_CHUNKNAME_BYTES = 200
+
 -- What each host answers for each state, as the handshake and every ping
 -- reply declare it: the carrier that reaches the state, whether a result
 -- comes back as any Lua value or as a string, and what has to be true of
@@ -130,7 +142,8 @@ local EXPORT_CALLBACKS = {
 -- it also carries the operations on it, `frame`, `publish`, `reply`,
 -- `take`, `parse` and `admit`, with `max_request_bytes` beside them, so that
 -- a driver off DCS can take a request, read it and publish a reply as the
--- tick does, and `ops`, the table the tick dispatches through. The
+-- tick does, and `ops`, the table the tick dispatches through, `ping` and
+-- `eval` in it. The
 -- callback record is `callbacks`, every name seen in the order first seen,
 -- with `last_callback_name` and `last_callback_tick` once one has fired;
 -- `unpublished` counts the replies the tick could not publish, with
@@ -790,8 +803,11 @@ end
 
 -- The ops whose body is the thing they run, so an empty one is a request
 -- to run nothing and is refused before it gets that far. A `ping` carries
--- no body and whatever it carries is ignored.
-local BODY_REQUIRED = { eval = true }
+-- no body and whatever it carries is ignored. An install with `eval`
+-- disabled requires nothing of one, so that every `eval` it sees is
+-- answered `unsupported` by the op, an empty one included, rather than
+-- `bad-request` here for a body that would never have run.
+local BODY_REQUIRED = ALLOW_EVAL and { eval = true } or {}
 
 -- One request, from its path to the point of running it or to the reply
 -- that refuses it. The id is the filename with `.req` taken off and is
@@ -891,10 +907,124 @@ function OPS.ping(req)
   }, "pong")
 end
 
--- One admitted request to its reply. `eval` is declared in the handshake
--- and not yet served, so it is `unsupported`, the wire's word for an op
--- this install does not run, rather than unknown; any other name the table
--- lacks is `bad-request`. An op that raises is answered `error` under
+-- The row of `STATES[host]` for a state name, or nil. `server` is a second
+-- name for `scripting` on the wire and is looked up as that.
+local function state_row(host, name)
+  if name == "server" then
+    name = "scripting"
+  end
+  for _, row in ipairs(STATES[host]) do
+    if row[1] == name then
+      return row
+    end
+  end
+  return nil
+end
+
+-- The body of an `error` reply for what a chunk raised with. A string is
+-- carried verbatim, which for `error("x")` begins `<chunkname>:<line>:`,
+-- and a number is printed. Anything else is named by its type and never
+-- stringified: `tostring` on a value from a state would run a
+-- `__tostring` the chunk installed, and the executor runs nothing of a
+-- chunk's but the chunk.
+local function raised(value)
+  local kind = type(value)
+  if kind == "string" then
+    return value
+  elseif kind == "number" then
+    return tostring(value)
+  end
+  return "(error object is a " .. kind .. " value)"
+end
+
+-- The body of an `ok` reply for what a chunk returned, and its type. A
+-- string is the bytes verbatim, a boolean its name, a number printed the
+-- way `tostring` prints one, which is `%.14g`, and everything else, nil
+-- included, an empty body with the type in the header: a table is never
+-- serialised here, and a consumer that wants inside one ships a chunk that
+-- does it in the state. Widening a number that `%.14g` does not read back,
+-- naming `inf`, `-inf` and `nan`, and the ceiling on a body are not built,
+-- so a number in a reply today is `tostring`'s and nothing more.
+local function described(value)
+  local kind = type(value)
+  if kind == "string" then
+    return kind, value
+  elseif kind == "number" or kind == "boolean" then
+    return kind, tostring(value)
+  end
+  return kind, ""
+end
+
+-- The carrier for the host's own state: the body compiled with the
+-- request's `chunkname` and nothing else, run with the host's `_G` as its
+-- globals. Nothing is ever put in front of the body, because a `chunkname`
+-- is a promise that `<name>:47` is the caller's line 47, and one line of
+-- prologue would make every number in every message a lie. Compiling with
+-- the host's `_G` rather than this file's environment makes no difference
+-- on DCS, where the two are one table, and is what lets a chunk read the
+-- namespace this file published and never a local of this file. A compile
+-- failure is `stage: compile` with Lua's message verbatim, a raise while
+-- running `stage: run`, and both carry `chunkname` beside the message, so a
+-- reader knows what its line numbers are relative to. Only the first value
+-- a chunk returns is answered.
+local function eval_local(req, chunkname)
+  local loadstring, setfenv = rawget(_G, "loadstring"), rawget(_G, "setfenv")
+  if type(loadstring) ~= "function" then
+    return reply(req.id, "unsupported", nil, "no loadstring in this state")
+  elseif type(setfenv) ~= "function" then
+    return reply(req.id, "unsupported", nil, "no setfenv in this state")
+  end
+  local chunk, why = loadstring(req.body, chunkname)
+  if not chunk then
+    return reply(req.id, "error", { { "stage", "compile" }, { "chunkname", chunkname } }, why)
+  end
+  setfenv(chunk, _G)
+  local ok, value = pcall(chunk)
+  if not ok then
+    return reply(req.id, "error", { { "stage", "run" }, { "chunkname", chunkname } }, raised(value))
+  end
+  local kind, body = described(value)
+  return reply(req.id, "ok", { { "result_type", kind }, { "chunkname", chunkname } }, body)
+end
+
+-- `eval` runs the body in the state the request names. An install with
+-- `ALLOW_EVAL` off answers `unsupported` to every one, before anything is
+-- read. A request must name its state: the specification names no
+-- default, and a chunk that runs somewhere the caller did not say is the
+-- one thing this op must never do, so one without is refused as one
+-- without `for` is. A state this host does not declare is `unsupported`,
+-- the wire's word for a thing this install does not do, and so is one
+-- declared with a carrier that is not yet built: `net.dostring_in` and the
+-- mission door serve nothing yet. `chunkname` is echoed only where a chunk
+-- was compiled under it; a refusal compiled nothing and carries none.
+function OPS.eval(req)
+  if not ALLOW_EVAL then
+    return reply(req.id, "unsupported", nil, "eval is disabled in this install")
+  end
+  local state = req.headers.state
+  if state == nil or state == "" then
+    return reply(req.id, "bad-request", nil, "no state: the request does not name the state to run in")
+  elseif not state:find("^[A-Za-z][A-Za-z0-9_]*$") then
+    return reply(req.id, "bad-request", nil, "state: " .. excerpt(state) .. " is not [A-Za-z][A-Za-z0-9_]*")
+  end
+  local chunkname = req.headers.chunkname
+  if chunkname == nil or chunkname == "" then
+    chunkname = DEFAULT_CHUNKNAME
+  elseif #chunkname > MAX_CHUNKNAME_BYTES then
+    return reply(req.id, "bad-request", nil,
+      "chunkname: " .. #chunkname .. " bytes, over the " .. MAX_CHUNKNAME_BYTES .. "-byte limit")
+  end
+  local row = state_row(E.host, state)
+  if not row then
+    return reply(req.id, "unsupported", nil, state .. " is not a state this host serves")
+  elseif row[2] ~= "local" then
+    return reply(req.id, "unsupported", nil, state .. " is declared and not yet served by this executor")
+  end
+  return eval_local(req, chunkname)
+end
+
+-- One admitted request to its reply. A name the table lacks is
+-- `bad-request`. An op that raises is answered `error` under
 -- `stage: bridge`, the wire's word for the executor's own failure, with
 -- the message as the body, and the raise goes no further: the request is
 -- already off the disk, so one that escaped would leave its client waiting
@@ -910,8 +1040,6 @@ local function dispatch(req)
       return ok, why
     end
     return reply(req.id, "error", { { "stage", "bridge" } }, tostring(ok))
-  elseif req.headers.op == "eval" then
-    return reply(req.id, "unsupported", nil, "eval is declared and not yet served by this executor")
   end
   return reply(req.id, "bad-request", nil, "unknown op: " .. req.headers.op)
 end

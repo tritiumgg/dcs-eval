@@ -5,8 +5,10 @@
 //! It stands in for the executor's `tick` and `reply` in
 //! `DcsEvalExecutor.lua`: a session directory with `req` and `res` under a
 //! stamp, a tick that lists requests and answers them in name order, a
-//! reply with the seven headers the executor puts first, and the `ping`
-//! op. What it answers, it answers as the executor does, message for
+//! reply with the seven headers the executor puts first, the `ping` op,
+//! and `eval` as far as its checks go: no chunk runs here, and one that
+//! passes them is answered as one that returned nil. What it answers, it
+//! answers as the executor does, message for
 //! message, because a client that reads a refusal reads the executor's
 //! words. Whether those are the executor's bytes is not this module's
 //! claim: the interop and round-trip controls make it on the shipped Lua.
@@ -41,6 +43,9 @@ const PROTOCOL: &str = "2";
 
 /// A request over this is refused unopened, as the executor refuses it.
 const MAX_REQUEST_BYTES: u64 = 262_144;
+
+/// The most a `chunkname` may be, as the executor bounds it.
+const MAX_CHUNKNAME_BYTES: usize = 200;
 
 /// The `states` header a `ping` carries, per host: the states that host
 /// answers, in the order the executor declares them. Copied from what the
@@ -332,12 +337,86 @@ impl Standin {
         }
         Some(match op {
             "ping" => self.ping(),
-            "eval" => Answer::refusal(
-                "unsupported",
-                "eval is declared and not yet served by this executor".to_owned(),
-            ),
+            "eval" => self.eval(&headers),
             other => Answer::refusal("bad-request", format!("unknown op: {other}")),
         })
+    }
+
+    /// The `eval` op as far as the executor's own checks go, word for
+    /// word: a request must name its state, spelt as a name; a chunkname
+    /// over 200 bytes is refused and one absent is `=dcs-eval`; a state
+    /// this host does not declare is `unsupported`, and so is one whose
+    /// carrier is not built. Past the checks the stand-in runs nothing,
+    /// because there is no Lua here to run it, and answers every chunk as
+    /// the executor answers one that returned nil: `ok`, `result_type:
+    /// nil`, the chunkname it was compiled under, and an empty body. A
+    /// control that needs a value back is a control on the shipped Lua.
+    /// An install with eval disabled is not modelled: every stand-in has
+    /// it on, so the empty-body refusal above is unconditional here.
+    fn eval(&self, headers: &[(String, String)]) -> Answer {
+        let state = match header(headers, "state") {
+            Some(state) if !state.is_empty() => state,
+            _ => {
+                return Answer::refusal(
+                    "bad-request",
+                    "no state: the request does not name the state to run in".to_owned(),
+                );
+            }
+        };
+        let mut chars = state.chars();
+        let named = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !named {
+            return Answer::refusal(
+                "bad-request",
+                format!("state: {state} is not [A-Za-z][A-Za-z0-9_]*"),
+            );
+        }
+        let chunkname = match header(headers, "chunkname") {
+            Some(name) if !name.is_empty() => name,
+            _ => "=dcs-eval",
+        };
+        if chunkname.len() > MAX_CHUNKNAME_BYTES {
+            return Answer::refusal(
+                "bad-request",
+                format!(
+                    "chunkname: {} bytes, over the {MAX_CHUNKNAME_BYTES}-byte limit",
+                    chunkname.len()
+                ),
+            );
+        }
+        let states = if self.host == "export" {
+            EXPORT_STATES
+        } else {
+            HOOK_STATES
+        };
+        let looked_up = if state == "server" {
+            "scripting"
+        } else {
+            state
+        };
+        let carrier = states
+            .split(' ')
+            .find_map(|entry| entry.strip_prefix(&format!("{looked_up}:carrier=")))
+            .map(|rest| rest.split(',').next().unwrap_or(rest));
+        match carrier {
+            None => Answer::refusal(
+                "unsupported",
+                format!("{state} is not a state this host serves"),
+            ),
+            Some("local") => Answer {
+                status: "ok",
+                headers: vec![
+                    ("result_type", "nil".to_owned()),
+                    ("chunkname", chunkname.to_owned()),
+                ],
+                body: Vec::new(),
+            },
+            Some(_) => Answer::refusal(
+                "unsupported",
+                format!("{state} is declared and not yet served by this executor"),
+            ),
+        }
     }
 
     /// The `ping` op as the executor answers it: `ok`, the host's states,
@@ -598,6 +677,17 @@ mod tests {
         "last_callback",
         "callbacks",
     ];
+    const EVAL: [&str; 9] = [
+        "status",
+        "protocol",
+        "host",
+        "stamp",
+        "phase",
+        "id",
+        "tick",
+        "result_type",
+        "chunkname",
+    ];
 
     fn opened(b: &Sandbox, host: &str) -> Standin {
         Standin::open(&b.path, host).expect("the session opens")
@@ -790,16 +880,10 @@ mod tests {
     // ---- refusals, in the executor's words ----------------------------------
 
     #[test]
-    fn eval_is_unsupported_an_unknown_op_and_a_miscased_one_are_bad_requests() {
+    fn an_unknown_op_and_a_miscased_one_are_bad_requests() {
         let b = Sandbox::new();
         let mut s = opened(&b, "hook");
         let stamp = s.stamp.clone();
-        sent(
-            &s,
-            "0000000001-abcd",
-            &[("op", "eval"), ("for", &stamp)],
-            b"return 1",
-        );
         sent(
             &s,
             "0000000002-abcd",
@@ -812,16 +896,102 @@ mod tests {
             &[("op", "nope"), ("for", &stamp)],
             b"",
         );
-        assert_eq!(s.tick().len(), 3, "every one is answered");
-        refused(
-            &s,
-            "0000000001-abcd",
-            "unsupported",
-            "eval is declared and not yet served by this executor",
-        );
+        assert_eq!(s.tick().len(), 2, "every one is answered");
         refused(&s, "0000000002-abcd", "bad-request", "unknown op: Ping");
         refused(&s, "0000000003-abcd", "bad-request", "unknown op: nope");
         assert_eq!(entries(s.req()), "", "each request is taken");
+    }
+
+    #[test]
+    fn an_eval_is_answered_as_a_chunk_that_returned_nil_and_refused_as_the_executor_refuses() {
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        let stamp = s.stamp.clone();
+        let long = "@".to_owned() + &"x".repeat(200);
+        let cases: [(&str, &[(&str, &str)]); 8] = [
+            ("0000000001-abcd", &[("state", "hook")]),
+            (
+                "0000000002-abcd",
+                &[("state", "hook"), ("chunkname", "@x.lua")],
+            ),
+            ("0000000003-abcd", &[]),
+            ("0000000004-abcd", &[("state", "9x")]),
+            ("0000000005-abcd", &[("state", "nope")]),
+            ("0000000006-abcd", &[("state", "gui")]),
+            ("0000000007-abcd", &[("state", "server")]),
+            (
+                "0000000008-abcd",
+                &[("state", "hook"), ("chunkname", &long)],
+            ),
+        ];
+        for (id, extra) in cases {
+            let mut headers = vec![("op", "eval"), ("for", stamp.as_str())];
+            headers.extend_from_slice(extra);
+            sent(&s, id, &headers, b"return 1");
+        }
+        assert_eq!(s.tick().len(), 8, "every one is answered");
+        for (id, name) in [
+            ("0000000001-abcd", "=dcs-eval"),
+            ("0000000002-abcd", "@x.lua"),
+        ] {
+            let e = read(&s, id);
+            fields(&e, &EVAL, id);
+            assert_eq!(e.headers.get("status"), Some("ok"), "{id}");
+            assert_eq!(e.headers.get("result_type"), Some("nil"), "{id}");
+            assert_eq!(e.headers.get("chunkname"), Some(name), "{id}");
+            assert_eq!(e.body, b"", "{id}: the stand-in runs nothing");
+        }
+        refused(
+            &s,
+            "0000000003-abcd",
+            "bad-request",
+            "no state: the request does not name the state to run in",
+        );
+        refused(
+            &s,
+            "0000000004-abcd",
+            "bad-request",
+            "state: 9x is not [A-Za-z][A-Za-z0-9_]*",
+        );
+        refused(
+            &s,
+            "0000000005-abcd",
+            "unsupported",
+            "nope is not a state this host serves",
+        );
+        refused(
+            &s,
+            "0000000006-abcd",
+            "unsupported",
+            "gui is declared and not yet served by this executor",
+        );
+        refused(
+            &s,
+            "0000000007-abcd",
+            "unsupported",
+            "server is declared and not yet served by this executor",
+        );
+        refused(
+            &s,
+            "0000000008-abcd",
+            "bad-request",
+            "chunkname: 201 bytes, over the 200-byte limit",
+        );
+        let export = Sandbox::new();
+        let mut x = opened(&export, "export");
+        sent(
+            &x,
+            "0000000001-abcd",
+            &[("op", "eval"), ("for", &x.stamp.clone()), ("state", "hook")],
+            b"return 1",
+        );
+        x.tick();
+        refused(
+            &x,
+            "0000000001-abcd",
+            "unsupported",
+            "hook is not a state this host serves",
+        );
     }
 
     #[test]
