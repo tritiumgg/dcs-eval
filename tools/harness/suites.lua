@@ -14,4 +14,5 @@ return {
   "executor/ping",
   "executor/interop",
   "executor/e2e",
+  "executor/eval-hook",
 }
