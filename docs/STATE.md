@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T18 landed; T19 has not started.
+Nothing. T19 landed; T20 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,24 +25,23 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T19** — result conversion and the reply ceiling: `result: 553 checks`. `number` prints `%.14g`, widened to `%.17g` where it does not read back, `inf`/`-inf`/`nan` by name; `answer` refuses a body over `MAX_RESULT_BYTES`, returned or raised, as `stage: oversize` with `result_bytes`; five mutations seen red.
 - **T18** — the local eval carrier: `eval-hook: 602 checks`. `loadstring(body, chunkname)` with nothing prepended, `setfenv` into the host `_G`, `hook` and `export` served in place; a raise on line 47 reads `<name>:47:` under every spelling of `chunkname`; the prepend mutation reads 48.
 - **T17** — the round-trip control: `e2e: 1 check` under cargo, `e2e: 10 checks` under the harness.
   `crates/dcs-eval/src/e2e.rs` spawns `lua5.1.exe` on `tools/harness/executor/e2e.lua` over a box in `DCS_EVAL_E2E`, sends a `ping` through the client's `send` into the live tick and reads `pong` back; a CRLF in `frame` and a suite that stops ticking seen red, the second in 20 s, not a hang.
-- **T16** — the interop control: `interop: 4 checks` under cargo. `crates/dcs-eval/src/interop.rs`
-  spawns `lua5.1.exe` on `tools/harness/executor/interop.lua` over a box in `DCS_EVAL_INTEROP`; the handshake, a `ping` and an `eval` reply parse, the stand-in matches; the `frame` and empty-value mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T19** — result conversion and the reply ceiling: `describe_local`
-(scalars printed, `%.14g` widened to `%.17g` where 14 does not read back,
-`inf`/`-inf`/`nan` by name, tables and the rest by type only) and a result
-over `max_result_bytes` refused with `stage: oversize` and `result_bytes`,
-never cut. Done when `lua5.1 tools/harness.lua executor/result` prints its
-count; mutations: a table stringified with `tostring` reddens the type-only
-rule, a result cut instead of refused reddens the ceiling. Needs T18. Start
-from `described` in the executor, which T18 left at `tostring` for numbers.
+**Task T20** — the `net.dostring_in` carrier: a one-line wrapper carrying the
+body as a `%q` literal, compiled in the target state under `chunkname`, run
+under `pcall`, converted in-state, returned as a string; three answers kept
+apart: a string is the reply, `nil` is `refused`, `'Invalid state name'` is
+`invalid-state`. Done when `lua5.1 tools/harness.lua executor/dostring` prints
+its count and line 47 is true through the wrapper; mutation: `nil` read as an
+empty `ok` reddens it. Needs T19. Start from `OPS.eval`, where `row[2] ~= "local"`
+refuses today; `number`, `described` and the ceiling must travel in as source.
 
 **An agent verifies** it: the harness under `lua5.1.exe` on PATH under mise.
 
