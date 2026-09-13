@@ -921,6 +921,32 @@ local function state_row(host, name)
   return nil
 end
 
+-- Infinity, so a number can be compared against it without reading `math`
+-- from a state that may not carry it.
+local INF = 1 / 0
+
+-- A number printed so that a reader gets the same double back. `%.14g` is
+-- what `tostring` prints and reads well; where it does not read back as
+-- the number it was printed from, `%.17g` does, because seventeen
+-- significant digits identify every double, so `0.1 + 0.2` reads
+-- `0.30000000000000004` and never `0.3`. `inf`, `-inf` and `nan` are
+-- named, because what `%g` prints for them is the C runtime's, `-nan(ind)`
+-- on this host, and a consumer reads the three names back.
+local function number(n)
+  if n ~= n then
+    return "nan"
+  elseif n == INF then
+    return "inf"
+  elseif n == -INF then
+    return "-inf"
+  end
+  local printed = string.format("%.14g", n)
+  if tonumber(printed) ~= n then
+    printed = string.format("%.17g", n)
+  end
+  return printed
+end
+
 -- The body of an `error` reply for what a chunk raised with. A string is
 -- carried verbatim, which for `error("x")` begins `<chunkname>:<line>:`,
 -- and a number is printed. Anything else is named by its type and never
@@ -932,27 +958,60 @@ local function raised(value)
   if kind == "string" then
     return value
   elseif kind == "number" then
-    return tostring(value)
+    return number(value)
   end
   return "(error object is a " .. kind .. " value)"
 end
 
 -- The body of an `ok` reply for what a chunk returned, and its type. A
--- string is the bytes verbatim, a boolean its name, a number printed the
--- way `tostring` prints one, which is `%.14g`, and everything else, nil
--- included, an empty body with the type in the header: a table is never
--- serialised here, and a consumer that wants inside one ships a chunk that
--- does it in the state. Widening a number that `%.14g` does not read back,
--- naming `inf`, `-inf` and `nan`, and the ceiling on a body are not built,
--- so a number in a reply today is `tostring`'s and nothing more.
+-- string is the bytes verbatim, a boolean its name, a number printed as
+-- `number` prints one, and everything else, nil included, an empty body
+-- with the type in the header: a table is never serialised here, and a
+-- consumer that wants inside one ships a chunk that does it in the state.
+-- `tostring` is never called on the value, for the reason `raised` gives.
 local function described(value)
   local kind = type(value)
   if kind == "string" then
     return kind, value
-  elseif kind == "number" or kind == "boolean" then
-    return kind, tostring(value)
+  elseif kind == "number" then
+    return kind, number(value)
+  elseif kind == "boolean" then
+    return kind, value and "true" or "false"
   end
   return kind, ""
+end
+
+-- The reply to a chunk that finished, whether by returning or by raising,
+-- under one ceiling. A body over `MAX_RESULT_BYTES` is refused whole and
+-- never cut: a cut lands somewhere inside whatever the body is, and the
+-- reader cannot tell the loss from data. The refusal is `error` under
+-- `stage: oversize`, carries `result_bytes` so the caller can size its
+-- next request, and its body is the refusal and not one byte of the
+-- result. The ceiling holds for a raise as for a return, because a chunk
+-- builds a message as cheaply as a value, and the reply is what the
+-- ceiling in the handshake bounds. `ok` is what `pcall` answered about
+-- the chunk, `value` what it returned or raised with; only the first
+-- value a chunk returns is answered.
+local function answer(req, chunkname, ok, value)
+  local headers, body
+  if ok then
+    local kind
+    kind, body = described(value)
+    headers = { { "result_type", kind }, { "chunkname", chunkname } }
+  else
+    body = raised(value)
+    headers = { { "stage", "run" }, { "chunkname", chunkname } }
+  end
+  if #body > MAX_RESULT_BYTES then
+    local what = ok and "result" or "error message"
+    return reply(req.id, "error", {
+      { "stage", "oversize" },
+      { "chunkname", chunkname },
+      { "result_bytes", #body },
+    }, "the " .. what .. " is " .. #body .. " bytes, over the " .. MAX_RESULT_BYTES
+      .. "-byte ceiling, and was refused whole rather than cut")
+  end
+  return reply(req.id, ok and "ok" or "error", headers, body)
 end
 
 -- The carrier for the host's own state: the body compiled with the
@@ -965,8 +1024,8 @@ end
 -- namespace this file published and never a local of this file. A compile
 -- failure is `stage: compile` with Lua's message verbatim, a raise while
 -- running `stage: run`, and both carry `chunkname` beside the message, so a
--- reader knows what its line numbers are relative to. Only the first value
--- a chunk returns is answered.
+-- reader knows what its line numbers are relative to. What the chunk
+-- returned or raised with is `answer`'s to reply to.
 local function eval_local(req, chunkname)
   local loadstring, setfenv = rawget(_G, "loadstring"), rawget(_G, "setfenv")
   if type(loadstring) ~= "function" then
@@ -979,12 +1038,7 @@ local function eval_local(req, chunkname)
     return reply(req.id, "error", { { "stage", "compile" }, { "chunkname", chunkname } }, why)
   end
   setfenv(chunk, _G)
-  local ok, value = pcall(chunk)
-  if not ok then
-    return reply(req.id, "error", { { "stage", "run" }, { "chunkname", chunkname } }, raised(value))
-  end
-  local kind, body = described(value)
-  return reply(req.id, "ok", { { "result_type", kind }, { "chunkname", chunkname } }, body)
+  return answer(req, chunkname, pcall(chunk))
 end
 
 -- `eval` runs the body in the state the request names. An install with

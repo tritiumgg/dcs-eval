@@ -158,7 +158,7 @@ do
 
   _, v, body = eval(E, frame, "1-c", "state: hook\n", "return 0.1 + 0.2")
   t.eq(v.result_type, "number", "float: typed")
-  t.eq(body, "0.3", "float: printed as tostring prints one, %.14g")
+  t.eq(body, "0.30000000000000004", "float: printed so it reads back, which executor/result proves in full")
 
   _, v, body = eval(E, frame, "1-d", "state: hook\n", "return true")
   t.eq(v.result_type, "boolean", "boolean: typed")
