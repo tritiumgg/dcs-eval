@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-12
+**Last updated:** 2026-09-13
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T19 landed; T20 has not started.
+Nothing. T20 landed; T21 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,23 +25,22 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T20** — the `net.dostring_in` carrier: `dostring: 778 checks`. The body crosses as a `%q` literal in a wrapper compiled in-state under `chunkname`, run in that state's `_G`, converted there by one source string both carriers use (ADR 0003), answered as three fields; `nil` is `refused`, the literal `invalid-state`, an unshaped string `error`/`dostring_in`; line 47 true through the wrapper; six mutations seen red.
 - **T19** — result conversion and the reply ceiling: `result: 553 checks`. `number` prints `%.14g`, widened to `%.17g` where it does not read back, `inf`/`-inf`/`nan` by name; `answer` refuses a body over `MAX_RESULT_BYTES`, returned or raised, as `stage: oversize` with `result_bytes`; five mutations seen red.
-- **T18** — the local eval carrier: `eval-hook: 602 checks`. `loadstring(body, chunkname)` with nothing prepended, `setfenv` into the host `_G`, `hook` and `export` served in place; a raise on line 47 reads `<name>:47:` under every spelling of `chunkname`; the prepend mutation reads 48.
-- **T17** — the round-trip control: `e2e: 1 check` under cargo, `e2e: 10 checks` under the harness.
-  `crates/dcs-eval/src/e2e.rs` spawns `lua5.1.exe` on `tools/harness/executor/e2e.lua` over a box in `DCS_EVAL_E2E`, sends a `ping` through the client's `send` into the live tick and reads `pong` back; a CRLF in `frame` and a suite that stops ticking seen red, the second in 20 s, not a hang.
+- **T18** — the local eval carrier: `eval-hook: 583 checks`. `loadstring(body, chunkname)` with nothing prepended, `setfenv` into the host `_G`, `hook` and `export` served in place; a raise on line 47 reads `<name>:47:` under every spelling of `chunkname`; the prepend mutation reads 48.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T20** — the `net.dostring_in` carrier: a one-line wrapper carrying the
-body as a `%q` literal, compiled in the target state under `chunkname`, run
-under `pcall`, converted in-state, returned as a string; three answers kept
-apart: a string is the reply, `nil` is `refused`, `'Invalid state name'` is
-`invalid-state`. Done when `lua5.1 tools/harness.lua executor/dostring` prints
-its count and line 47 is true through the wrapper; mutation: `nil` read as an
-empty `ok` reddens it. Needs T19. Start from `OPS.eval`, where `row[2] ~= "local"`
-refuses today; `number`, `described` and the ceiling must travel in as source.
+**Task T21** — the `missionscripting` two-hop door: `a_do_script` from the
+`mission` state, its args as `%q` literals, the return-shift correction,
+string-only conversion, and a `door-shut` status with no mission loaded. Done
+when `lua5.1 tools/harness.lua executor/door` shows a value crossing as a
+string only, the slot-2 read, and `door-shut`; mutation: a table returned
+across the door reddens the string-only backstop. Needs T20. Start from
+`OPS.eval`, where `a_do_script` still answers "not yet served"; the far chunk
+is `wrapper` one hop further, `CONVERT` with it; the model lacks `a_do_script`.
 
 **An agent verifies** it: the harness under `lua5.1.exe` on PATH under mise.
 
@@ -64,23 +63,25 @@ entries at most: an eleventh means something here is finished, or belongs in
 
 - **Cutover — the incumbent goes before this executor installs.**
   `dcs-api-bridge`'s `DcsApiEval.lua` sits in the same `Scripts\Hooks\`; ADR
-  0002 is why this one is not a near-identical name. Two hooks on one
-  transport root is what T52 proves cannot happen.
+  0002 is why the names differ; T52 proves two hooks on one root cannot happen.
 - **Maintainer decision — when the MCP registration is swapped.** Claude Code
   still points at `dcs-api-bridge`; the swap strands any session mid-task, so
   it happens at Milestone C and not before. ADR 0001.
 - **The 0.098 ms dormant baseline is the incumbent's, on one machine.** T48
   compares against it; measured on DCS 2.9.28.26385, one session, so a figure
   that disagrees on other hardware is a new measurement, not a regression.
-- **Two gaps T06 left.** The hook guard's swallow path has no seam until a
-  raising stub sits on the frame path. Whether the export state survives
-  between missions is unmeasured; the load sentinel covers both, Stage 9 settles it.
+- **What only Stage 9 sees.** The hook guard's swallow path has no seam until
+  a raising stub sits on the frame path; whether the export state survives
+  between missions is unmeasured, and the load sentinel covers both. The
+  wrapper is proved under the suite's own carrier alone: what DCS does with
+  one that raises inside `net.dostring_in`, and whether every state has
+  `setfenv` and `_G`, is unmeasured; the model's stub still evaluates nothing.
 - **Declared before served, and absent before counted.** The handshake
   publishes `ops`, `states`, `eval` and the five figures from the first load,
   the two instruction figures provisional; the task that lands each reads its
-  constant. `eval` serves `hook` and `export` in place; the rest answer "not
-  yet served" until T20 and T21. A reply has no `cpu_ms` until T23 and no
-  `budget` until T24. No `state` is `bad-request`: the maintainer's call, 2026-09-11.
+  constant. `eval` serves every state but `missionscripting`, "not yet served"
+  until T21. No `cpu_ms` until T23, no `budget` until T24. No `state` is
+  `bad-request`: the maintainer's call, 2026-09-11.
 - **A path with a byte past ASCII stops the load.** Header values are ASCII,
   a user name past ASCII puts such a byte in every path the handshake names,
   and the executor refuses the file with the header named in `dcs.log`. The
@@ -88,11 +89,9 @@ entries at most: an eleventh means something here is finished, or belongs in
   refuses such a value as the executor does, the maintainer's call at T13;
   a spelling for such a path on the wire is the writer's side, unsettled.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is
-  proved with a file the suite keeps open; a client's directory handle from
-  `ReadDirectoryChangesW` is only seen at Stage 9, with the real client.
+  proved with a file the suite keeps open; a client's `ReadDirectoryChangesW` handle is Stage 9's.
 - **A wrong `for` is answered.** `admit` passes a wrong stamp through and the
   tick answers it; `executor/ping` pins that until the fence (T25) answers
   `stale-session`, and the round-trip's `superseded` mutation waits on it and on the client's wait (T31).
 - **`docs/PLAN.md`'s DR-1 and DR-2 stay the record** for one repository and
-  Windows as the target; a copy in `docs/decisions/` would be a second place
-  to keep in step.
+  Windows as the target; a copy in `docs/decisions/` is a second place to keep in step.
