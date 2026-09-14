@@ -921,17 +921,52 @@ local function state_row(host, name)
   return nil
 end
 
--- Infinity, so a number can be compared against it without reading `math`
--- from a state that may not carry it.
+-- What a chunk finished with, converted to the three fields a reply is
+-- built from, as Lua source. It is source and not functions because the
+-- same conversion runs in two places: here, for the host's own state, and
+-- inside every other state, where it travels in as part of the wrapper
+-- `net.dostring_in` carries, so that a value is converted where it lives
+-- and only a string ever crosses back. One copy of the source is what
+-- keeps the two from drifting apart; the price is that the language
+-- server does not check inside a string, so a slip in here is found by
+-- the harness and not by the lint. The host's own carrier compiles it
+-- the first time it answers, and never at load, because a load and a
+-- `ping` parse nothing as code; the wrapper embeds it as it is. Nothing
+-- in it reads a global the sanitised states lack: `string`, `tonumber`
+-- and `type` are in every state, and infinity is computed rather than
+-- read from `math`.
+--
+-- What the source says. A number is printed so that a reader gets the
+-- same double back: `%.14g` is what `tostring` prints and reads well;
+-- where it does not read back as the number it was printed from, `%.17g`
+-- does, because seventeen significant digits identify every double, so
+-- `0.1 + 0.2` reads `0.30000000000000004` and never `0.3`. `inf`, `-inf`
+-- and `nan` are named, because what `%g` prints for them is the C
+-- runtime's, `-nan(ind)` on this host, and a consumer reads the three
+-- names back. What a chunk raised with is carried verbatim where it is a
+-- string, which for `error("x")` begins `<chunkname>:<line>:`, printed
+-- where it is a number, and otherwise named by its type. What a chunk
+-- returned is the bytes verbatim for a string, its name for a boolean, a
+-- number as printed, and for everything else, nil included, an empty body
+-- with the type beside it: a table is never serialised, and a consumer
+-- that wants inside one ships a chunk that does it in the state.
+-- `tostring` is never called on a value from a state, because it would
+-- run a `__tostring` the chunk installed, and the executor runs nothing
+-- of a chunk's but the chunk.
+--
+-- The function the source returns takes what `pcall` answered about the
+-- chunk, what the chunk returned or raised with, and the ceiling, and
+-- answers a status, a detail and a body: `ok` with the type and the
+-- printed value; `run` with the message; or `oversize`, with what was
+-- too big and its length, when the body would be over the ceiling. A
+-- body over the ceiling is refused whole and never cut, because a cut
+-- lands somewhere inside whatever the body is and the reader cannot tell
+-- the loss from data. The ceiling holds for a raise as for a return,
+-- because a chunk builds a message as cheaply as a value, and the reply
+-- is what the ceiling in the handshake bounds. Only the first value a
+-- chunk returns is answered.
+local CONVERT = [==[
 local INF = 1 / 0
-
--- A number printed so that a reader gets the same double back. `%.14g` is
--- what `tostring` prints and reads well; where it does not read back as
--- the number it was printed from, `%.17g` does, because seventeen
--- significant digits identify every double, so `0.1 + 0.2` reads
--- `0.30000000000000004` and never `0.3`. `inf`, `-inf` and `nan` are
--- named, because what `%g` prints for them is the C runtime's, `-nan(ind)`
--- on this host, and a consumer reads the three names back.
 local function number(n)
   if n ~= n then
     return "nan"
@@ -946,13 +981,6 @@ local function number(n)
   end
   return printed
 end
-
--- The body of an `error` reply for what a chunk raised with. A string is
--- carried verbatim, which for `error("x")` begins `<chunkname>:<line>:`,
--- and a number is printed. Anything else is named by its type and never
--- stringified: `tostring` on a value from a state would run a
--- `__tostring` the chunk installed, and the executor runs nothing of a
--- chunk's but the chunk.
 local function raised(value)
   local kind = type(value)
   if kind == "string" then
@@ -962,13 +990,6 @@ local function raised(value)
   end
   return "(error object is a " .. kind .. " value)"
 end
-
--- The body of an `ok` reply for what a chunk returned, and its type. A
--- string is the bytes verbatim, a boolean its name, a number printed as
--- `number` prints one, and everything else, nil included, an empty body
--- with the type in the header: a table is never serialised here, and a
--- consumer that wants inside one ships a chunk that does it in the state.
--- `tostring` is never called on the value, for the reason `raised` gives.
 local function described(value)
   local kind = type(value)
   if kind == "string" then
@@ -980,38 +1001,47 @@ local function described(value)
   end
   return kind, ""
 end
-
--- The reply to a chunk that finished, whether by returning or by raising,
--- under one ceiling. A body over `MAX_RESULT_BYTES` is refused whole and
--- never cut: a cut lands somewhere inside whatever the body is, and the
--- reader cannot tell the loss from data. The refusal is `error` under
--- `stage: oversize`, carries `result_bytes` so the caller can size its
--- next request, and its body is the refusal and not one byte of the
--- result. The ceiling holds for a raise as for a return, because a chunk
--- builds a message as cheaply as a value, and the reply is what the
--- ceiling in the handshake bounds. `ok` is what `pcall` answered about
--- the chunk, `value` what it returned or raised with; only the first
--- value a chunk returns is answered.
-local function answer(req, chunkname, ok, value)
-  local headers, body
+return function(ok, value, ceiling)
+  local status, detail, body
   if ok then
-    local kind
-    kind, body = described(value)
-    headers = { { "result_type", kind }, { "chunkname", chunkname } }
+    status, detail, body = "ok", described(value)
   else
-    body = raised(value)
-    headers = { { "stage", "run" }, { "chunkname", chunkname } }
+    status, detail, body = "run", "", raised(value)
   end
-  if #body > MAX_RESULT_BYTES then
-    local what = ok and "result" or "error message"
+  if #body > ceiling then
+    return "oversize", ok and "result" or "error message", string.format("%d", #body)
+  end
+  return status, detail, body
+end
+]==]
+
+-- The function `CONVERT` returns, compiled by the host's own carrier when
+-- it first answers.
+local finish
+
+-- The reply to a chunk from the three fields the carrier answered with,
+-- which for the host's own state are `finish`'s and for every other
+-- state are what the wrapper sent back. `ok` carries the type and the
+-- value; `oversize` is `error` with `result_bytes`, so the caller can
+-- size its next request, and a body that is the refusal and not one byte
+-- of the result; `unsupported` is a state that could not compile at all;
+-- and any other status is `error` under that stage with the message as
+-- the body. `chunkname` rides every reply to a chunk that was compiled,
+-- so a reader knows what its line numbers are relative to.
+local function answer(req, chunkname, status, detail, body)
+  if status == "ok" then
+    return reply(req.id, "ok", { { "result_type", detail }, { "chunkname", chunkname } }, body)
+  elseif status == "oversize" then
     return reply(req.id, "error", {
       { "stage", "oversize" },
       { "chunkname", chunkname },
-      { "result_bytes", #body },
-    }, "the " .. what .. " is " .. #body .. " bytes, over the " .. MAX_RESULT_BYTES
+      { "result_bytes", body },
+    }, "the " .. detail .. " is " .. body .. " bytes, over the " .. MAX_RESULT_BYTES
       .. "-byte ceiling, and was refused whole rather than cut")
+  elseif status == "unsupported" then
+    return reply(req.id, "unsupported", nil, body)
   end
-  return reply(req.id, ok and "ok" or "error", headers, body)
+  return reply(req.id, "error", { { "stage", status }, { "chunkname", chunkname } }, body)
 end
 
 -- The carrier for the host's own state: the body compiled with the
@@ -1037,8 +1067,137 @@ local function eval_local(req, chunkname)
   if not chunk then
     return reply(req.id, "error", { { "stage", "compile" }, { "chunkname", chunkname } }, why)
   end
+  if not finish then
+    local convert, reason = loadstring(CONVERT, "=" .. NAME .. ".convert")
+    if not convert then
+      error("the conversion source did not compile: " .. reason, 0)
+    end
+    finish = convert()
+  end
   setfenv(chunk, _G)
-  return answer(req, chunkname, pcall(chunk))
+  local ok, value = pcall(chunk)
+  return answer(req, chunkname, finish(ok, value, MAX_RESULT_BYTES))
+end
+
+-- The wrapper `net.dostring_in` carries into another state, in two parts
+-- around the two literals a request supplies. The body is never
+-- concatenated into code that is compiled: it travels as a `%q` literal,
+-- which Lua 5.1.5 renders so that it decodes byte for byte (a newline as
+-- a backslash and a newline, `\0` as `\000`, `\r`, `"` and `\` escaped),
+-- and the wrapper compiles it in the target state with `loadstring`
+-- under the request's `chunkname`, so the chunk the body becomes is its
+-- own chunk whose line 1 is the body's line 1 and `<name>:47` is the
+-- caller's line 47 there as it is here. The chunk is run in the target
+-- state's globals, which is what the bare body would have had, and what
+-- it finished with is converted in that state by the conversion source
+-- above, so nothing but a string crosses back.
+--
+-- The string that crosses is three fields: a status, a detail and the
+-- body, the first two on a line each and the body the rest, so a body
+-- of any bytes and any length is carried whole. The status is the
+-- conversion's `ok`, `run` or `oversize`; `compile` where `loadstring`
+-- refused the body, with Lua's message; `unsupported` where the state has
+-- no `loadstring` or no `setfenv`, the refusal the local carrier makes
+-- for the same lack; and `bridge` where the wrapper itself raised, which
+-- is the executor's own failure and named as such. The whole wrapper
+-- runs under `pcall`, because what `net.dostring_in` does with a chunk
+-- that raises is not measured, and a raise that reached it would be one
+-- this executor could not answer. ADR 0003 holds the argument for the
+-- three fields. The instruction count hook that will bound a chunk is
+-- not set here yet; the task that builds it adds it to this wrapper and
+-- to the local carrier together.
+local WRAP_HEAD = "return (function() local wrapped, answered = pcall(function() "
+  .. "local finish = (function() " .. CONVERT .. " end)() "
+  .. 'local loadstring, setfenv = rawget(_G, "loadstring"), rawget(_G, "setfenv") '
+  .. 'if type(loadstring) ~= "function" then return "unsupported\\n\\nno loadstring in this state" end '
+  .. 'if type(setfenv) ~= "function" then return "unsupported\\n\\nno setfenv in this state" end '
+  .. "local chunk, why = loadstring("
+local WRAP_TAIL = ") "
+  .. 'if not chunk then return "compile\\n\\n" .. why end '
+  .. "setfenv(chunk, _G) "
+  .. "local ok, value = pcall(chunk) "
+  .. "local status, detail, body = finish(ok, value, " .. MAX_RESULT_BYTES .. ") "
+  .. 'return status .. "\\n" .. detail .. "\\n" .. body end) '
+  .. "if wrapped then return answered end "
+  .. 'return "bridge\\n\\n" .. (type(answered) == "string" and answered or type(answered)) end)()'
+
+local function wrapper(body, chunkname)
+  return WRAP_HEAD .. string.format("%q", body) .. ", " .. string.format("%q", chunkname) .. WRAP_TAIL
+end
+
+-- The statuses a wrapper sends back, so that a string in the three-field
+-- shape by accident is not read as one.
+local WRAPPER_STATUS = {
+  ok = true,
+  run = true,
+  oversize = true,
+  compile = true,
+  unsupported = true,
+  bridge = true,
+}
+
+-- The three fields out of what a wrapper sent back, or nil where the
+-- string is not in the wrapper's shape.
+local function decode(answered)
+  local first = answered:find("\n", 1, true)
+  if not first then
+    return nil
+  end
+  local second = answered:find("\n", first + 1, true)
+  if not second then
+    return nil
+  end
+  local status = answered:sub(1, first - 1)
+  if not WRAPPER_STATUS[status] then
+    return nil
+  end
+  return status, answered:sub(first + 1, second - 1), answered:sub(second + 1)
+end
+
+-- The carrier for the states `net.dostring_in` reaches from the hook
+-- host. Its three answers are kept apart on the wire, because a reader
+-- that sniffs for one reads a refusal as a success. A string is what the
+-- wrapper sent back, decoded and answered as the local carrier's is. `nil`
+-- is `refused`: this role may not reach the state, the name is not one
+-- this DCS knows, or the operator's policy gate refused it, and the
+-- executor cannot tell which; the gate is a live runtime condition and
+-- never a defect to fix by writing a configuration file. The literal
+-- `Invalid state name` is `invalid-state`: a state DCS knows and cannot
+-- reach in this phase, as `export` at the menu. A string not in the
+-- wrapper's shape is the state answering with something other than the
+-- wrapper's reply, and any other value is a carrier answering with
+-- something other than a string; both are `error` under `stage:
+-- dostring_in`, the string carried as the body under the ceiling, the
+-- value named by its type and never stringified. `net` is read at the
+-- call, not at load, because the executor holds nothing of the host's
+-- but what it read for this request. The state is passed as the request
+-- spelt it: `server` is a name DCS answers to, and a caller who said it
+-- reaches what it named.
+local function eval_dostring(req, chunkname, state)
+  local net = rawget(_G, "net")
+  local dostring_in = type(net) == "table" and rawget(net, "dostring_in")
+  if type(dostring_in) ~= "function" then
+    return reply(req.id, "unsupported", nil, "no net.dostring_in on this host")
+  end
+  local answered = dostring_in(state, wrapper(req.body, chunkname))
+  if answered == nil then
+    return reply(req.id, "refused", nil, "net.dostring_in returned nil for " .. state
+      .. ": this role may not reach it, the name is not one this DCS knows, or the operator's policy gate refused it")
+  elseif answered == "Invalid state name" then
+    return reply(req.id, "invalid-state", nil, "net.dostring_in answered 'Invalid state name' for " .. state
+      .. ": DCS knows the state and cannot reach it in this phase")
+  elseif type(answered) ~= "string" then
+    return reply(req.id, "error", { { "stage", "dostring_in" }, { "chunkname", chunkname } },
+      "net.dostring_in answered a " .. type(answered) .. " value for " .. state .. ", and the executor reads a string alone")
+  end
+  local status, detail, body = decode(answered)
+  if not status then
+    status, detail, body = "dostring_in", "", answered
+    if #body > MAX_RESULT_BYTES then
+      status, detail, body = "oversize", "answer", string.format("%d", #body)
+    end
+  end
+  return answer(req, chunkname, status, detail, body)
 end
 
 -- `eval` runs the body in the state the request names. An install with
@@ -1048,9 +1207,9 @@ end
 -- one thing this op must never do, so one without is refused as one
 -- without `for` is. A state this host does not declare is `unsupported`,
 -- the wire's word for a thing this install does not do, and so is one
--- declared with a carrier that is not yet built: `net.dostring_in` and the
--- mission door serve nothing yet. `chunkname` is echoed only where a chunk
--- was compiled under it; a refusal compiled nothing and carries none.
+-- declared with a carrier that is not yet built: the mission door serves
+-- nothing yet. `chunkname` is echoed only where a chunk was compiled
+-- under it; a refusal compiled nothing and carries none.
 function OPS.eval(req)
   if not ALLOW_EVAL then
     return reply(req.id, "unsupported", nil, "eval is disabled in this install")
@@ -1071,10 +1230,12 @@ function OPS.eval(req)
   local row = state_row(E.host, state)
   if not row then
     return reply(req.id, "unsupported", nil, state .. " is not a state this host serves")
-  elseif row[2] ~= "local" then
-    return reply(req.id, "unsupported", nil, state .. " is declared and not yet served by this executor")
+  elseif row[2] == "local" then
+    return eval_local(req, chunkname)
+  elseif row[2] == "dostring_in" then
+    return eval_dostring(req, chunkname, state)
   end
-  return eval_local(req, chunkname)
+  return reply(req.id, "unsupported", nil, state .. " is declared and not yet served by this executor")
 end
 
 -- One admitted request to its reply. A name the table lacks is
