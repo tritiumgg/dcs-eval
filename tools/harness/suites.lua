@@ -16,4 +16,5 @@ return {
   "executor/e2e",
   "executor/eval-hook",
   "executor/result",
+  "executor/dostring",
 }
