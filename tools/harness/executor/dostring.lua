@@ -31,8 +31,8 @@
 -- included. The ceiling is applied in the state, so what crosses back for
 -- an oversize result is the refusal and not the result. `server` reaches
 -- the carrier under its own name. A host without `net.dostring_in` is
--- `unsupported`, the door is still not served, and the export host
--- refuses every state but its own.
+-- `unsupported`, and the export host refuses every state but its own.
+-- The mission door is `executor/door`'s.
 --
 -- The mutations this suite exists to catch. Read a `nil` answer as an
 -- empty `ok` and the three-answers checks read `ok` for `refused`. Read
@@ -516,17 +516,10 @@ do
   local seen = {}
   carrier(env, { gui = t.state("gui", host) }, seen)
 
-  local _
-  local order, v, body = eval(E, frame, "7-a", "state: missionscripting\n", "return 1")
-  fields(order, HEAD, "door")
-  t.eq(v.status, "unsupported", "door: the door is still not built")
-  t.eq(body, "missionscripting is declared and not yet served by this executor", "door: saying so")
-  t.eq(#seen, 0, "door: and the carrier was not asked")
-
   local without = t.state("gui", host)
   without.loadstring = nil
   carrier(env, { gui = without }, seen)
-  order, v, body = eval(E, frame, "7-b", "state: gui\n", "return 1")
+  local order, v, body = eval(E, frame, "7-b", "state: gui\n", "return 1")
   fields(order, HEAD, "no loadstring")
   t.eq(v.status, "unsupported", "no loadstring: a state without one cannot compile")
   t.eq(body, "no loadstring in this state", "no loadstring: saying so, from inside the state")
