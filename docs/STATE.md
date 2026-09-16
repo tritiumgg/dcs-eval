@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T21 landed; T22 has not started.
+Nothing. T22 landed; T23 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,21 +25,20 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T22** — the `a_do_script` shift fixture: `a_do_script-shift: 118 checks`. The suite's own `a_do_script` is held to the incumbent's measured table by `select("#")` (nothing-returned left unpinned), then a lone value crosses through `FAR`'s `0` and is lost without it, refused `stage: a_do_script`; four mutations seen red.
 - **T21** — `missionscripting` through `a_do_script`: `a_do_script: 706 checks`. `net.dostring_in` carries `NEAR` into `mission` with the body and `chunkname` as `%q` literals; `NEAR` reads `a_do_script` at use (`no-mission` without one) and passes them to the constant `FAR`, the wrapper reading them from `...` and ending `, 0`; slot 2 is read, a non-string there refused `stage: a_do_script` naming both slots; names from ADR 0004; every reply carries `carrier`/`via`; eight mutations seen red.
 - **T20** — the `net.dostring_in` carrier: `dostring: 778 checks`. The body crosses as a `%q` literal in a wrapper compiled in-state under `chunkname`, run in that state's `_G`, converted there by one source string both carriers use (ADR 0003), answered as three fields; `nil` is `refused`, the literal `invalid-state`, an unshaped string `error`/`dostring_in`; line 47 true through the wrapper; six mutations seen red.
-- **T19** — result conversion and the reply ceiling: `result: 553 checks`. `number` prints `%.14g`, widened to `%.17g` where it does not read back, `inf`/`-inf`/`nan` by name; `answer` refuses a body over `MAX_RESULT_BYTES`, returned or raised, as `stage: oversize` with `result_bytes`; five mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T22** — the `a_do_script` off-by-one fixture under reference `lua5.1`.
-Done when `lua5.1 tools/harness.lua executor/a_do_script-shift` exercises
-the shift and asserts the correction; mutation: removing the correction
-reddens it, a lone value dropped. Needs T21. The correction is `FAR`'s
-trailing `, 0` and `NEAR`'s slot-2 read; `executor/a_do_script`'s
-`shifting()` models the shift and reddens on that mutation, so this suite
-isolates the fixture the incumbent kept in `dcs-api/tools/probes/tabledepth_test.lua`.
+**Task T23** — the per-tick CPU budget between requests, and `cpu_ms`/`tick`
+on every reply. Done when `lua5.1 tools/harness.lua executor/tick-budget`
+shows new requests stopped past `TICK_BUDGET_MS` and W-deep replies answered
+in id order sharing a tick; mutation: a reply missing `cpu_ms` reddens the
+presence check. Needs T19. Opens Stage 4; the handshake already publishes the
+figure (carry-forward "Declared before served").
 
 **An agent verifies** it: the harness under `lua5.1.exe` on PATH under mise.
 
@@ -47,9 +46,9 @@ isolates the fixture the incumbent kept in `dcs-api/tools/probes/tabledepth_test
 
 - **Stages 0 to 2 are closed, and Milestone A with them:** the wire proven off
   DCS, the stand-in, the interop and round-trip controls. T17 closed it.
-- **Stage 3 (T18–T22) is eval and line-truth**, Milestone B: the one op that
-  runs anything, across the four carriers, with `<file>:47` true in every
-  state. T18, T20 and T21 built them; T22 closes the stage.
+- **Stage 3 is closed:** eval across the carriers with `<file>:47` true in
+  every state, and the `a_do_script` shift reproduced. Milestone B still
+  needs Stages 4 to 6 and their mutation sweep.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
   Everything provable off DCS is proved before it.
 
