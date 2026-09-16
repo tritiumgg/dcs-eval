@@ -4,7 +4,9 @@
 -- libraries the census read in each, and nothing else: one check per cell
 -- of the table below, present or absent. `net.dostring_in` answers empty
 -- and evaluates nothing, because a stub that evaluated would pass a chunk
--- the real state refuses. And every name `types/dcs.lua` declares is
+-- the real state refuses; `a_do_script` is in `mission` with a
+-- mission loaded alone, and evaluates nothing for the
+-- same reason. And every name `types/dcs.lua` declares is
 -- modelled somewhere, so the definitions the language server checks the
 -- executor against and the host the harness runs it in cannot drift apart
 -- without this suite going red.
@@ -43,8 +45,8 @@ for _, row in ipairs(SURFACE) do
   end
 end
 
--- The host tables: `DCS` in the hook state alone, `log` where the door
--- writes its markers, and neither in `export`.
+-- The host tables: `DCS` in the hook state alone, `log` in `mission`,
+-- where `a_do_script`'s markers go, and neither in `export`.
 local host = {}
 local hook = t.state("hook", host)
 local export = t.state("export", host)
@@ -183,7 +185,7 @@ t.raises(function()
   return hook.DCS.getPuase()
 end, "hook%.DCS%.getPuase is not modelled", "a misspelt DCS read raises")
 hook.log.write("EXECUTOR", hook.log.ERROR, "could not register")
-mission.log.write("DOOR", mission.log.INFO, "marker")
+mission.log.write("A_DO_SCRIPT", mission.log.INFO, "marker")
 t.eq(#host.log, 2, "log.write appends to the host")
 t.eq(host.log[1].message, "could not register", "with the message")
 t.eq(host.log[2].state, "mission", "and the state it was written from")
@@ -194,16 +196,42 @@ hook.DcsEvalExecutor = { version = 1 }
 t.eq(hook.DcsEvalExecutor.version, 1, "a global the executor defines reads back")
 t.eq(hook._G, hook, "_G is the model itself")
 
--- Every `table.member` the type definitions declare is modelled in at least
--- one state. Bare globals (the door's `a_do_script`) are modelled by the
--- task that builds the door, and are not looked for here.
+-- `a_do_script` is a global of `mission` with a mission
+-- loaded, and of nothing else. It evaluates nothing: a stub that ran the
+-- chunk would answer "2" for the first call here.
+t.eq(rawget(mission, "a_do_script"), nil, "mission has no a_do_script with no mission loaded")
+t.raises(function()
+  return mission.a_do_script
+end, "mission%.a_do_script is not modelled", "and reading one raises, naming itself")
+local loaded = { mission_loaded = true }
+local a_do_script = t.state("mission", loaded).a_do_script
+t.eq(type(a_do_script), "function", "mission has a_do_script with a mission loaded")
+t.eq(select("#", a_do_script("return 1 + 1, 0")), 0, "a_do_script evaluates nothing and answers nothing")
+t.eq(rawget(t.state("hook", loaded), "a_do_script"), nil, "the hook state has no a_do_script, loaded or not")
+t.eq(rawget(t.state("missionscripting", loaded), "a_do_script"), nil, "nor the state beyond it")
+
+-- Every `table.member` and every bare global the type definitions declare
+-- is modelled in at least one state, `a_do_script` among them with a
+-- mission loaded.
 local defs = assert(io.open(t.root .. "/types/dcs.lua", "rb"))
 local source = defs:read("*a")
 defs:close()
 local models = {}
 for _, row in ipairs(SURFACE) do
-  models[#models + 1] = t.state(row[1], {})
+  models[#models + 1] = t.state(row[1], loaded)
 end
+local globals = 0
+for name in source:gmatch("\nfunction ([%w_]+)%(") do
+  globals = globals + 1
+  local found = false
+  for _, env in ipairs(models) do
+    if rawget(env, name) ~= nil then
+      found = true
+    end
+  end
+  t.check(found, name .. " is declared in types/dcs.lua and no state models it")
+end
+t.check(globals > 0, "the type definitions' bare globals were read: " .. globals .. " declared")
 local declared = 0
 for tbl, member in source:gmatch("\nfunction ([%w_]+)%.([%w_]+)%(") do
   declared = declared + 1
