@@ -9,6 +9,11 @@ uninstalled before this is installed (ADR 0001).
 mean the same thing; ADR 0002 says why the build uses its own word. Nothing
 outside `docs/specs/` says "bridge" except the filename `bridge.md`.
 
+**`missionscripting` is reached through `a_do_script`, and the build does not
+call it "the door".** The specifications do, on the wire too; the build's
+status is `no-mission` and its stage `a_do_script` (ADR 0004). Nothing is
+named for the door; a quotation of the specifications keeps the word.
+
 ## Layout
 
 ```
