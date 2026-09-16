@@ -17,4 +17,5 @@ return {
   "executor/eval-hook",
   "executor/result",
   "executor/dostring",
+  "executor/a_do_script",
 }
