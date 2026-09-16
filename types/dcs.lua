@@ -184,10 +184,13 @@ function DCS.exportToMiz(path) end
 --------------------------------------------------------------------------------
 
 --- Run a chunk in the mission scripting environment, from the `mission` state.
---- One hop of the two the door takes; only callable with a mission loaded.
+--- One hop of the two the door takes; nil with no mission loaded. The
+--- arguments after `code` reach the chunk as `...`, and what the chunk
+--- returns comes back shifted by one: `v1 … vN` as `nil, v1 … v(N-1)`.
 ---@param code string
----@return any
-function a_do_script(code) end
+---@param ... any
+---@return any ...
+function a_do_script(code, ...) end
 
 --------------------------------------------------------------------------------
 -- The running build

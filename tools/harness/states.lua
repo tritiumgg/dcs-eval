@@ -12,7 +12,9 @@
 -- `net.dostring_in` never evaluates. It answers `''` for a state DCS would
 -- accept and `'Invalid state name'` for any other, because the reference
 -- interpreter has one state, and a stub that ran the chunk here would turn a
--- probe that fails in DCS into one that passes under the harness.
+-- probe that fails in DCS into one that passes under the harness. The
+-- mission door, `a_do_script`, evaluates nothing for the same reason, and
+-- is there only in a `mission` built with a mission loaded.
 --
 -- `lfs` is not in stock Lua, so it is modelled over the interpreter's own
 -- `io` and `os` against the real filesystem: the executor writes files with
@@ -382,6 +384,16 @@ function MAKE.log(state, host, t)
   })
 end
 
+-- The mission door, `a_do_script`: a global of `mission` that DCS defines
+-- only with a mission loaded, so a `mission` built while `host.mission_loaded`
+-- holds carries it and one built without does not, and a suite that
+-- unloads a mission clears the global as DCS does. Like `net.dostring_in`
+-- it evaluates nothing and answers nothing, because there is no
+-- `missionscripting` under the reference interpreter for it to run in; a
+-- suite that needs the far side installs its own.
+local function a_do_script(_)
+end
+
 --------------------------------------------------------------------------------
 
 -- Build one state's globals. Every call is a fresh model: two suites, or two
@@ -397,6 +409,9 @@ return function(t, name, host)
   end
   for _, k in ipairs(surface) do
     g[k] = MAKE[k](name, host, t)
+  end
+  if name == "mission" and host.mission_loaded then
+    g.a_do_script = a_do_script
   end
   local model = t.strict(name, g)
   model._G = model
