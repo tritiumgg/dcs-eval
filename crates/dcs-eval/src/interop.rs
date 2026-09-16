@@ -23,8 +23,8 @@
 //! handshake's body, the ping's `last_callback` and `callbacks`, and the
 //! body of the `eval`, whose chunk returns nil; the parser must read each
 //! as empty, not as absent. The `eval` runs in `hook`, the one state the
-//! executor serves in place; the states behind `net.dostring_in` and the
-//! mission door are answered "not yet served" until their carriers exist.
+//! executor serves in place; the states behind `net.dostring_in` and
+//! `a_do_script` are proved by their own harness suites.
 //!
 //! A user name with a byte past ASCII puts that byte in every path the
 //! handshake names, and the executor refuses its own handshake: this test

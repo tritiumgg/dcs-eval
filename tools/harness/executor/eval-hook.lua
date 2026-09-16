@@ -19,12 +19,12 @@
 -- chunk raises with is the body: a string verbatim, a number printed, any
 -- other value named by type. A request that names no state, a state that
 -- is not a name, or a chunkname over the limit is `bad-request`; a state
--- no host serves, one declared with a carrier not yet built, and a state
--- with no `loadstring` are `unsupported`; every refusal carries the seven
--- headers and no `chunkname`. The states `net.dostring_in` reaches are
--- `executor/dostring`'s. A copy with `ALLOW_EVAL` off publishes `eval: disabled`
--- and `ops: ping` and answers every `eval` `unsupported`, an empty one
--- included. The export host serves `export` the same way and refuses
+-- no host serves and a state with no `loadstring` are `unsupported`;
+-- every refusal carries the seven headers and no `chunkname`. The states
+-- `net.dostring_in` reaches are `executor/dostring`'s, and
+-- `missionscripting` is `executor/a_do_script`'s. A copy with `ALLOW_EVAL`
+-- off publishes `eval: disabled` and `ops: ping` and answers every `eval`
+-- `unsupported`, an empty one included. The export host serves `export` the same way and refuses
 -- `hook`.
 --
 -- The mutations this suite exists to catch. Prepend one line to the body
@@ -312,11 +312,6 @@ do
   fields(order, HEAD, "unknown")
   t.eq(v.status, "unsupported", "unknown: a state this host does not declare is unsupported")
   t.eq(body, "nope is not a state this host serves", "unknown: naming it")
-
-  order, v, body = eval(E, frame, "5-e", "state: missionscripting\n", "return 1")
-  fields(order, HEAD, "door")
-  t.eq(v.status, "unsupported", "door: a carrier not yet built is unsupported")
-  t.eq(body, "missionscripting is declared and not yet served by this executor", "door: saying so")
 
   local long = "@" .. string.rep("y", 200)
   order, v, body = eval(E, frame, "5-h", "state: hook\nchunkname: " .. long .. "\n", "return 1")

@@ -61,9 +61,9 @@ local MAX_CHUNKNAME_BYTES = 200
 -- comes back as any Lua value or as a string, and what has to be true of
 -- the simulator first. The hook host reaches its own state directly, five
 -- more through `net.dostring_in`, which answers a string, and
--- `missionscripting` through the mission state's door, which answers a
--- string too. The export host has no `net` and answers its own state
--- alone. `server` is a second name for `scripting` and is not listed
+-- `missionscripting` through `a_do_script` in the mission state, which
+-- answers a string too. The export host has no `net` and answers its own
+-- state alone. `server` is a second name for `scripting` and is not listed
 -- twice. Declared before the carriers are built, for the reason the
 -- figures above are.
 local STATES = {
@@ -1019,6 +1019,21 @@ end
 -- it first answers.
 local finish
 
+-- `headers` with `tail` after it, either of which may be nil.
+local function joined(headers, tail)
+  if not tail then
+    return headers
+  end
+  local all = {}
+  for _, header in ipairs(headers or {}) do
+    all[#all + 1] = header
+  end
+  for _, header in ipairs(tail) do
+    all[#all + 1] = header
+  end
+  return all
+end
+
 -- The reply to a chunk from the three fields the carrier answered with,
 -- which for the host's own state are `finish`'s and for every other
 -- state are what the wrapper sent back. `ok` carries the type and the
@@ -1026,22 +1041,25 @@ local finish
 -- size its next request, and a body that is the refusal and not one byte
 -- of the result; `unsupported` is a state that could not compile at all;
 -- and any other status is `error` under that stage with the message as
--- the body. `chunkname` rides every reply to a chunk that was compiled,
--- so a reader knows what its line numbers are relative to.
-local function answer(req, chunkname, status, detail, body)
+-- the body. `no-mission` is `a_do_script` finding no mission, a status
+-- of its own so a caller can branch on it. `chunkname` rides every reply
+-- to a chunk that was compiled, so a reader knows what its line numbers
+-- are relative to. `tail` is the headers a carrier adds to every reply it
+-- answers, after the rest.
+local function answer(req, chunkname, status, detail, body, tail)
   if status == "ok" then
-    return reply(req.id, "ok", { { "result_type", detail }, { "chunkname", chunkname } }, body)
+    return reply(req.id, "ok", joined({ { "result_type", detail }, { "chunkname", chunkname } }, tail), body)
   elseif status == "oversize" then
-    return reply(req.id, "error", {
+    return reply(req.id, "error", joined({
       { "stage", "oversize" },
       { "chunkname", chunkname },
       { "result_bytes", body },
-    }, "the " .. detail .. " is " .. body .. " bytes, over the " .. MAX_RESULT_BYTES
+    }, tail), "the " .. detail .. " is " .. body .. " bytes, over the " .. MAX_RESULT_BYTES
       .. "-byte ceiling, and was refused whole rather than cut")
-  elseif status == "unsupported" then
-    return reply(req.id, "unsupported", nil, body)
+  elseif status == "unsupported" or status == "no-mission" then
+    return reply(req.id, status, joined(nil, tail), body)
   end
-  return reply(req.id, "error", { { "stage", status }, { "chunkname", chunkname } }, body)
+  return reply(req.id, "error", joined({ { "stage", status }, { "chunkname", chunkname } }, tail), body)
 end
 
 -- The carrier for the host's own state: the body compiled with the
@@ -1125,8 +1143,74 @@ local function wrapper(body, chunkname)
   return WRAP_HEAD .. string.format("%q", body) .. ", " .. string.format("%q", chunkname) .. WRAP_TAIL
 end
 
+-- The `a_do_script` carrier: the one way into `missionscripting`, which
+-- `net.dostring_in` reaches under no name. It takes two hops. The first
+-- is `net.dostring_in` into `mission`, carrying `NEAR`; the second is
+-- `NEAR` calling `a_do_script`, a global of `mission` that runs a chunk
+-- in exactly the environment a mission's `DO SCRIPT` trigger runs in.
+--
+-- `FAR` is what `a_do_script` runs: the same wrapper the other states
+-- get, with the body and `chunkname` read from its arguments rather than
+-- from literals, because `a_do_script` hands a chunk what it was passed
+-- after the source as `...`. So the far chunk's source is the same bytes
+-- for every request, and what a requester wrote crosses into `mission`
+-- once, as a `%q` literal in `NEAR`, and into `missionscripting` as a
+-- string argument, never as code. A far chunk that receives no string
+-- body says so, rather than compiling nothing, because whether
+-- `a_do_script` passes its arguments on is measured on one build.
+--
+-- `a_do_script` shifts what the chunk returns by one: `v1 … vN` arrives
+-- as `nil, v1 … v(N-1)`, so a lone value is dropped entirely. `FAR` ends
+-- with a second, sacrificial value, `0`, and `NEAR` reads the payload out
+-- of slot 2. Where the payload in slot 2 is not a string, `NEAR` refuses
+-- it without reading it and names the types of both slots: were a DCS
+-- build to correct the shift, the payload would be in slot 1 and the
+-- message says so, rather than the reply reading as an empty result.
+--
+-- Nothing but a string crosses `a_do_script`. A table returned through it
+-- has corrupted DCS's allocator, the damage surfacing during the call, at
+-- mission teardown or on the next load, so a clean crossing clears
+-- nothing. The wrapper converts the result inside `missionscripting`,
+-- which is the mechanism; the slot-2 refusal is the backstop for a far
+-- chunk that escaped it, and not the mechanism.
+--
+-- `a_do_script` is nil at the main menu and whenever no mission is
+-- loaded, and `NEAR` reads it at the moment of use, never from a
+-- previous crossing, because this executor outlives any one mission.
+-- Finding none is `no-mission`. `NEAR` answers in the wrapper's three
+-- fields, adding two statuses of its own: `no-mission`, and `a_do_script`
+-- for a call that raised or did not hand back a string. Its own raise is
+-- `bridge`, as the wrapper's is.
+local FAR = 'local body, chunkname = ... '
+  .. 'if type(body) ~= "string" or type(chunkname) ~= "string" then '
+  .. 'return "a_do_script\\n\\nthe far chunk was handed a " .. type(body) .. " body and a " .. type(chunkname) '
+  .. '.. " chunkname, where a_do_script passes its arguments on as strings", 0 end '
+  .. WRAP_HEAD .. "body, chunkname" .. WRAP_TAIL .. ", 0"
+
+local NEAR_HEAD = "return (function(far, body, chunkname) local called, answered = pcall(function() "
+  .. 'local a_do_script = rawget(_G, "a_do_script") '
+  .. 'if type(a_do_script) ~= "function" then return "no-mission\\n\\nno mission is loaded: a_do_script is " '
+  .. '.. type(a_do_script) .. " in the mission state, and it is defined only with a mission loaded" end '
+  .. "local crossed, lead, payload = pcall(a_do_script, far, body, chunkname) "
+  .. 'if not crossed then return "a_do_script\\n\\na_do_script raised: " '
+  .. '.. (type(lead) == "string" and lead or "(error object is a " .. type(lead) .. " value)") end '
+  .. 'if type(payload) ~= "string" then return "a_do_script\\n\\nslot 1 is " .. type(lead) .. " and slot 2 is " '
+  .. '.. type(payload) .. ", where a_do_script\'s shift puts a nil in slot 1 and the string payload in slot 2" end '
+  .. "return payload end) "
+  .. "if called then return answered end "
+  .. 'return "bridge\\n\\n" .. (type(answered) == "string" and answered or type(answered)) end)('
+
+local function near(body, chunkname)
+  return NEAR_HEAD .. string.format("%q", FAR) .. ", " .. string.format("%q", body) .. ", "
+    .. string.format("%q", chunkname) .. ")"
+end
+
+-- The headers every reply through `a_do_script` carries, so a reader
+-- knows the result crossed two hops and could only have been a string.
+local A_DO_SCRIPT_TAIL = { { "carrier", "a_do_script" }, { "via", "mission" } }
+
 -- The statuses a wrapper sends back, so that a string in the three-field
--- shape by accident is not read as one.
+-- shape by accident is not read as one, and `NEAR`'s, which adds two.
 local WRAPPER_STATUS = {
   ok = true,
   run = true,
@@ -1136,9 +1220,14 @@ local WRAPPER_STATUS = {
   bridge = true,
 }
 
+local A_DO_SCRIPT_STATUS = { ["no-mission"] = true, a_do_script = true }
+for status in pairs(WRAPPER_STATUS) do
+  A_DO_SCRIPT_STATUS[status] = true
+end
+
 -- The three fields out of what a wrapper sent back, or nil where the
--- string is not in the wrapper's shape.
-local function decode(answered)
+-- string is not in the shape of one of `statuses`.
+local function decode(answered, statuses)
   local first = answered:find("\n", 1, true)
   if not first then
     return nil
@@ -1148,7 +1237,7 @@ local function decode(answered)
     return nil
   end
   local status = answered:sub(1, first - 1)
-  if not WRAPPER_STATUS[status] then
+  if not statuses[status] then
     return nil
   end
   return status, answered:sub(first + 1, second - 1), answered:sub(second + 1)
@@ -1173,31 +1262,41 @@ end
 -- but what it read for this request. The state is passed as the request
 -- spelt it: `server` is a name DCS answers to, and a caller who said it
 -- reaches what it named.
-local function eval_dostring(req, chunkname, state)
+--
+-- The `a_do_script` carrier is this carrier too, into `mission` with
+-- `NEAR` in place of the wrapper. Every reply it answers carries
+-- `A_DO_SCRIPT_TAIL`, `NEAR`'s own statuses are read, and a string in
+-- neither shape is `stage: a_do_script`, because `NEAR` hands back only
+-- its own answers or the payload.
+local function eval_dostring(req, chunkname, state, through_mission)
+  local chunk, statuses, unshaped, tail = wrapper(req.body, chunkname), WRAPPER_STATUS, "dostring_in", nil
+  if through_mission then
+    chunk, statuses, unshaped, tail = near(req.body, chunkname), A_DO_SCRIPT_STATUS, "a_do_script", A_DO_SCRIPT_TAIL
+  end
   local net = rawget(_G, "net")
   local dostring_in = type(net) == "table" and rawget(net, "dostring_in")
   if type(dostring_in) ~= "function" then
-    return reply(req.id, "unsupported", nil, "no net.dostring_in on this host")
+    return reply(req.id, "unsupported", joined(nil, tail), "no net.dostring_in on this host")
   end
-  local answered = dostring_in(state, wrapper(req.body, chunkname))
+  local answered = dostring_in(state, chunk)
   if answered == nil then
-    return reply(req.id, "refused", nil, "net.dostring_in returned nil for " .. state
+    return reply(req.id, "refused", joined(nil, tail), "net.dostring_in returned nil for " .. state
       .. ": this role may not reach it, the name is not one this DCS knows, or the operator's policy gate refused it")
   elseif answered == "Invalid state name" then
-    return reply(req.id, "invalid-state", nil, "net.dostring_in answered 'Invalid state name' for " .. state
-      .. ": DCS knows the state and cannot reach it in this phase")
+    return reply(req.id, "invalid-state", joined(nil, tail), "net.dostring_in answered 'Invalid state name' for "
+      .. state .. ": DCS knows the state and cannot reach it in this phase")
   elseif type(answered) ~= "string" then
-    return reply(req.id, "error", { { "stage", "dostring_in" }, { "chunkname", chunkname } },
+    return reply(req.id, "error", joined({ { "stage", "dostring_in" }, { "chunkname", chunkname } }, tail),
       "net.dostring_in answered a " .. type(answered) .. " value for " .. state .. ", and the executor reads a string alone")
   end
-  local status, detail, body = decode(answered)
+  local status, detail, body = decode(answered, statuses)
   if not status then
-    status, detail, body = "dostring_in", "", answered
+    status, detail, body = unshaped, "", answered
     if #body > MAX_RESULT_BYTES then
       status, detail, body = "oversize", "answer", string.format("%d", #body)
     end
   end
-  return answer(req, chunkname, status, detail, body)
+  return answer(req, chunkname, status, detail, body, tail)
 end
 
 -- `eval` runs the body in the state the request names. An install with
@@ -1206,10 +1305,10 @@ end
 -- default, and a chunk that runs somewhere the caller did not say is the
 -- one thing this op must never do, so one without is refused as one
 -- without `for` is. A state this host does not declare is `unsupported`,
--- the wire's word for a thing this install does not do, and so is one
--- declared with a carrier that is not yet built: the mission door serves
--- nothing yet. `chunkname` is echoed only where a chunk was compiled
--- under it; a refusal compiled nothing and carries none.
+-- the wire's word for a thing this install does not do. `missionscripting`
+-- is reached through `a_do_script`, one hop past `mission`.
+-- `chunkname` is echoed only where a chunk was compiled under it; a
+-- refusal compiled nothing and carries none.
 function OPS.eval(req)
   if not ALLOW_EVAL then
     return reply(req.id, "unsupported", nil, "eval is disabled in this install")
@@ -1234,8 +1333,10 @@ function OPS.eval(req)
     return eval_local(req, chunkname)
   elseif row[2] == "dostring_in" then
     return eval_dostring(req, chunkname, state)
+  elseif row[2] == "a_do_script" then
+    return eval_dostring(req, chunkname, "mission", true)
   end
-  return reply(req.id, "unsupported", nil, state .. " is declared and not yet served by this executor")
+  return reply(req.id, "unsupported", nil, state .. " is declared with a carrier this executor does not build")
 end
 
 -- One admitted request to its reply. A name the table lacks is
