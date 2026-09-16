@@ -20,7 +20,7 @@ citations below point into documents that still say "bridge".
 
 This plan carries **52 tasks across 10 stages**. The count is driven by the four right-sizing
 tests, and the splits fall at interfaces rather than at steps: each Lua carrier (`hook` local,
-`net.dostring_in`, the `a_do_script` door) is one task because changing how one crosses a state
+`net.dostring_in`, `a_do_script`) is one task because changing how one crosses a state
 boundary must not rewrite the others; the client and the server are separate crates and separate
 tasks for the same reason; and every behaviour that must survive the game is split into a
 *built-and-harness-proven* task (developer-only, off DCS) and a later *proven-live* task (DCS
@@ -118,7 +118,7 @@ before it is enabled). Neither blocks Milestones A–C.
 - **Milestone B — The full protocol and its controls.** Someone can trust every §7 behaviour
   without a sortie: line-truth in every carrier, the oversize refusal, the tick and instruction
   budgets, the stamp fence, the dormant budget as a number, the arming race, and the seven-state
-  door — each red under its stated mutation. *Acceptance:* `lua5.1 tools/harness.lua executor` and
+  `a_do_script` — each red under its stated mutation. *Acceptance:* `lua5.1 tools/harness.lua executor` and
   `cargo test -p dcs-eval` both print their full check counts, all green, and a scripted mutation
   sweep shows every §10/§7 control reddening. Covers Stages 3–6.
 - **Milestone C — Installable and serving.** Someone can install the executor from one binary under
@@ -127,7 +127,7 @@ before it is enabled). Neither blocks Milestones A–C.
   MCP session lists six tools and calls each; `git status` on the fixture tree after `verify` is
   clean (verify wrote nothing). Covers Stages 7–8.
 - **Milestone D — Proven live in DCS.** Someone can do the whole thing for real: install, evaluate
-  in every reachable state including through the mission door, read game state, and leave the executor
+  in every reachable state including `missionscripting` through `a_do_script`, read game state, and leave the executor
   installed through play and a DCS update. *Acceptance:* the Stage 9 script prints every measured
   row and the permanent-install acceptance (T51) passes; the dormant frame-time is at or below the
   baseline. Covers Stage 9.
@@ -205,11 +205,11 @@ line 47 of the caller's file in every state.
 | T18 | The `hook` eval carrier (`loadstring` + `setfenv` into the host `_G`) with a true `chunkname` | `lua5.1 tools/harness.lua executor/eval-hook` shows a raise on line 47 reported as `<name>:47`; mutation: prepending one line to the body before compiling reddens the line-truth check | T12 | developer-only |
 | T19 | Result conversion (`describe_local`: scalars printed, `%.14g`/`%.17g`, `inf`/`-inf`/`nan` by name, tables/functions/userdata by type only) and the reply ceiling — refused, never cut | `lua5.1 tools/harness.lua executor/result` prints its count; mutations: a table stringified with `tostring` reddens the type-only rule; a result over `max_result_bytes` cut instead of refused (`stage: oversize`, `result_bytes`) reddens the ceiling | T18 | developer-only |
 | T20 | The `net.dostring_in` carrier and its `%q` wrapper (body compiled in-state), with the three answers kept apart | `lua5.1 tools/harness.lua executor/dostring` shows `ok`/`refused`/`invalid-state` distinct and line 47 true through the wrapper; mutation: reading a `nil` refusal as an empty `ok` reddens the three-answers check | T19 | developer-only |
-| T21 | The `missionscripting` two-hop door: `a_do_script`, `%q` args, the return-shift correction, string-only conversion, `door-shut` status | `lua5.1 tools/harness.lua executor/door` shows a value crossing as a string only, the slot-2 read, and `door-shut` with no mission; mutation: returning a table across the door (not converted in-state) reddens the string-only backstop | T20 | developer-only |
-| T22 | The `a_do_script` off-by-one fixture reproduced under reference `lua5.1` | `lua5.1 tools/harness.lua executor/door-shift` exercises the shift and asserts the correction; mutation: removing the `+1` correction reddens it (a lone value dropped) | T21 | developer-only |
+| T21 | The `missionscripting` carrier, two hops through `a_do_script`: `%q` args, the return-shift correction, string-only conversion, `no-mission` status (ADR 0004) | `lua5.1 tools/harness.lua executor/a_do_script` shows a value crossing as a string only, the slot-2 read, and `no-mission` with no mission; mutation: returning a table through `a_do_script` (not converted in-state) reddens the string-only backstop | T20 | developer-only |
+| T22 | The `a_do_script` off-by-one fixture reproduced under reference `lua5.1` | `lua5.1 tools/harness.lua executor/a_do_script-shift` exercises the shift and asserts the correction; mutation: removing the `+1` correction reddens it (a lone value dropped) | T21 | developer-only |
 
 **Stage command:** `lua5.1 tools/harness.lua executor/eval-hook executor/result executor/dostring
-executor/door executor/door-shift`.
+executor/a_do_script executor/a_do_script-shift`.
 
 ---
 
@@ -223,7 +223,7 @@ single chunk, and the stamp fence and markers that close the 2026-09-02 kill.
 | T23 | The per-tick CPU budget between requests, and `cpu_ms`/`tick` on every reply | `lua5.1 tools/harness.lua executor/tick-budget` shows the executor stopping new requests past `TICK_BUDGET_MS` and W-deep replies answered in id order sharing a tick; mutation: a reply missing `cpu_ms` reddens the presence check | T19 | developer-only |
 | T24 | The instruction count-hook budget inside the chunk, refused at load for `0`/non-integer, `budget: none` in `mission` | `lua5.1 tools/harness.lua executor/instr-budget` shows a looping chunk stopped `stage: budget` where `debug` exists and `budget: none` in `mission`; mutation: an `INSTRUCTION_BUDGET` of `0` silently defaulted (Lua installs no hook, `debug.gethook` still returns it) reddens the load-time refusal | T18 | developer-only |
 | T25 | The stamp fence: `for` ≠ stamp → `stale-session`, reply stamp mismatch → discarded `foreign`, chunk never runs | `lua5.1 tools/harness.lua executor/fence` shows a foreign `for` answered `stale-session` without running, at load and on a tick; mutation: running the chunk anyway reddens the kill-reproduction control | T10 | developer-only |
-| T26 | The events log `B|`/`O|` markers and rotation to `events.prev.log` at load | `lua5.1 tools/harness.lua executor/events` shows the last `B|` with no `O|` naming the killer and one generation kept; mutation: a synthetic unbalanced file whose killer is misread reddens the reader | T12 | developer-only |
+| T26 | The events log `B|`/`O|` markers and rotation to `events.prev.log` at load, and `a_do_script`'s own markers through `log.write` inside `mission` (T21 built the carrier without them) | `lua5.1 tools/harness.lua executor/events` shows the last `B|` with no `O|` naming the killer and one generation kept, and a crossing marked in `dcs.log` before and after `a_do_script`; mutation: a synthetic unbalanced file whose killer is misread reddens the reader | T12,T21 | developer-only |
 
 **Stage command:** `lua5.1 tools/harness.lua executor/tick-budget executor/instr-budget executor/fence
 executor/events`.
@@ -275,7 +275,7 @@ the same functions.
 |---|---|---|---|---|
 | T37 | `rmcp` stdio wiring, the `serve` role, the client built per call | `cargo test -p dcs-mcp serve` shows only protocol frames on stdout and diagnostics on stderr; mutation: a diagnostic written to stdout reddens the transport-cleanliness check | T02 | developer-only |
 | T38 | The six tools registered, listed and callable over a real MCP session on an in-memory pair | `cargo test -p dcs-mcp tools-listed` lists exactly `dcs_status`, `dcs_ping`, `dcs_game_state`, `dcs_eval`, `dcs_eval_file`, `dcs_collect` and calls each; mutation: a tool that registers but is not listed reddens the count | T37 | developer-only |
-| T39 | The reply wording (one place): refusals read as refusals — `door-shut`, `stale-session`, `oversize`, `budget` — and `pending` names its id and phase | `cargo test -p dcs-mcp wording` shows each status worded as a non-empty refusal and `pending` not marked `isError`; mutation: an `oversize` reply worded like an empty result reddens it | T38 | developer-only |
+| T39 | The reply wording (one place): refusals read as refusals — `no-mission`, `stale-session`, `oversize`, `budget` — and `pending` names its id and phase | `cargo test -p dcs-mcp wording` shows each status worded as a non-empty refusal and `pending` not marked `isError`; mutation: an `oversize` reply worded like an empty result reddens it | T38 | developer-only |
 | T40 | The CLI verbs with `--out`/`--capture` (reply verbatim, nothing for `pending`) and the `runs.jsonl` provenance line | `cargo test -p dcs-mcp cli` shows `--out` writing headers+body verbatim and a `pending` writing nothing, plus one `runs.jsonl` line per eval with path+SHA-256; the CLI's text for one reply is byte-identical to the tool's (diff empty); mutation: a zero-byte file written for a `pending` reddens the capture check | T39 | developer-only |
 | T41 | The server-idle obligations (`mcp.md` §6): no thread wakes in 60 s of silence, the reply watch open only while waiting and never on a superseded session, the executor never held armed | `cargo test -p dcs-mcp idle` shows a sibling-directory sweep succeeding while the server is idle and no watch held between calls; mutation: a keepalive `ping` or a watch left open reddens the "never hold armed"/"hold no handle" checks | T31,T37 | developer-only |
 
@@ -313,7 +313,7 @@ path; nothing here is parallelisable by adding developer effort.
 | T52 | The cutover from `dcs-api-bridge`: its hook and transport root gone before this executor installs, and a check proving the two never poll at once | `dcs-mcp verify` reports the incumbent's `DcsApiEval.lua` absent from `Scripts\Hooks\` and no `DcsApiBridge\` under `Logs\`, and names either as a problem while it is there; mutation: leaving the incumbent's hook in place must be reported, not tolerated — a `verify` that passes with both installed reddens the check | Milestone C | DCS + human |
 | T47 | The first live run: round-trip p50/p95 with the event-driven wait, `cpu_ms`/reply, replies/tick at W=8, seven-state generation wall time | the run script prints all four rows per state against the recorded baselines (30 ms p50, 465 s/generation); a run that prints none has not measured the change | Milestone C | DCS + human |
 | T48 | The dormant frame-time three-way comparison in DCS (hook absent / installed-dormant / armed-idle) | the script prints the three frame-time figures; the dormant figure is at or below the 0.098 ms baseline — a higher figure reopens `bridge.md` §2 and is reported as such | Milestone C | DCS + human |
-| T49 | The `missionscripting` door live with a mission loaded, and the s17 flag-agreement fixture | `dcs-mcp eval missionscripting …` returns through the door with a mission loaded, and the ported s17 fixture shows a 16-bit flag crossing agreeing with a `DO SCRIPT` action; a disagreement is reported, not read as an empty walk | Milestone C | DCS + human |
+| T49 | `missionscripting` through `a_do_script` live with a mission loaded, and the s17 flag-agreement fixture | `dcs-mcp eval missionscripting …` returns through `a_do_script` with a mission loaded, and the ported s17 fixture shows a 16-bit flag crossing agreeing with a `DO SCRIPT` action; a disagreement is reported, not read as an empty walk | Milestone C | DCS + human |
 | T50 | Tier-2 reads (each sent alone under the supervisor, one per session), editor-vs-menu detection, `mission_name` at the menu, the callback vocabulary | the script prints a row per tier-2 read (enabled or not, with its result), records `getSimulatorMode` raw per state, and notes which offered callbacks were seen; an unmeasured axis stays `unknown`/`menu-or-editor` and says so | Milestone C | DCS + human |
 | T51 | Permanent-installation acceptance: install, fly with the executor dormant, survive a DCS update, `verify` still green | on a real machine: `dcs-mcp install`; a play session with the executor dormant and no noticeable frame impact; a DCS update leaving `Saved Games` untouched; `dcs-mcp eval` in every reachable state; `dcs-mcp game-state` reporting the state; `dcs-mcp verify` green afterward — the project's done-condition | T52,T47,T48,T49,T50 | DCS + human |
 
