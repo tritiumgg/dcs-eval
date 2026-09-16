@@ -18,4 +18,5 @@ return {
   "executor/result",
   "executor/dostring",
   "executor/a_do_script",
+  "executor/a_do_script-shift",
 }
