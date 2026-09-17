@@ -24,10 +24,12 @@
 //! What reddens it. The control is behavioural, as the interop control is:
 //! a byte of the executor's `frame` that changes the wire, and a suite that
 //! stops ticking, which this side reports under the deadline rather than
-//! hanging. The mutation the plan also names, a stamp mismatch surfacing as
-//! `superseded`, is a verdict of the client's wait, which is not built, over
-//! a fence the executor does not have yet; until both exist a wrong `for`
-//! is answered, and `executor/ping` and the stand-in's tests pin that.
+//! hanging. The mutation the plan also names, a stamp mismatch surfacing
+//! as `superseded`, is a verdict of the client's wait over the executor's
+//! fence. The fence is built: a request whose `for` is not the session's
+//! stamp is answered `stale-session` and never run, which `executor/fence`
+//! proves. The wait is not, and until it is there is no verdict here to
+//! redden, so this control does not reach for one.
 
 use std::fs;
 use std::io;

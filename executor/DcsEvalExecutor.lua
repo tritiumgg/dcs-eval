@@ -881,13 +881,26 @@ local BODY_REQUIRED = ALLOW_EVAL and { eval = true } or {}
 -- file that stays is its own. An oversize request is answered with the
 -- refusal `take` made without opening it.
 --
--- Past the envelope, three things are checked here and no more. A request
+-- Past the envelope, four things are checked here and no more. A request
 -- must name the session it is for: one without `for`, or with an empty
 -- one, carries no stamp for the fence to judge, and is refused before any
--- comparison. It must name an op, though which ops exist is the
--- dispatcher's to know, so an unknown one passes through to be refused
--- there. And an op that runs its body must have one. What an op makes of
--- its other headers is that op's.
+-- comparison. The stamp it names must be this session's: one that names
+-- another is a client defect and is answered `stale-session`, echoing the
+-- stamp it asked for so the client can see which session it addressed,
+-- and it is refused here rather than by the op so that nothing it carries
+-- can run. The echo is whole and uncapped while the message excerpts it,
+-- which ADR 0006 weighs against the reply limit. That is the fence, and it
+-- stands alone: a request for another session is judged on its stamp and
+-- on nothing else, so a foreign one that would also be refused for a
+-- second reason — no op, an unknown one, an empty body an op runs, a state
+-- no host serves — still reads as foreign rather than as the refusal the
+-- session it was written for would have sent. Only the envelope comes
+-- first: bytes the parser cannot read carry no `for` to judge, and are
+-- `bad-request` however foreign the stamp they spell. A request for this
+-- session must then name an op, though which ops exist is the dispatcher's
+-- to know, so an unknown one passes through to be refused there. And an op
+-- that runs its body must have one. What an op makes of its other headers
+-- is that op's.
 --
 -- The request as its id, headers and body, for the caller to run; or nil,
 -- a status and a message, the reply already on the disk where there was
@@ -900,12 +913,19 @@ local function admit(path)
   local id = path:match("[^/\\]+$") or path
   id = id:match("^(.*)%.req$") or id
   local bytes, status, why = take(path)
+  local extra
   if bytes then
     local headers, body = parse(bytes)
+    status = "bad-request"
     if not headers then
       why = body
     elseif headers["for"] == nil or headers["for"] == "" then
       why = "no for: the request does not name the session stamp it is for"
+    elseif headers["for"] ~= E.stamp then
+      status = "stale-session"
+      extra = { { "for", headers["for"] } }
+      why = "for: " .. excerpt(headers["for"]) .. " is not this session's stamp, "
+        .. E.stamp .. ": the request was written for another session and was not run"
     elseif headers.op == nil or headers.op == "" then
       why = "no op"
     elseif BODY_REQUIRED[headers.op] and body == "" then
@@ -913,15 +933,13 @@ local function admit(path)
     else
       return { id = id, headers = headers, body = body }
     end
-    status = "bad-request"
   elseif status == "gone" then
     return nil, status, why
   end
-  local headers
   if status == "error" then
-    headers = { { "stage", "bridge" } }
+    extra = { { "stage", "bridge" } }
   end
-  local ok, failed = reply(id, status, headers, why)
+  local ok, failed = reply(id, status, extra, why)
   if not ok then
     return nil, "error", "the " .. status .. " reply to " .. id .. " was not published: " .. tostring(failed), true
   end

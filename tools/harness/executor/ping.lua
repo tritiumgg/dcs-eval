@@ -26,9 +26,10 @@
 -- noted once in `dcs.log`, and stops nothing, and is counted still when
 -- the request it answers is one that could not be removed, which is held
 -- as any other. A `for` that is not the stamp
--- is answered here, because the fence is not built. The export host ticks
--- on the callback after the frame and not the one before it, and answers
--- under its own phase and its one state.
+-- is answered `stale-session` on the frame, with the stamp it named last
+-- among the headers, which `executor/fence` proves the whole of. The
+-- export host ticks on the callback after the frame and not the one before
+-- it, and answers under its own phase and its one state.
 --
 -- The mutations this suite exists to catch. Drop `status` from the reply
 -- and the header-order check reads the list one short, naming what is
@@ -437,16 +438,21 @@ do
 end
 
 --------------------------------------------------------------------------------
--- The fence, not yet built
+-- The fence, on the frame
 --------------------------------------------------------------------------------
 
 do
-  local E, _, _, _, host = spied("hook")
+  local E, env, _, _, host = spied("hook")
   request(E, "8-a.req", "op: ping\nfor: not-the-stamp\n\n")
   host.callbacks.onSimulationFrame()
-  local _, v, body = read(E, "8-a")
-  t.eq(v.status, "ok", "foreign: a for that is not the stamp is answered here; the fence, when it comes, answers stale-session")
-  t.eq(body, "pong", "foreign: with pong")
+  t.eq(entries(env, E.req), "", "foreign: the request is taken off the disk like any other")
+  local order, v, body = read(E, "8-a")
+  t.eq(v.status, "stale-session", "foreign: a for that is not the stamp is fenced out")
+  t.eq(order[#order], "for", "foreign: the stamp it named is the last header")
+  t.eq(v["for"], "not-the-stamp", "foreign: and is what it asked for")
+  t.check(body:find("is not this session's stamp, " .. E.stamp, 1, true),
+    "foreign: the body names both stamps: " .. body)
+  t.eq(E.raised, 0, "foreign: nothing raised")
 end
 
 --------------------------------------------------------------------------------

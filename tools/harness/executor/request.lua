@@ -24,8 +24,10 @@
 -- op, is an `eval` with an empty body, does not parse, or is over the size
 -- limit, in which case the log shows it was never opened. An `eval` whose
 -- body is one blank or one newline is admitted with it, as is a `ping`
--- with any body or none. A `for` that is not the stamp is admitted here;
--- the stamp fence, when it comes, answers it `stale-session`. A request
+-- with any body or none. A `for` that is not the stamp is refused
+-- `stale-session` before an op is looked for, which `executor/fence`
+-- proves the reply and the consequences of; here it is the one line
+-- saying the parser hands nothing back for one. A request
 -- that went before it could be taken is `gone` and nothing is written; one
 -- read that cannot be removed is answered `error` with `stage: bridge`, the
 -- wire's word for the executor's own failure, and its bytes withheld; a
@@ -343,9 +345,13 @@ do
   refused(E, env, log, "1-b.req", "op: eval\nfor:\n\nreturn 1", "no for", "an empty for")
   refused(E, env, log, "1-c.req", "op: eval\nfor: \n\nreturn 1", "no for", "a blank for")
 
-  req = admitted(E, env, log, "1-d.req", "op: eval\nfor: not-the-stamp\n\nreturn 1", "foreign")
-  t.eq(req.headers["for"], "not-the-stamp",
-    "foreign: a for that is not the stamp is admitted here, and the fence, when it comes, answers it stale-session")
+  -- The fence itself, in one line here: a `for` that is not the stamp is
+  -- refused before an op is looked for, so nothing it carries can reach
+  -- one. What the reply says is `executor/fence`'s to prove.
+  local status
+  req, status = E.admit(request(E, "1-d.req", "op: eval\nfor: not-the-stamp\n\nreturn 1"))
+  t.eq(req, nil, "foreign: a for that is not the stamp hands nothing back")
+  t.eq(status, "stale-session", "foreign: it is stale-session")
 end
 
 -- The body: an eval with none is refused, one that is a blank or a newline
