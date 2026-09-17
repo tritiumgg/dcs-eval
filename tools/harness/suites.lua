@@ -20,4 +20,5 @@ return {
   "executor/a_do_script",
   "executor/a_do_script-shift",
   "executor/tick-budget",
+  "executor/instr-budget",
 }
