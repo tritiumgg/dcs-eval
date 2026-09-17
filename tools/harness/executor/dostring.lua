@@ -54,9 +54,11 @@ local TEMP = [[\Temp\DCS\]]
 -- executor's on purpose. HEAD is a refusal; OK and ERR are an `eval` that
 -- was compiled; OVERSIZE a result refused.
 local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms" }
-local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname" }
-local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname" }
-local OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "result_bytes" }
+local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname", "budget" }
+local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "budget" }
+local BARE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname" }
+local OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "budget", "result_bytes" }
+local BARE_OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "result_bytes" }
 
 -- The entries of a directory as the model lists them, sorted, dots dropped.
 local function entries(env, dir)
@@ -193,7 +195,7 @@ do
   t.eq(body, "crossed", "string: the bytes verbatim")
   t.eq(#seen, 1, "string: the carrier was called once")
   t.eq(seen[1].state, "gui", "string: for the state the request named")
-  t.eq(seen[1].answered, "ok\nstring\ncrossed", "string: and what crossed back was the three fields")
+  t.eq(seen[1].answered, "ok\nstring\ninstructions=1000000\ncrossed", "string: and what crossed back was the four fields")
 
   -- A refusal: nil from the carrier, whatever the chunk would have done.
   answering(env, function(state, _)
@@ -237,30 +239,30 @@ do
     return "something else"
   end)
   order, v, body = eval(E, frame, "1-f", "state: gui\n", "return 1")
-  fields(order, ERR, "unshaped")
+  fields(order, BARE, "unshaped")
   t.eq(v.status, "error", "unshaped: a string not in the wrapper's shape is error")
   t.eq(v.stage, "dostring_in", "unshaped: under stage dostring_in")
   t.eq(body, "something else", "unshaped: with the string as the body")
 
   answering(env, function()
-    return "ok\nstring"
+    return "ok\nstring\n"
   end)
   _, v, body = eval(E, frame, "1-g", "state: gui\n", "return 1")
-  t.eq(v.stage, "dostring_in", "two fields: one line short of the shape is not the shape")
-  t.eq(body, "ok\nstring", "two fields: carried as it came")
+  t.eq(v.stage, "dostring_in", "three fields: one line short of the shape is not the shape")
+  t.eq(body, "ok\nstring\n", "three fields: carried as it came")
 
   answering(env, function()
-    return "nope\n\nbody"
+    return "nope\n\n\nbody"
   end)
   _, v, body = eval(E, frame, "1-h", "state: gui\n", "return 1")
   t.eq(v.stage, "dostring_in", "unknown status: a word the wrapper never sends is not the shape")
-  t.eq(body, "nope\n\nbody", "unknown status: carried whole")
+  t.eq(body, "nope\n\n\nbody", "unknown status: carried whole")
 
   answering(env, function()
     return ""
   end)
   order, v, body = eval(E, frame, "1-i", "state: gui\n", "return 1")
-  fields(order, ERR, "empty")
+  fields(order, BARE, "empty")
   t.eq(v.status, "error", "empty: an empty answer is not an empty ok")
   t.eq(v.stage, "dostring_in", "empty: under stage dostring_in")
   t.eq(body, "", "empty: with nothing as the body")
@@ -269,7 +271,7 @@ do
     return {}
   end)
   order, v, body = eval(E, frame, "1-j", "state: gui\n", "return 1")
-  fields(order, ERR, "table")
+  fields(order, BARE, "table")
   t.eq(v.stage, "dostring_in", "table: a value that is not a string is error under dostring_in")
   t.eq(body, "net.dostring_in answered a table value for gui, and the executor reads a string alone",
     "table: named by type")
@@ -317,7 +319,7 @@ do
   t.eq(v.status, "ok", "table: ok")
   t.eq(v.result_type, "table", "table: typed")
   t.eq(body, "", "table: converted in the state to an empty body, so no table crosses")
-  t.eq(seen[#seen].answered, "ok\ntable\n", "table: and what crossed was the three fields with nothing after")
+  t.eq(seen[#seen].answered, "ok\ntable\ninstructions=1000000\n", "table: and what crossed was the four fields with nothing after")
   _, v, body = eval(E, frame, "2-j", "state: gui\n", "return type")
   t.eq(v.result_type, "function", "function: typed")
   _, v, body = eval(E, frame, "2-k", "state: gui\n", "return 1, 2")
@@ -483,7 +485,7 @@ do
   t.eq(v.result_bytes, tostring(ceiling + 1), "over: result_bytes is the length refused")
   t.eq(body, "the result is " .. (ceiling + 1) .. " bytes, over the " .. ceiling
     .. "-byte ceiling, and was refused whole rather than cut", "over: the body is the refusal")
-  t.eq(seen[#seen].answered, "oversize\nresult\n" .. (ceiling + 1),
+  t.eq(seen[#seen].answered, "oversize\nresult\ninstructions=1000000\n" .. (ceiling + 1),
     "over: what crossed back was the refusal, so the result never left the state")
 
   order, v, body = eval(E, frame, "6-c", "state: gui\n", "error(string.rep('z', " .. (ceiling + 1) .. "), 0)")
@@ -499,7 +501,7 @@ do
     return string.rep("w", ceiling + 1)
   end)
   order, v, body = eval(E, frame, "6-d", "state: gui\n", "return 1")
-  fields(order, OVERSIZE, "unshaped over")
+  fields(order, BARE_OVERSIZE, "unshaped over")
   t.eq(v.stage, "oversize", "unshaped over: refused")
   t.eq(v.result_bytes, tostring(ceiling + 1), "unshaped over: with its length")
   t.check(body:find("^the answer is "), "unshaped over: named as the state's answer: " .. body)
@@ -539,7 +541,7 @@ do
   without.string = nil
   carrier(env, { gui = without }, seen)
   order, v, body = eval(E, frame, "7-d", "state: gui\n", "return 1")
-  fields(order, ERR, "wrapper raise")
+  fields(order, BARE, "wrapper raise")
   t.eq(v.stage, "bridge", "wrapper raise: the wrapper's own raise is stage bridge")
   t.check(body:find("string", 1, true), "wrapper raise: with the message: " .. body)
 
@@ -563,7 +565,7 @@ do
   local E, _, _, frame = loaded("hook")
   local _
   local order, v, body = eval(E, frame, "8-a", "state: gui\n", "return 1")
-  fields(order, ERR, "stub")
+  fields(order, BARE, "stub")
   t.eq(v.status, "error", "stub: the model's stub evaluates nothing, and its empty answer is not an ok")
   t.eq(v.stage, "dostring_in", "stub: under stage dostring_in")
   t.eq(body, "", "stub: with the empty answer as the body")

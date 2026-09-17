@@ -1014,9 +1014,11 @@ end
 -- of a chunk's but the chunk.
 --
 -- The function the source returns takes what `pcall` answered about the
--- chunk, what the chunk returned or raised with, and the ceiling, and
--- answers a status, a detail and a body: `ok` with the type and the
--- printed value; `run` with the message; or `oversize`, with what was
+-- chunk, what the chunk returned or raised with, the ceiling, and whether
+-- the chunk spent its instruction budget, and answers a status, a detail
+-- and a body: `ok` with the type and the printed value; `run` with the
+-- message; `budget` with the message, for a chunk that spent its budget,
+-- whatever it went on to return; or `oversize`, with what was
 -- too big and its length, when the body would be over the ceiling. A
 -- body over the ceiling is refused whole and never cut, because a cut
 -- lands somewhere inside whatever the body is and the reader cannot tell
@@ -1060,9 +1062,11 @@ local function described(value)
   end
   return kind, ""
 end
-return function(ok, value, ceiling)
+return function(ok, value, ceiling, exceeded)
   local status, detail, body
-  if ok then
+  if exceeded then
+    ok, status, detail, body = false, "budget", "", raised(value)
+  elseif ok then
     status, detail, body = "ok", described(value)
   else
     status, detail, body = "run", "", raised(value)
@@ -1074,9 +1078,74 @@ return function(ok, value, ceiling)
 end
 ]==]
 
--- The function `CONVERT` returns, compiled by the host's own carrier when
--- it first answers.
-local finish
+-- What bounds a chunk, as Lua source for the reason the conversion is: it
+-- runs in the host's own state and inside every other, where it travels in
+-- the wrapper. The function it returns takes the instruction count the
+-- request settled on and answers the budget a reply reports, and the
+-- function that runs a chunk under it.
+--
+-- The count hook is set in the state the chunk runs in, just before the
+-- chunk, and cleared just after. The budget is `none`, and the chunk runs
+-- under a bare `pcall`, where the count is `0`, where the state has no
+-- `debug` to set a hook with, as `mission` has none, and where a hook is
+-- already set: that hook is DCS's or a debugger's, and this executor never
+-- displaces something another tool installed. `debug` is read when the
+-- chunk is bound, never at load, as every other read of a state is.
+--
+-- Once the count is spent the hook raises in the chunk, with the position
+-- it stopped at, so the message reads `<chunkname>:<line>:` where the loop
+-- was. It raises once more on every instruction after that, because a
+-- chunk that caught the first raise with `pcall` would otherwise go on
+-- looping, caught once a count, forever; a budget once spent stays spent.
+-- What the chunk finished with is then `budget` whatever `pcall` answered.
+-- The hook fires by count and not by place, so it can fire on the few
+-- instructions of `run` itself between the chunk returning and the hook
+-- being cleared; a firing there is the executor's own and passes, and
+-- `run` is the local the hook compares against for that reason.
+--
+-- Three limits, stated rather than hidden. The hook counts VM instructions
+-- and cannot interrupt one long C call. A chunk can clear the hook itself,
+-- so this is a guard against accident and not a boundary. And a coroutine
+-- the chunk runs escapes it: Lua 5.1's `debug` keeps a hook's function per
+-- thread, so a loop inside `coroutine.wrap` counts against nothing.
+local RUN = [==[
+return function(count)
+  local debug = rawget(_G, "debug")
+  local sethook, gethook, getinfo
+  if type(debug) == "table" then
+    sethook, gethook, getinfo = rawget(debug, "sethook"), rawget(debug, "gethook"), rawget(debug, "getinfo")
+  end
+  if count == 0 or type(sethook) ~= "function" or type(gethook) ~= "function"
+    or type(getinfo) ~= "function" or gethook() ~= nil then
+    return "none", function(chunk)
+      local ok, value = pcall(chunk)
+      return ok, value, false
+    end
+  end
+  local exceeded, run = false, nil
+  local function hook()
+    if getinfo(2, "f").func == run then
+      return
+    end
+    if not exceeded then
+      exceeded = true
+      sethook(hook, "", 1)
+    end
+    error("the chunk ran past its budget of " .. count .. " instructions and was stopped", 2)
+  end
+  run = function(chunk)
+    sethook(hook, "", count)
+    local ok, value = pcall(chunk)
+    sethook()
+    return ok, value, exceeded
+  end
+  return "instructions=" .. count, run
+end
+]==]
+
+-- The functions `CONVERT` and `RUN` return, compiled by the host's own
+-- carrier when it first answers.
+local finish, bind
 
 -- `headers` with `tail` after it, either of which may be nil.
 local function joined(headers, tail)
@@ -1093,9 +1162,10 @@ local function joined(headers, tail)
   return all
 end
 
--- The reply to a chunk from the three fields the carrier answered with,
--- which for the host's own state are `finish`'s and for every other
--- state are what the wrapper sent back. `ok` carries the type and the
+-- The reply to a chunk from the four fields the carrier answered with,
+-- which for the host's own state are `finish`'s with the budget it bound
+-- the chunk under, and for every other state are what the wrapper sent
+-- back. `ok` carries the type and the
 -- value; `oversize` is `error` with `result_bytes`, so the caller can
 -- size its next request, and a body that is the refusal and not one byte
 -- of the result; `unsupported` is a state that could not compile at all;
@@ -1103,22 +1173,27 @@ end
 -- the body. `no-mission` is `a_do_script` finding no mission, a status
 -- of its own so a caller can branch on it. `chunkname` rides every reply
 -- to a chunk that was compiled, so a reader knows what its line numbers
--- are relative to. `tail` is the headers a carrier adds to every reply it
--- answers, after the rest.
-local function answer(req, chunkname, status, detail, body, tail)
+-- are relative to. `budget` follows it wherever the carrier said what bound
+-- the chunk, and is empty, and absent from the reply, where nothing did:
+-- a state that answered outside the wrapper's shape said nothing about
+-- it. `tail` is the headers a carrier adds to every reply it answers,
+-- after the rest.
+local function answer(req, chunkname, status, detail, budget, body, tail)
+  local named = { { "chunkname", chunkname } }
+  if budget ~= "" then
+    named[2] = { "budget", budget }
+  end
   if status == "ok" then
-    return reply(req.id, "ok", joined({ { "result_type", detail }, { "chunkname", chunkname } }, tail), body)
+    return reply(req.id, "ok", joined(joined({ { "result_type", detail } }, named), tail), body)
   elseif status == "oversize" then
-    return reply(req.id, "error", joined({
-      { "stage", "oversize" },
-      { "chunkname", chunkname },
+    return reply(req.id, "error", joined(joined(joined({ { "stage", "oversize" } }, named), {
       { "result_bytes", body },
-    }, tail), "the " .. detail .. " is " .. body .. " bytes, over the " .. MAX_RESULT_BYTES
+    }), tail), "the " .. detail .. " is " .. body .. " bytes, over the " .. MAX_RESULT_BYTES
       .. "-byte ceiling, and was refused whole rather than cut")
   elseif status == "unsupported" or status == "no-mission" then
     return reply(req.id, status, joined(nil, tail), body)
   end
-  return reply(req.id, "error", joined({ { "stage", status }, { "chunkname", chunkname } }, tail), body)
+  return reply(req.id, "error", joined(joined({ { "stage", status } }, named), tail), body)
 end
 
 -- The carrier for the host's own state: the body compiled with the
@@ -1131,29 +1206,39 @@ end
 -- namespace this file published and never a local of this file. A compile
 -- failure is `stage: compile` with Lua's message verbatim, a raise while
 -- running `stage: run`, and both carry `chunkname` beside the message, so a
--- reader knows what its line numbers are relative to. What the chunk
--- returned or raised with is `answer`'s to reply to.
-local function eval_local(req, chunkname)
+-- reader knows what its line numbers are relative to. The chunk runs under
+-- the `count` the request settled on, and every reply to it says what
+-- bound it, a compile failure included, which would have been bound by
+-- the same. What the chunk returned or raised with is `answer`'s to reply
+-- to.
+local function eval_local(req, chunkname, count)
   local loadstring, setfenv = rawget(_G, "loadstring"), rawget(_G, "setfenv")
   if type(loadstring) ~= "function" then
     return reply(req.id, "unsupported", nil, "no loadstring in this state")
   elseif type(setfenv) ~= "function" then
     return reply(req.id, "unsupported", nil, "no setfenv in this state")
   end
+  if not finish then
+    local compiled = {}
+    for i, source in ipairs({ { "convert", CONVERT }, { "run", RUN } }) do
+      local built, reason = loadstring(source[2], "=" .. NAME .. "." .. source[1])
+      if not built then
+        error("the " .. source[1] .. " source did not compile: " .. reason, 0)
+      end
+      setfenv(built, _G)
+      compiled[i] = built()
+    end
+    finish, bind = compiled[1], compiled[2]
+  end
+  local budget, run = bind(count)
   local chunk, why = loadstring(req.body, chunkname)
   if not chunk then
-    return reply(req.id, "error", { { "stage", "compile" }, { "chunkname", chunkname } }, why)
-  end
-  if not finish then
-    local convert, reason = loadstring(CONVERT, "=" .. NAME .. ".convert")
-    if not convert then
-      error("the conversion source did not compile: " .. reason, 0)
-    end
-    finish = convert()
+    return answer(req, chunkname, "compile", "", budget, why)
   end
   setfenv(chunk, _G)
-  local ok, value = pcall(chunk)
-  return answer(req, chunkname, finish(ok, value, MAX_RESULT_BYTES))
+  local ok, value, exceeded = run(chunk)
+  local status, detail, body = finish(ok, value, MAX_RESULT_BYTES, exceeded)
+  return answer(req, chunkname, status, detail, budget, body)
 end
 
 -- The wrapper `net.dostring_in` carries into another state, in two parts
@@ -1169,37 +1254,44 @@ end
 -- it finished with is converted in that state by the conversion source
 -- above, so nothing but a string crosses back.
 --
--- The string that crosses is three fields: a status, a detail and the
--- body, the first two on a line each and the body the rest, so a body
--- of any bytes and any length is carried whole. The status is the
--- conversion's `ok`, `run` or `oversize`; `compile` where `loadstring`
--- refused the body, with Lua's message; `unsupported` where the state has
--- no `loadstring` or no `setfenv`, the refusal the local carrier makes
--- for the same lack; and `bridge` where the wrapper itself raised, which
--- is the executor's own failure and named as such. The whole wrapper
--- runs under `pcall`, because what `net.dostring_in` does with a chunk
--- that raises is not measured, and a raise that reached it would be one
--- this executor could not answer. ADR 0003 holds the argument for the
--- three fields. The instruction count hook that will bound a chunk is
--- not set here yet; the task that builds it adds it to this wrapper and
--- to the local carrier together.
+-- The string that crosses is four fields: a status, a detail, the budget
+-- and the body, the first three on a line each and the body the rest, so
+-- a body of any bytes and any length is carried whole. The status is the
+-- conversion's `ok`, `run`, `budget` or `oversize`; `compile` where
+-- `loadstring` refused the body, with Lua's message; `unsupported` where
+-- the state has no `loadstring` or no `setfenv`, the refusal the local
+-- carrier makes for the same lack; and `bridge` where the wrapper itself
+-- raised, which is the executor's own failure and named as such. The
+-- budget is what bound the chunk, read in the state because only the state
+-- knows whether it has a `debug` to hook with, and settled before the body
+-- is compiled, so `compile` carries it as every status past that point
+-- does; `unsupported` and `bridge` leave it empty. The count the request
+-- settled on travels in as a number the executor printed, never as
+-- anything a requester wrote. The whole wrapper runs under `pcall`,
+-- because what `net.dostring_in` does with a chunk that raises is not
+-- measured, and a raise that reached it would be one this executor could
+-- not answer. ADR 0005 holds the argument for the four fields.
 local WRAP_HEAD = "return (function() local wrapped, answered = pcall(function() "
   .. "local finish = (function() " .. CONVERT .. " end)() "
+  .. "local bind = (function() " .. RUN .. " end)() "
   .. 'local loadstring, setfenv = rawget(_G, "loadstring"), rawget(_G, "setfenv") '
-  .. 'if type(loadstring) ~= "function" then return "unsupported\\n\\nno loadstring in this state" end '
-  .. 'if type(setfenv) ~= "function" then return "unsupported\\n\\nno setfenv in this state" end '
+  .. 'if type(loadstring) ~= "function" then return "unsupported\\n\\n\\nno loadstring in this state" end '
+  .. 'if type(setfenv) ~= "function" then return "unsupported\\n\\n\\nno setfenv in this state" end '
+  .. "local budget, run = bind("
+local WRAP_MID = ") "
   .. "local chunk, why = loadstring("
 local WRAP_TAIL = ") "
-  .. 'if not chunk then return "compile\\n\\n" .. why end '
+  .. 'if not chunk then return "compile\\n\\n" .. budget .. "\\n" .. why end '
   .. "setfenv(chunk, _G) "
-  .. "local ok, value = pcall(chunk) "
-  .. "local status, detail, body = finish(ok, value, " .. MAX_RESULT_BYTES .. ") "
-  .. 'return status .. "\\n" .. detail .. "\\n" .. body end) '
+  .. "local ok, value, exceeded = run(chunk) "
+  .. "local status, detail, body = finish(ok, value, " .. MAX_RESULT_BYTES .. ", exceeded) "
+  .. 'return status .. "\\n" .. detail .. "\\n" .. budget .. "\\n" .. body end) '
   .. "if wrapped then return answered end "
-  .. 'return "bridge\\n\\n" .. (type(answered) == "string" and answered or type(answered)) end)()'
+  .. 'return "bridge\\n\\n\\n" .. (type(answered) == "string" and answered or type(answered)) end)()'
 
-local function wrapper(body, chunkname)
-  return WRAP_HEAD .. string.format("%q", body) .. ", " .. string.format("%q", chunkname) .. WRAP_TAIL
+local function wrapper(body, chunkname, count)
+  return WRAP_HEAD .. string.format("%d", count) .. WRAP_MID .. string.format("%q", body) .. ", "
+    .. string.format("%q", chunkname) .. WRAP_TAIL
 end
 
 -- The `a_do_script` carrier: the one way into `missionscripting`, which
@@ -1209,14 +1301,17 @@ end
 -- in exactly the environment a mission's `DO SCRIPT` trigger runs in.
 --
 -- `FAR` is what `a_do_script` runs: the same wrapper the other states
--- get, with the body and `chunkname` read from its arguments rather than
--- from literals, because `a_do_script` hands a chunk what it was passed
--- after the source as `...`. So the far chunk's source is the same bytes
--- for every request, and what a requester wrote crosses into `mission`
--- once, as a `%q` literal in `NEAR`, and into `missionscripting` as a
--- string argument, never as code. A far chunk that receives no string
--- body says so, rather than compiling nothing, because whether
--- `a_do_script` passes its arguments on is measured on one build.
+-- get, with the body, `chunkname` and the instruction count read from its
+-- arguments rather than from literals, because `a_do_script` hands a chunk
+-- what it was passed after the source as `...`. So the far chunk's source
+-- is the same bytes for every request, and what a requester wrote crosses
+-- into `mission` once, as a `%q` literal in `NEAR`, and into
+-- `missionscripting` as a string argument, never as code. The count
+-- crosses as the string the executor printed, because strings are what
+-- `a_do_script` was measured passing on. A far chunk that receives no
+-- string body, name or count says so, rather than compiling nothing,
+-- because whether `a_do_script` passes its arguments on is measured on
+-- one build.
 --
 -- `a_do_script` shifts what the chunk returns by one: `v1 … vN` arrives
 -- as `nil, v1 … v(N-1)`, so a lone value is dropped entirely. `FAR` ends
@@ -1236,43 +1331,45 @@ end
 -- `a_do_script` is nil at the main menu and whenever no mission is
 -- loaded, and `NEAR` reads it at the moment of use, never from a
 -- previous crossing, because this executor outlives any one mission.
--- Finding none is `no-mission`. `NEAR` answers in the wrapper's three
+-- Finding none is `no-mission`. `NEAR` answers in the wrapper's four
 -- fields, adding two statuses of its own: `no-mission`, and `a_do_script`
 -- for a call that raised or did not hand back a string. Its own raise is
--- `bridge`, as the wrapper's is.
-local FAR = 'local body, chunkname = ... '
-  .. 'if type(body) ~= "string" or type(chunkname) ~= "string" then '
-  .. 'return "a_do_script\\n\\nthe far chunk was handed a " .. type(body) .. " body and a " .. type(chunkname) '
-  .. '.. " chunkname, where a_do_script passes its arguments on as strings", 0 end '
-  .. WRAP_HEAD .. "body, chunkname" .. WRAP_TAIL .. ", 0"
+-- `bridge`, as the wrapper's is. None of its own answers ran a chunk, so
+-- each leaves the budget empty.
+local FAR = 'local body, chunkname, count = ... '
+  .. 'if type(body) ~= "string" or type(chunkname) ~= "string" or type(count) ~= "string" then '
+  .. 'return "a_do_script\\n\\n\\nthe far chunk was handed a " .. type(body) .. " body, a " .. type(chunkname) '
+  .. '.. " chunkname and a " .. type(count) .. " count, where a_do_script passes its arguments on as strings", 0 end '
+  .. WRAP_HEAD .. "tonumber(count)" .. WRAP_MID .. "body, chunkname" .. WRAP_TAIL .. ", 0"
 
-local NEAR_HEAD = "return (function(far, body, chunkname) local called, answered = pcall(function() "
+local NEAR_HEAD = "return (function(far, body, chunkname, count) local called, answered = pcall(function() "
   .. 'local a_do_script = rawget(_G, "a_do_script") '
-  .. 'if type(a_do_script) ~= "function" then return "no-mission\\n\\nno mission is loaded: a_do_script is " '
+  .. 'if type(a_do_script) ~= "function" then return "no-mission\\n\\n\\nno mission is loaded: a_do_script is " '
   .. '.. type(a_do_script) .. " in the mission state, and it is defined only with a mission loaded" end '
-  .. "local crossed, lead, payload = pcall(a_do_script, far, body, chunkname) "
-  .. 'if not crossed then return "a_do_script\\n\\na_do_script raised: " '
+  .. "local crossed, lead, payload = pcall(a_do_script, far, body, chunkname, count) "
+  .. 'if not crossed then return "a_do_script\\n\\n\\na_do_script raised: " '
   .. '.. (type(lead) == "string" and lead or "(error object is a " .. type(lead) .. " value)") end '
-  .. 'if type(payload) ~= "string" then return "a_do_script\\n\\nslot 1 is " .. type(lead) .. " and slot 2 is " '
+  .. 'if type(payload) ~= "string" then return "a_do_script\\n\\n\\nslot 1 is " .. type(lead) .. " and slot 2 is " '
   .. '.. type(payload) .. ", where a_do_script\'s shift puts a nil in slot 1 and the string payload in slot 2" end '
   .. "return payload end) "
   .. "if called then return answered end "
-  .. 'return "bridge\\n\\n" .. (type(answered) == "string" and answered or type(answered)) end)('
+  .. 'return "bridge\\n\\n\\n" .. (type(answered) == "string" and answered or type(answered)) end)('
 
-local function near(body, chunkname)
+local function near(body, chunkname, count)
   return NEAR_HEAD .. string.format("%q", FAR) .. ", " .. string.format("%q", body) .. ", "
-    .. string.format("%q", chunkname) .. ")"
+    .. string.format("%q", chunkname) .. ", " .. string.format('"%d"', count) .. ")"
 end
 
 -- The headers every reply through `a_do_script` carries, so a reader
 -- knows the result crossed two hops and could only have been a string.
 local A_DO_SCRIPT_TAIL = { { "carrier", "a_do_script" }, { "via", "mission" } }
 
--- The statuses a wrapper sends back, so that a string in the three-field
+-- The statuses a wrapper sends back, so that a string in the four-field
 -- shape by accident is not read as one, and `NEAR`'s, which adds two.
 local WRAPPER_STATUS = {
   ok = true,
   run = true,
+  budget = true,
   oversize = true,
   compile = true,
   unsupported = true,
@@ -1284,22 +1381,20 @@ for status in pairs(WRAPPER_STATUS) do
   A_DO_SCRIPT_STATUS[status] = true
 end
 
--- The three fields out of what a wrapper sent back, or nil where the
+-- The four fields out of what a wrapper sent back, or nil where the
 -- string is not in the shape of one of `statuses`.
 local function decode(answered, statuses)
   local first = answered:find("\n", 1, true)
-  if not first then
+  if not first or not statuses[answered:sub(1, first - 1)] then
     return nil
   end
   local second = answered:find("\n", first + 1, true)
-  if not second then
+  local third = second and answered:find("\n", second + 1, true)
+  if not third then
     return nil
   end
-  local status = answered:sub(1, first - 1)
-  if not statuses[status] then
-    return nil
-  end
-  return status, answered:sub(first + 1, second - 1), answered:sub(second + 1)
+  return answered:sub(1, first - 1), answered:sub(first + 1, second - 1), answered:sub(second + 1, third - 1),
+    answered:sub(third + 1)
 end
 
 -- The carrier for the states `net.dostring_in` reaches from the hook
@@ -1327,10 +1422,11 @@ end
 -- `A_DO_SCRIPT_TAIL`, `NEAR`'s own statuses are read, and a string in
 -- neither shape is `stage: a_do_script`, because `NEAR` hands back only
 -- its own answers or the payload.
-local function eval_dostring(req, chunkname, state, through_mission)
-  local chunk, statuses, unshaped, tail = wrapper(req.body, chunkname), WRAPPER_STATUS, "dostring_in", nil
+local function eval_dostring(req, chunkname, count, state, through_mission)
+  local chunk, statuses, unshaped, tail = wrapper(req.body, chunkname, count), WRAPPER_STATUS, "dostring_in", nil
   if through_mission then
-    chunk, statuses, unshaped, tail = near(req.body, chunkname), A_DO_SCRIPT_STATUS, "a_do_script", A_DO_SCRIPT_TAIL
+    chunk, statuses, unshaped, tail = near(req.body, chunkname, count), A_DO_SCRIPT_STATUS, "a_do_script",
+      A_DO_SCRIPT_TAIL
   end
   local net = rawget(_G, "net")
   local dostring_in = type(net) == "table" and rawget(net, "dostring_in")
@@ -1348,14 +1444,14 @@ local function eval_dostring(req, chunkname, state, through_mission)
     return reply(req.id, "error", joined({ { "stage", "dostring_in" }, { "chunkname", chunkname } }, tail),
       "net.dostring_in answered a " .. type(answered) .. " value for " .. state .. ", and the executor reads a string alone")
   end
-  local status, detail, body = decode(answered, statuses)
+  local status, detail, budget, body = decode(answered, statuses)
   if not status then
-    status, detail, body = unshaped, "", answered
+    status, detail, budget, body = unshaped, "", "", answered
     if #body > MAX_RESULT_BYTES then
       status, detail, body = "oversize", "answer", string.format("%d", #body)
     end
   end
-  return answer(req, chunkname, status, detail, body, tail)
+  return answer(req, chunkname, status, detail, budget, body, tail)
 end
 
 -- `eval` runs the body in the state the request names. An install with
@@ -1367,7 +1463,8 @@ end
 -- the wire's word for a thing this install does not do. `missionscripting`
 -- is reached through `a_do_script`, one hop past `mission`.
 -- `chunkname` is echoed only where a chunk was compiled under it; a
--- refusal compiled nothing and carries none.
+-- refusal compiled nothing and carries none. Every chunk may spend
+-- `INSTRUCTION_BUDGET` instructions.
 function OPS.eval(req)
   if not ALLOW_EVAL then
     return reply(req.id, "unsupported", nil, "eval is disabled in this install")
@@ -1385,15 +1482,16 @@ function OPS.eval(req)
     return reply(req.id, "bad-request", nil,
       "chunkname: " .. #chunkname .. " bytes, over the " .. MAX_CHUNKNAME_BYTES .. "-byte limit")
   end
+  local count = INSTRUCTION_BUDGET
   local row = state_row(E.host, state)
   if not row then
     return reply(req.id, "unsupported", nil, state .. " is not a state this host serves")
   elseif row[2] == "local" then
-    return eval_local(req, chunkname)
+    return eval_local(req, chunkname, count)
   elseif row[2] == "dostring_in" then
-    return eval_dostring(req, chunkname, state)
+    return eval_dostring(req, chunkname, count, state)
   elseif row[2] == "a_do_script" then
-    return eval_dostring(req, chunkname, "mission", true)
+    return eval_dostring(req, chunkname, count, "mission", true)
   end
   return reply(req.id, "unsupported", nil, state .. " is declared with a carrier this executor does not build")
 end

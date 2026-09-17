@@ -206,7 +206,7 @@ do
     t.eq(crossing.answered.n, 2, what .. ": a_do_script answered two slots")
     t.eq(crossing.answered[1], nil, what .. ": nil in slot 1")
     t.eq(crossing.answered[2], crossing.returned[1], what .. ": and the payload in slot 2")
-    t.eq(crossing.answered[2], "ok\n" .. case[3] .. "\n" .. case[4], what .. ": which is what the reply carries")
+    t.eq(crossing.answered[2], "ok\n" .. case[3] .. "\ninstructions=1000000\n" .. case[4], what .. ": which is what the reply carries")
   end
 
   t.eq(entries(env, E.req), "", "correction: every request is taken")
@@ -224,14 +224,14 @@ do
 
   local v, body = eval(E, frame, "2-a", 'return "lone"')
   local crossing = crossings[1]
-  t.eq(crossing.returned[1], "ok\nstring\nlone", "dropped: the far chunk ran and produced the payload")
+  t.eq(crossing.returned[1], "ok\nstring\ninstructions=1000000\nlone", "dropped: the far chunk ran and produced the payload")
   t.eq(crossing.answered.n, 1, "dropped: without the 0, a_do_script answered one slot")
   t.eq(crossing.answered[1], nil, "dropped: and it is nil, the payload lost to the shift")
   t.eq(v.status, "error", "dropped: a lost payload is not an ok")
   t.eq(v.stage, "a_do_script", "dropped: it is stage a_do_script")
   t.eq(body, "slot 1 is nil and slot 2 is nil, where a_do_script's shift puts a nil in slot 1"
     .. " and the string payload in slot 2", "dropped: naming both slots")
-  t.eq(hops[1], "a_do_script\n\n" .. body, "dropped: refused inside mission")
+  t.eq(hops[1], "a_do_script\n\n\n" .. body, "dropped: refused inside mission")
 
   t.eq(entries(env, E.req), "", "dropped: every request is taken")
   t.eq(E.raised, 0, "dropped: nothing reached the guard")
@@ -257,7 +257,7 @@ do
   t.eq(crossing.returned.n, 2, "no arguments: its refusal is two slots, the second the 0")
   t.eq(v.status, "error", "no arguments: answered as an error")
   t.eq(v.stage, "a_do_script", "no arguments: under stage a_do_script")
-  t.eq(body, "the far chunk was handed a nil body and a nil chunkname, where a_do_script passes its"
+  t.eq(body, "the far chunk was handed a nil body, a nil chunkname and a nil count, where a_do_script passes its"
     .. " arguments on as strings", "no arguments: the far chunk's own message crossed the shift")
 
   t.eq(entries(env, E.req), "", "no arguments: every request is taken")

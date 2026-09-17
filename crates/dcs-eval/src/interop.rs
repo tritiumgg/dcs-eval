@@ -76,7 +76,7 @@ const HANDSHAKE: [&str; 27] = [
 ];
 
 /// The eight headers every reply carries first, then the three a `ping`
-/// adds and the two an `eval` that ran adds.
+/// adds and the three an `eval` that ran adds.
 const PING: [&str; 11] = [
     "status",
     "protocol",
@@ -90,7 +90,7 @@ const PING: [&str; 11] = [
     "last_callback",
     "callbacks",
 ];
-const EVAL: [&str; 10] = [
+const EVAL: [&str; 11] = [
     "status",
     "protocol",
     "host",
@@ -101,6 +101,7 @@ const EVAL: [&str; 10] = [
     "cpu_ms",
     "result_type",
     "chunkname",
+    "budget",
 ];
 
 /// The checkout root: two above this crate's manifest.
@@ -255,7 +256,7 @@ fn the_eval_reply_parses_as_ok_with_an_empty_body() {
     assert_eq!(
         names(&e),
         EVAL,
-        "the eight headers, the result's type and the chunkname, no other"
+        "the eight headers, the result's type, the chunkname and the budget, no other"
     );
     assert_eq!(e.headers.get("status"), Some("ok"));
     assert_eq!(e.headers.get("id"), Some(EVAL_ID));
@@ -270,9 +271,14 @@ fn the_eval_reply_parses_as_ok_with_an_empty_body() {
         Some("=dcs-eval"),
         "the request named none, so the executor's default is echoed"
     );
+    assert_eq!(
+        e.headers.get("budget"),
+        Some("instructions=1000000"),
+        "the request named no count, so the executor's default bound the chunk"
+    );
     assert_eq!(e.body, b"", "a chunk that returned nil has an empty body");
     assert!(
-        bytes.ends_with(b"chunkname: =dcs-eval\n\n"),
+        bytes.ends_with(b"budget: instructions=1000000\n\n"),
         "the empty body is the blank line and nothing after it"
     );
     assert_eq!(

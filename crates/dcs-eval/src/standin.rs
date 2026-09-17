@@ -49,6 +49,9 @@ const MAX_REQUEST_BYTES: u64 = 262_144;
 /// The most a `chunkname` may be, as the executor bounds it.
 const MAX_CHUNKNAME_BYTES: usize = 200;
 
+/// The instruction count a chunk runs under, as the executor publishes it.
+const INSTRUCTION_BUDGET: u64 = 1_000_000;
+
 /// The `states` header a `ping` carries, per host: the states that host
 /// answers, in the order the executor declares them. Copied from what the
 /// harness expects of the executor, so a client that reads the header
@@ -351,7 +354,8 @@ impl Standin {
     /// carrier is not built. Past the checks the stand-in runs nothing,
     /// because there is no Lua here to run it, and answers every chunk as
     /// the executor answers one that returned nil: `ok`, `result_type:
-    /// nil`, the chunkname it was compiled under, and an empty body. A
+    /// nil`, the chunkname it was compiled under, the budget it ran
+    /// under, and an empty body. A
     /// control that needs a value back is a control on the shipped Lua.
     /// An install with eval disabled is not modelled: every stand-in has
     /// it on, so the empty-body refusal above is unconditional here.
@@ -387,6 +391,7 @@ impl Standin {
                 ),
             );
         }
+        let budget = format!("instructions={INSTRUCTION_BUDGET}");
         let states = if self.host == "export" {
             EXPORT_STATES
         } else {
@@ -411,6 +416,7 @@ impl Standin {
                 headers: vec![
                     ("result_type", "nil".to_owned()),
                     ("chunkname", chunkname.to_owned()),
+                    ("budget", budget),
                 ],
                 body: Vec::new(),
             },
@@ -684,7 +690,7 @@ mod tests {
         "last_callback",
         "callbacks",
     ];
-    const EVAL: [&str; 10] = [
+    const EVAL: [&str; 11] = [
         "status",
         "protocol",
         "host",
@@ -695,6 +701,7 @@ mod tests {
         "cpu_ms",
         "result_type",
         "chunkname",
+        "budget",
     ];
 
     fn opened(b: &Sandbox, host: &str) -> Standin {
@@ -938,15 +945,16 @@ mod tests {
             sent(&s, id, &headers, b"return 1");
         }
         assert_eq!(s.tick().len(), 8, "every one is answered");
-        for (id, name) in [
-            ("0000000001-abcd", "=dcs-eval"),
-            ("0000000002-abcd", "@x.lua"),
+        for (id, name, budget) in [
+            ("0000000001-abcd", "=dcs-eval", "instructions=1000000"),
+            ("0000000002-abcd", "@x.lua", "instructions=1000000"),
         ] {
             let e = read(&s, id);
             fields(&e, &EVAL, id);
             assert_eq!(e.headers.get("status"), Some("ok"), "{id}");
             assert_eq!(e.headers.get("result_type"), Some("nil"), "{id}");
             assert_eq!(e.headers.get("chunkname"), Some(name), "{id}");
+            assert_eq!(e.headers.get("budget"), Some(budget), "{id}");
             assert_eq!(e.body, b"", "{id}: the stand-in runs nothing");
         }
         refused(

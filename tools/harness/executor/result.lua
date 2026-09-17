@@ -34,9 +34,9 @@ local TEMP = [[\Temp\DCS\]]
 
 -- The reply's headers, in order. The suite's own copy, kept apart from the
 -- executor's on purpose. OK is a value answered, OVERSIZE a value refused.
-local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname" }
-local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname" }
-local OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "result_bytes" }
+local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname", "budget" }
+local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "budget" }
+local OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "budget", "result_bytes" }
 
 -- A hook state over a fresh sandbox with the executor loaded into it.
 -- Returns the namespace, the state and the frame callback.

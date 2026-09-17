@@ -60,10 +60,11 @@ local TEMP = [[\Temp\DCS\]]
 -- executor's on purpose. Every reply through `a_do_script` ends with the
 -- two that say so.
 local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "carrier", "via" }
-local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname", "carrier", "via" }
-local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "carrier", "via" }
+local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname", "budget", "carrier", "via" }
+local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "budget", "carrier", "via" }
+local BARE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "carrier", "via" }
 local OVERSIZE = {
-  "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "result_bytes", "carrier", "via",
+  "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "budget", "result_bytes", "carrier", "via",
 }
 local PLAIN = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms" }
 
@@ -280,7 +281,7 @@ do
     t.eq(body, case[4], what .. ": printed there, or an empty body")
     local crossing = crossings[#crossings]
     t.eq(type(crossing.answered[2]), "string", what .. ": and what the near chunk read in slot 2 was a string")
-    t.eq(crossing.answered[2], "ok\n" .. case[3] .. "\n" .. case[4], what .. ": the three fields")
+    t.eq(crossing.answered[2], "ok\n" .. case[3] .. "\ninstructions=1000000\n" .. case[4], what .. ": the four fields")
   end
 
   t.eq(entries(env, E.req), "", "values: every request is taken")
@@ -299,18 +300,18 @@ do
   t.eq(body, "lone", "shift: a lone value crosses")
   local crossing = crossings[#crossings]
   t.eq(crossing.returned.n, 2, "shift: because the far chunk returned it and one more")
-  t.eq(crossing.returned[1], "ok\nstring\nlone", "shift: the payload first")
+  t.eq(crossing.returned[1], "ok\nstring\ninstructions=1000000\nlone", "shift: the payload first")
   t.eq(crossing.returned[2], 0, "shift: and the sacrificial 0 second")
   t.eq(crossing.answered.n, 2, "shift: a_do_script answered two slots")
   t.eq(crossing.answered[1], nil, "shift: nil in slot 1")
-  t.eq(crossing.answered[2], "ok\nstring\nlone", "shift: and the payload in slot 2, where it is read")
+  t.eq(crossing.answered[2], "ok\nstring\ninstructions=1000000\nlone", "shift: and the payload in slot 2, where it is read")
 
   -- A DCS build that corrected the shift puts the payload in slot 1 and
   -- the 0 in slot 2, and the near chunk says so rather than reading nothing.
   install(mission, shifting(far, crossings, false))
   local order
   order, v, body = eval(E, frame, "2-b", "", 'return "lone"')
-  fields(order, ERR, "unshifted")
+  fields(order, BARE, "unshifted")
   t.eq(v.status, "error", "unshifted: an a_do_script that does not shift is not an ok")
   t.eq(v.stage, "a_do_script", "unshifted: under stage a_do_script")
   t.eq(body, "slot 1 is string and slot 2 is number, where a_do_script's shift puts a nil in slot 1"
@@ -346,13 +347,13 @@ do
     return nil, escaped
   end)
   local order, v, body = eval(E, frame, "3-a", "", "return 1")
-  fields(order, ERR, "table")
+  fields(order, BARE, "table")
   t.eq(v.status, "error", "table: a table in slot 2 is not an ok")
   t.eq(v.stage, "a_do_script", "table: refused at the near chunk")
   t.eq(body, "slot 1 is nil and slot 2 is table, where a_do_script's shift puts a nil in slot 1"
     .. " and the string payload in slot 2", "table: naming both slots")
   t.eq(#touched, 0, "table: without a key of it read: " .. table.concat(touched, ","))
-  t.eq(hops[#hops].answered, "a_do_script\n\n" .. body, "table: the refusal is what crossed back from mission")
+  t.eq(hops[#hops].answered, "a_do_script\n\n\n" .. body, "table: the refusal is what crossed back from mission")
 
   install(mission, function()
     return nil, 42
@@ -374,7 +375,7 @@ do
     return nil, "not the wrapper's"
   end)
   order, v, body = eval(E, frame, "3-d", "", "return 1")
-  fields(order, ERR, "unshaped")
+  fields(order, BARE, "unshaped")
   t.eq(v.stage, "a_do_script", "unshaped: a string payload not in the shape is stage a_do_script")
   t.eq(body, "not the wrapper's", "unshaped: carried as the body")
 
@@ -394,12 +395,13 @@ do
   local chunk = hops[#hops].chunk
   local literal = string.format("%q", nul)
   t.eq(select(2, chunk:gsub("a\\0001b", "")), 1, "literal: the body's text appears once in the near chunk")
-  t.check(chunk:find(", " .. literal .. ', "@x.lua")', 1, true),
-    "literal: as a %q literal, the chunkname beside it")
+  t.check(chunk:find(", " .. literal .. ', "@x.lua", "1000000")', 1, true),
+    "literal: as a %q literal, the chunkname and the count beside it")
   local crossing = crossings[#crossings]
-  t.eq(crossing.args.n, 2, "argument: the near chunk hands the far chunk two arguments")
+  t.eq(crossing.args.n, 3, "argument: the near chunk hands the far chunk three arguments")
   t.eq(crossing.args[1], nul, "argument: the body, byte for byte")
-  t.eq(crossing.args[2], "@x.lua", "argument: and the chunkname")
+  t.eq(crossing.args[2], "@x.lua", "argument: the chunkname")
+  t.eq(crossing.args[3], "1000000", "argument: and the count, as the string the executor printed")
   t.check(not crossing.source:find("a\0001b", 1, true), "far: the body is not in the far chunk's source")
   t.check(chunk:find(string.format("%q", crossing.source), 1, true), "far: which crosses into mission as a literal")
 
@@ -468,9 +470,9 @@ do
   fields(order, OVERSIZE, "over")
   t.eq(v.stage, "oversize", "over: one byte over is refused")
   t.eq(v.result_bytes, tostring(ceiling + 1), "over: result_bytes is the length refused")
-  t.eq(crossings[#crossings].answered[2], "oversize\nresult\n" .. (ceiling + 1),
+  t.eq(crossings[#crossings].answered[2], "oversize\nresult\ninstructions=1000000\n" .. (ceiling + 1),
     "over: what the near chunk read was the refusal, so the result never crossed a_do_script")
-  t.eq(hops[#hops].answered, "oversize\nresult\n" .. (ceiling + 1), "over: nor the first hop")
+  t.eq(hops[#hops].answered, "oversize\nresult\ninstructions=1000000\n" .. (ceiling + 1), "over: nor the first hop")
 
   t.eq(E.raised, 0, "ceiling: nothing reached the guard")
 end
@@ -492,7 +494,7 @@ do
   t.eq(v.carrier, "a_do_script", "shut: through a_do_script")
   t.eq(body, "no mission is loaded: a_do_script is nil in the mission state, and it is defined only"
     .. " with a mission loaded", "shut: saying why")
-  t.eq(hops[1].answered, "no-mission\n\n" .. body, "shut: answered from inside mission")
+  t.eq(hops[1].answered, "no-mission\n\n\n" .. body, "shut: answered from inside mission")
 
   -- Loaded, the same request crosses; unloaded again, it does not.
   -- `a_do_script` is read when it is used, never kept from a previous crossing.
@@ -525,7 +527,7 @@ do
     error("the call failed", 0)
   end)
   local order, v, body = eval(E, frame, "8-a", "", "return 1")
-  fields(order, ERR, "raised")
+  fields(order, BARE, "raised")
   t.eq(v.stage, "a_do_script", "raised: a_do_script raising is stage a_do_script")
   t.eq(body, "a_do_script raised: the call failed", "raised: with the message")
 
@@ -544,9 +546,9 @@ do
     return nil, (fn())
   end)
   order, v, body = eval(E, frame, "8-c", "", "return 1")
-  fields(order, ERR, "no arguments")
+  fields(order, BARE, "no arguments")
   t.eq(v.stage, "a_do_script", "no arguments: a far chunk handed no body says so")
-  t.eq(body, "the far chunk was handed a nil body and a nil chunkname, where a_do_script passes its"
+  t.eq(body, "the far chunk was handed a nil body, a nil chunkname and a nil count, where a_do_script passes its"
     .. " arguments on as strings", "no arguments: naming what it was handed")
 
   t.eq(E.raised, 0, "failures: nothing reached the guard")
@@ -562,7 +564,7 @@ do
   broken.rawget = nil
   carrier(env, { mission = broken }, hops)
   local order, v, body = eval(E, frame, "8-d", "", "return 1")
-  fields(order, ERR, "near raise")
+  fields(order, BARE, "near raise")
   t.eq(v.stage, "bridge", "near raise: the near chunk's own raise is stage bridge")
   t.check(body:find("rawget", 1, true), "near raise: with the message: " .. body)
   t.eq(E.raised, 0, "near raise: nothing reached the guard")
@@ -578,7 +580,7 @@ do
 
   -- The model's own stub evaluates nothing and answers empty.
   local order, v, body = eval(E, frame, "9-a", "", "return 1")
-  fields(order, ERR, "stub")
+  fields(order, BARE, "stub")
   t.eq(v.status, "error", "stub: the model's empty answer is not an ok")
   t.eq(v.stage, "a_do_script", "stub: and is not the near chunk's answer")
   t.eq(body, "", "stub: carried as the body")
@@ -605,12 +607,12 @@ do
     return {}
   end)
   order, v, body = eval(E, frame, "9-d", "", "return 1")
-  fields(order, ERR, "not a string")
+  fields(order, BARE, "not a string")
   t.eq(v.stage, "dostring_in", "not a string: the first hop answering a table is its own stage")
 
   -- A status only the near chunk sends is read only through a_do_script.
   answering(env, function()
-    return "no-mission\n\nfrom gui"
+    return "no-mission\n\n\nfrom gui"
   end)
   local plain = "op: eval\nfor: " .. E.stamp .. "\nstate: gui\n\nreturn 1"
   request(E, "9-e.req", plain)

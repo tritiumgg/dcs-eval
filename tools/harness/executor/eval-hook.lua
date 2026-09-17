@@ -44,8 +44,8 @@ local TEMP = [[\Temp\DCS\]]
 -- executor's on purpose. HEAD is a refusal; OK and ERR are an `eval` that
 -- was compiled.
 local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms" }
-local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname" }
-local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname" }
+local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname", "budget" }
+local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "budget" }
 
 -- The entries of a directory as the model lists them, sorted, dots dropped.
 local function entries(env, dir)
