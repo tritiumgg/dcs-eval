@@ -32,8 +32,8 @@ local NAME = "DcsEvalExecutor"
 -- request may be is enforced: past it a request is answered `bad-request`
 -- and never read, so no client can have the executor hold a chunk of that
 -- size in a frame. The two instruction figures are provisional: the
--- specification names neither, and the count hook that spends them is not
--- built.
+-- specification names neither, and no live chunk has been measured
+-- against them.
 local PROTOCOL = 2
 local ALLOW_EVAL = true
 local TICK_BUDGET_MS = 8
@@ -438,6 +438,33 @@ local function clocked()
   local clock = type(os) == "table" and rawget(os, "clock")
   if type(clock) ~= "function" then
     error("os.clock is absent, so no tick can be held to its budget", 0)
+  end
+end
+
+-- The two instruction figures, required at load to be counts Lua will
+-- hook. Lua 5.1 installs no hook at all for a count of `0`, while
+-- `debug.gethook` still answers the function it was handed, so a budget
+-- that is not a positive integer would read as set and bound nothing; a
+-- count past what a C `int` holds is not a count `debug.sethook` takes.
+-- Neither is defaulted: the handshake publishes both, and a figure quietly
+-- replaced is a promise the file does not keep. A default past the
+-- ceiling would be clamped by nothing, so that is refused too.
+local MAX_HOOK_COUNT = 2147483647
+
+local function budgeted()
+  for _, figure in ipairs({
+    { "INSTRUCTION_BUDGET", INSTRUCTION_BUDGET },
+    { "INSTRUCTION_CEILING", INSTRUCTION_CEILING },
+  }) do
+    local name, n = figure[1], figure[2]
+    if type(n) ~= "number" or not (n >= 1 and n <= MAX_HOOK_COUNT) or n % 1 ~= 0 then
+      error(name .. " is " .. (type(n) == "number" and string.format("%.17g", n) or "a " .. type(n))
+        .. ", where Lua hooks a positive integer count up to " .. MAX_HOOK_COUNT
+        .. " and installs no hook for 0 while debug.gethook says one is set", 0)
+    end
+  end
+  if INSTRUCTION_BUDGET > INSTRUCTION_CEILING then
+    error("INSTRUCTION_BUDGET is " .. INSTRUCTION_BUDGET .. ", over INSTRUCTION_CEILING, " .. INSTRUCTION_CEILING, 0)
   end
 end
 
@@ -1574,6 +1601,7 @@ local function main()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
   clocked()
+  budgeted()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
   E.frame, E.publish, E.reply, E.take, E.parse, E.admit = frame, publish, reply, take, parse, admit
   E.max_request_bytes = MAX_REQUEST_BYTES
