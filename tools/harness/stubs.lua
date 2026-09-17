@@ -85,10 +85,13 @@ t.raises(function()
 end, "config%.net%.dostring_in is not modelled", "config's net has no members")
 t.eq(hook.net.get_my_player_id(), 1, "the local player is 1")
 
--- os: stock time, ED's pid and temporary directory, and no way out.
+-- os: stock time, ED's pid and temporary directory, the suite's clock, and no way out.
 t.eq(hook.os.getpid(), 4242, "the pid has a default")
 host.pid = 7
 t.eq(hook.os.getpid(), 7, "the pid is the host's")
+t.eq(hook.os.clock(), 0, "the clock stands at 0 unless the suite moves it")
+host.clock = 0.25
+t.eq(hook.os.clock(), 0.25, "the clock is the host's")
 t.eq(hook.os.tmpdir():sub(-1), "\\", "the temporary directory ends in a separator")
 t.eq(type(hook.os.time()), "number", "os.time is stock")
 t.raises(function()

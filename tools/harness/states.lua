@@ -22,12 +22,16 @@
 -- directory tree. `io` and `os` are the stock libraries with the members
 -- that reach past a sandbox left out (`os.exit` would end the runner,
 -- `os.execute` and `io.popen` would shell out, `io.write` would print into
--- the runner's own output) plus ED's `os.getpid` and `os.tmpdir`. `debug` is
--- the stock library whole.
+-- the runner's own output) plus ED's `os.getpid` and `os.tmpdir`. `os.clock`
+-- is not the stock one: it answers the suite's `clock`, in seconds, which
+-- stands still unless the suite moves it, because the model's filesystem
+-- shells out to `cmd` and its elapsed time is the model's cost and never
+-- DCS's; a stock clock would spend a tick's budget on the listing alone.
+-- `debug` is the stock library whole.
 --
 -- `host` is the suite's own table and the model reads it live. The directory
 -- and process reads answer from it (`writedir`, `tempdir`, `tmpdir`, `cwd`,
--- `pid`, `paused`, `mission_name`, ...), and what the executor hands to
+-- `pid`, `clock`, `paused`, `mission_name`, ...), and what the executor hands to
 -- `DCS.setUserCallbacks` and `log.write` lands in `host.callbacks` and
 -- `host.log`, where the suite can look at it.
 
@@ -41,6 +45,7 @@ local DEFAULT = {
   tmpdir = [[C:\Users\harness\AppData\Local\Temp\]],
   cwd = [[C:\Program Files\Eagle Dynamics\DCS World\bin]],
   pid = 4242,
+  clock = 0,
 }
 
 local function answer(host, key)
@@ -263,7 +268,10 @@ function MAKE.io(state, _, t)
 end
 
 function MAKE.os(state, host, t)
-  local m = pick(os, { "clock", "date", "difftime", "remove", "rename", "time" })
+  local m = pick(os, { "date", "difftime", "remove", "rename", "time" })
+  m.clock = function()
+    return answer(host, "clock")
+  end
   m.getpid = function()
     return answer(host, "pid")
   end
