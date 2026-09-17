@@ -1,8 +1,8 @@
 -- The `eval` op through `a_do_script`: `net.dostring_in` into `mission`
 -- carrying the near chunk, which calls `a_do_script` with the far chunk
--- and the request's body and `chunkname` as arguments; the far chunk
--- compiles and runs the body in `missionscripting`, converts the result
--- there, and returns the three fields and a sacrificial `0`;
+-- and the request's body, `chunkname` and count as arguments; the far
+-- chunk compiles and runs the body in `missionscripting`, converts the
+-- result there, and returns the four fields and a sacrificial `0`;
 -- `a_do_script` shifts that by one, and the near chunk reads slot 2.
 --
 -- The models evaluate nothing, on purpose, so this suite installs both
