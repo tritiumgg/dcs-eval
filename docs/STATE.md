@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T24 landed; T25 has not started.
+Nothing. T25 landed; T26 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,19 +25,21 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T25** — the stamp fence: `fence: 583 checks`. A `for` that is not this session's stamp is `stale-session` before an op is looked for, echoing the stamp it named whole and uncapped (ADR 0006), with nothing compiled, run or sent to a state — foreign `mission` and `missionscripting` requests pin the send at one hop and at two, and each host's control names a state that host serves — for a request in the session directory at load and one published on a tick; the stand-in and the interop control carry the new reply; fifteen mutations seen red.
 - **T24** — the instruction budget: `instr-budget: 2209 checks`. RUN source beside CONVERT sets a count hook in the chunk's state (`stage: budget`, position kept, spent stays spent, the executor's own gap ignored, a hook already set left alone as `none`); `max_instructions` read and clamped; `budget` after `chunkname`; the wrapper answers four fields (ADR 0005 supersedes 0003); bad figures stop the load; eight mutations seen red.
-- **T23** — the tick budget and `cpu_ms`: `tick-budget: 507 checks`. `cpu_ms` follows `tick` on every reply, charged from before the take; past `TICK_BUDGET_MS`, read by `os.clock` from before the listing, no request after the first is taken and the rest wait in order; no `os.clock` stops the load; the model clock moves only when a suite moves it; seven mutations seen red.
-- **T22** — the `a_do_script` shift fixture: `a_do_script-shift: 118 checks`. The suite's own `a_do_script` is held to the incumbent's measured table by `select("#")` (nothing-returned left unpinned), then a lone value crosses through `FAR`'s `0` and is lost without it, refused `stage: a_do_script`; four mutations seen red.
+- **T23** — the tick budget and `cpu_ms`: `tick-budget: 507 checks` when it landed, 524 since T24. `cpu_ms` follows `tick` on every reply, charged from before the take; past `TICK_BUDGET_MS`, read by `os.clock` from before the listing, no request after the first is taken and the rest wait in order; no `os.clock` stops the load; the model clock moves only when a suite moves it; seven mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T25** — the stamp fence: `for` ≠ stamp → `stale-session`, reply
-stamp mismatch → discarded `foreign`, chunk never runs. Done when `lua5.1
-tools/harness.lua executor/fence` shows a foreign `for` answered
-`stale-session` without running, at load and on a tick; mutation: running the
-chunk anyway reddens the kill-reproduction control. Needs T10.
+**Task T26** — the events log `B|`/`O|` markers and rotation to
+`events.prev.log` at load, and `a_do_script`'s own markers through
+`log.write` inside `mission` (T21 built the carrier without them). Done when
+`lua5.1 tools/harness.lua executor/events` shows the last `B|` with no `O|`
+naming the killer and one generation kept, and a crossing marked in `dcs.log`
+before and after `a_do_script`; mutation: a synthetic unbalanced file whose
+killer is misread reddens the reader. Needs T12, T21.
 
 **An agent verifies** it: the harness under `lua5.1.exe` on PATH under mise.
 
@@ -87,8 +89,8 @@ entries at most: an eleventh means something here is finished, or belongs in
   a spelling for such a path on the wire is the writer's side, unsettled.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is
   proved with a file the suite keeps open; a client's `ReadDirectoryChangesW` handle is Stage 9's.
-- **A wrong `for` is answered.** `admit` passes a wrong stamp through and the
-  tick answers it; `executor/ping` pins that until the fence (T25) answers
-  `stale-session`, and the round-trip's `superseded` mutation waits on it and on the client's wait (T31).
+- **The client's half of the fence waits on T31,** whose row now names it: the
+  executor fences a foreign `for` since T25, and discarding a reply with
+  another session's `stamp`, with the round-trip's `superseded`, needs `collect`.
 - **`docs/PLAN.md`'s DR-1 and DR-2 stay the record** for one repository and
   Windows as the target; a copy in `docs/decisions/` is a second place to keep in step.
