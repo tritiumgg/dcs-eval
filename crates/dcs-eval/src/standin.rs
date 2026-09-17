@@ -49,8 +49,10 @@ const MAX_REQUEST_BYTES: u64 = 262_144;
 /// The most a `chunkname` may be, as the executor bounds it.
 const MAX_CHUNKNAME_BYTES: usize = 200;
 
-/// The instruction count a chunk runs under, as the executor publishes it.
+/// The instruction count a chunk runs under when the request names none,
+/// and the most a request may name, as the executor publishes them.
 const INSTRUCTION_BUDGET: u64 = 1_000_000;
+const INSTRUCTION_CEILING: u64 = 50_000_000;
 
 /// The `states` header a `ping` carries, per host: the states that host
 /// answers, in the order the executor declares them. Copied from what the
@@ -349,7 +351,10 @@ impl Standin {
 
     /// The `eval` op as far as the executor's own checks go, word for
     /// word: a request must name its state, spelt as a name; a chunkname
-    /// over 200 bytes is refused and one absent is `=dcs-eval`; a state
+    /// over 200 bytes is refused and one absent is `=dcs-eval`; a
+    /// `max_instructions` that is not digits is refused, one absent is the
+    /// default, one over the ceiling is held to it, and `0` is unbounded,
+    /// which the reply's `budget` says as `none`; a state
     /// this host does not declare is `unsupported`, and so is one whose
     /// carrier is not built. Past the checks the stand-in runs nothing,
     /// because there is no Lua here to run it, and answers every chunk as
@@ -391,7 +396,27 @@ impl Standin {
                 ),
             );
         }
-        let budget = format!("instructions={INSTRUCTION_BUDGET}");
+        let count = match header(headers, "max_instructions") {
+            None | Some("") => INSTRUCTION_BUDGET,
+            Some(count) if count.bytes().all(|b| b.is_ascii_digit()) => count
+                .parse::<u64>()
+                .map_or(INSTRUCTION_CEILING, |n| n.min(INSTRUCTION_CEILING)),
+            Some(count) => {
+                let dots = if count.len() > 80 { "..." } else { "" };
+                return Answer::refusal(
+                    "bad-request",
+                    format!(
+                        "max_instructions: {}{dots} is not a non-negative integer",
+                        &count[..count.len().min(80)]
+                    ),
+                );
+            }
+        };
+        let budget = if count == 0 {
+            "none".to_owned()
+        } else {
+            format!("instructions={count}")
+        };
         let states = if self.host == "export" {
             EXPORT_STATES
         } else {
@@ -923,7 +948,8 @@ mod tests {
         let mut s = opened(&b, "hook");
         let stamp = s.stamp.clone();
         let long = "@".to_owned() + &"x".repeat(200);
-        let cases: [(&str, &[(&str, &str)]); 8] = [
+        let digits = "-".to_owned() + &"1".repeat(100);
+        let cases: [(&str, &[(&str, &str)]); 13] = [
             ("0000000001-abcd", &[("state", "hook")]),
             (
                 "0000000002-abcd",
@@ -938,16 +964,42 @@ mod tests {
                 "0000000008-abcd",
                 &[("state", "hook"), ("chunkname", &long)],
             ),
+            (
+                "0000000009-abcd",
+                &[("state", "hook"), ("max_instructions", "0")],
+            ),
+            (
+                "0000000010-abcd",
+                &[
+                    ("state", "hook"),
+                    ("max_instructions", "99999999999999999999999"),
+                ],
+            ),
+            (
+                "0000000011-abcd",
+                &[("state", "hook"), ("max_instructions", "")],
+            ),
+            (
+                "0000000012-abcd",
+                &[("state", "hook"), ("max_instructions", "1.5")],
+            ),
+            (
+                "0000000013-abcd",
+                &[("state", "hook"), ("max_instructions", &digits)],
+            ),
         ];
         for (id, extra) in cases {
             let mut headers = vec![("op", "eval"), ("for", stamp.as_str())];
             headers.extend_from_slice(extra);
             sent(&s, id, &headers, b"return 1");
         }
-        assert_eq!(s.tick().len(), 8, "every one is answered");
+        assert_eq!(s.tick().len(), 13, "every one is answered");
         for (id, name, budget) in [
             ("0000000001-abcd", "=dcs-eval", "instructions=1000000"),
             ("0000000002-abcd", "@x.lua", "instructions=1000000"),
+            ("0000000009-abcd", "=dcs-eval", "none"),
+            ("0000000010-abcd", "=dcs-eval", "instructions=50000000"),
+            ("0000000011-abcd", "=dcs-eval", "instructions=1000000"),
         ] {
             let e = read(&s, id);
             fields(&e, &EVAL, id);
@@ -957,6 +1009,21 @@ mod tests {
             assert_eq!(e.headers.get("budget"), Some(budget), "{id}");
             assert_eq!(e.body, b"", "{id}: the stand-in runs nothing");
         }
+        refused(
+            &s,
+            "0000000012-abcd",
+            "bad-request",
+            "max_instructions: 1.5 is not a non-negative integer",
+        );
+        refused(
+            &s,
+            "0000000013-abcd",
+            "bad-request",
+            &format!(
+                "max_instructions: -{}... is not a non-negative integer",
+                "1".repeat(79)
+            ),
+        );
         refused(
             &s,
             "0000000003-abcd",

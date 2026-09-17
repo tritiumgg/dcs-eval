@@ -1463,8 +1463,12 @@ end
 -- the wire's word for a thing this install does not do. `missionscripting`
 -- is reached through `a_do_script`, one hop past `mission`.
 -- `chunkname` is echoed only where a chunk was compiled under it; a
--- refusal compiled nothing and carries none. Every chunk may spend
--- `INSTRUCTION_BUDGET` instructions.
+-- refusal compiled nothing and carries none. `max_instructions` is the
+-- count the chunk may spend: absent or empty it is `INSTRUCTION_BUDGET`,
+-- `0` runs the chunk unbounded, a count over `INSTRUCTION_CEILING` is
+-- held to the ceiling rather than refused, and anything but digits is
+-- `bad-request`, because a count read loosely is the one Lua would not
+-- hook.
 function OPS.eval(req)
   if not ALLOW_EVAL then
     return reply(req.id, "unsupported", nil, "eval is disabled in this install")
@@ -1482,7 +1486,18 @@ function OPS.eval(req)
     return reply(req.id, "bad-request", nil,
       "chunkname: " .. #chunkname .. " bytes, over the " .. MAX_CHUNKNAME_BYTES .. "-byte limit")
   end
-  local count = INSTRUCTION_BUDGET
+  local count = req.headers.max_instructions
+  if count == nil or count == "" then
+    count = INSTRUCTION_BUDGET
+  elseif not count:find("^%d+$") then
+    return reply(req.id, "bad-request", nil,
+      "max_instructions: " .. excerpt(count) .. " is not a non-negative integer")
+  else
+    count = tonumber(count)
+    if count > INSTRUCTION_CEILING then
+      count = INSTRUCTION_CEILING
+    end
+  end
   local row = state_row(E.host, state)
   if not row then
     return reply(req.id, "unsupported", nil, state .. " is not a state this host serves")
