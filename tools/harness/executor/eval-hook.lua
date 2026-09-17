@@ -20,7 +20,7 @@
 -- other value named by type. A request that names no state, a state that
 -- is not a name, or a chunkname over the limit is `bad-request`; a state
 -- no host serves and a state with no `loadstring` are `unsupported`;
--- every refusal carries the seven headers and no `chunkname`. The states
+-- every refusal carries the eight headers and no `chunkname`. The states
 -- `net.dostring_in` reaches are `executor/dostring`'s, and
 -- `missionscripting` is `executor/a_do_script`'s. A copy with `ALLOW_EVAL`
 -- off publishes `eval: disabled` and `ops: ping` and answers every `eval`
@@ -43,9 +43,9 @@ local TEMP = [[\Temp\DCS\]]
 -- The reply's headers, in order. The suite's own copy, kept apart from the
 -- executor's on purpose. HEAD is a refusal; OK and ERR are an `eval` that
 -- was compiled.
-local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick" }
-local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "result_type", "chunkname" }
-local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage", "chunkname" }
+local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms" }
+local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname" }
+local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname" }
 
 -- The entries of a directory as the model lists them, sorted, dots dropped.
 local function entries(env, dir)

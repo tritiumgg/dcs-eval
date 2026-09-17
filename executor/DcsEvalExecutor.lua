@@ -156,6 +156,11 @@ local function nothing() end
 -- The frame, defined once the session operations it drives exist.
 local tick
 
+-- The `os.clock` reading the tick took just before the request it is
+-- handling, which every reply to that request is charged from; nil while
+-- no request is being handled.
+local began
+
 -- The callback names seen this session, as a set beside the list the
 -- namespace publishes, so a rare callback firing again is one lookup.
 local seen = {}
@@ -421,6 +426,21 @@ local function stamp()
   return started, pid, string.format("%d-%d", started, pid)
 end
 
+-- The clock the tick is held to its budget by and every reply's `cpu_ms`
+-- is read from, required at load for the same reason the pid is: the
+-- handshake promises `tick_budget_ms`, and an executor with no clock could
+-- keep neither that nor the cost every reply carries, so it refuses to
+-- run rather than publish a promise. Read through `rawget` to the field,
+-- as the pid is, so a state without one answers nil here rather than
+-- raising somewhere else.
+local function clocked()
+  local os = rawget(_G, "os")
+  local clock = type(os) == "table" and rawget(os, "clock")
+  if type(clock) ~= "function" then
+    error("os.clock is absent, so no tick can be held to its budget", 0)
+  end
+end
+
 -- One directory, with its missing parents. `lfs.mkdir` makes one level and
 -- fails under a parent that is not there, so the walk goes up to the first
 -- directory that exists, or to the drive, and makes each on the way back.
@@ -669,13 +689,24 @@ end
 -- doing; `id` echoes the name the request came under, which is only a
 -- filename here, so the reply takes it whatever it spells; `tick` is the
 -- frame counter as the reply is framed, so two replies carrying the same
--- one shared a frame, and one made before any frame carries 0. The
--- session's headers are read off the namespace as the reply is framed, so
--- a figure the session learns to keep later lands here without the caller
--- changing; the CPU cost of a reply is one such, not yet measured.
+-- one shared a frame, and one made before any frame carries 0. `cpu_ms`
+-- is what handling the request has cost so far, in milliseconds to three
+-- places: from just before the tick took it off the disk to the moment the
+-- reply is framed, so the take and the chunk count and the publish of the
+-- reply itself does not, because it has not happened. A reply framed
+-- outside a tick, by a driver off DCS, handled nothing and reads `0.000`,
+-- the clock read once. The name is the wire's; what it counts is
+-- `os.clock`, which under the Microsoft C runtime is time elapsed and not
+-- CPU time, stepping in whole milliseconds, so a cheap request reads
+-- `0.000` and a request that blocks, on the disk or in a call into the
+-- host, is charged the time it blocked. The session's headers are read off
+-- the namespace as the reply is framed, so a figure the session learns to
+-- keep later lands here without the caller changing.
 --
 -- `true`, or nil and what refused, in which case nothing was written.
 local function reply(id, status, headers, body)
+  local clock = rawget(rawget(_G, "os"), "clock")
+  local now = clock()
   local all = {
     { "status", status },
     { "protocol", PROTOCOL },
@@ -684,6 +715,7 @@ local function reply(id, status, headers, body)
     { "phase", E.phase },
     { "id", id },
     { "tick", E.tick },
+    { "cpu_ms", string.format("%.3f", (now - (began or now)) * 1000) },
   }
   for _, header in ipairs(headers or {}) do
     all[#all + 1] = header
@@ -1385,6 +1417,8 @@ local held = {}
 -- the take is nothing to answer, and nothing is counted.
 tick = function()
   E.tick = E.tick + 1
+  began = nil
+  local clock = rawget(rawget(_G, "os"), "clock")
   local lfs = rawget(_G, "lfs")
   local names, listed = {}, {}
   for name in lfs.dir(E.req) do
@@ -1403,6 +1437,7 @@ tick = function()
   table.sort(names)
   for _, name in ipairs(names) do
     local path = E.req .. SEP .. name
+    began = clock()
     local req, status, why, unpublished = admit(path)
     local lost = unpublished and why
     if req then
@@ -1422,6 +1457,7 @@ tick = function()
       end
     end
   end
+  began = nil
 end
 
 -- The leaf of the file DCS loaded, read off the debug library rather than
@@ -1523,6 +1559,7 @@ local function main()
   local host, DCS = detect()
   E = roots(host)
   E.started, E.pid, E.stamp = stamp()
+  clocked()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
   E.frame, E.publish, E.reply, E.take, E.parse, E.admit = frame, publish, reply, take, parse, admit
   E.max_request_bytes = MAX_REQUEST_BYTES

@@ -22,8 +22,8 @@
 -- its name on this runtime, so that check guards the rule and not the
 -- host. Stringify a table with `tostring` and the body is not empty, or
 -- the flag a `__tostring` sets is set. Cut a result at the ceiling instead
--- of refusing it and the reply is `ok` with nine headers where the
--- refusal has ten. Exempt a raise from the ceiling and the raise-over
+-- of refusing it and the reply is `ok` with ten headers where the
+-- refusal has eleven. Exempt a raise from the ceiling and the raise-over
 -- check reads the same.
 local t = ...
 
@@ -34,9 +34,9 @@ local TEMP = [[\Temp\DCS\]]
 
 -- The reply's headers, in order. The suite's own copy, kept apart from the
 -- executor's on purpose. OK is a value answered, OVERSIZE a value refused.
-local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "result_type", "chunkname" }
-local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage", "chunkname" }
-local OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage", "chunkname", "result_bytes" }
+local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname" }
+local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname" }
+local OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "result_bytes" }
 
 -- A hook state over a fresh sandbox with the executor loaded into it.
 -- Returns the namespace, the state and the frame callback.

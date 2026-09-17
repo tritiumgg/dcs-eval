@@ -75,9 +75,9 @@ const HANDSHAKE: [&str; 27] = [
     "max_result_bytes",
 ];
 
-/// The seven headers every reply carries first, then the three a `ping`
+/// The eight headers every reply carries first, then the three a `ping`
 /// adds and the two an `eval` that ran adds.
-const PING: [&str; 10] = [
+const PING: [&str; 11] = [
     "status",
     "protocol",
     "host",
@@ -85,11 +85,12 @@ const PING: [&str; 10] = [
     "phase",
     "id",
     "tick",
+    "cpu_ms",
     "states",
     "last_callback",
     "callbacks",
 ];
-const EVAL: [&str; 9] = [
+const EVAL: [&str; 10] = [
     "status",
     "protocol",
     "host",
@@ -97,6 +98,7 @@ const EVAL: [&str; 9] = [
     "phase",
     "id",
     "tick",
+    "cpu_ms",
     "result_type",
     "chunkname",
 ];
@@ -212,7 +214,7 @@ fn the_shipped_executors_handshake_parses() {
 fn the_ping_reply_parses_and_an_empty_value_arrives_empty() {
     let r = run();
     let (bytes, e) = reply(&r, PING_ID);
-    assert_eq!(names(&e), PING, "the ten headers, in the wire's order");
+    assert_eq!(names(&e), PING, "the eleven headers, in the wire's order");
     assert_eq!(e.headers.get("status"), Some("ok"));
     assert_eq!(e.headers.get("protocol"), Some("2"));
     assert_eq!(e.headers.get("host"), Some("hook"));
@@ -253,7 +255,7 @@ fn the_eval_reply_parses_as_ok_with_an_empty_body() {
     assert_eq!(
         names(&e),
         EVAL,
-        "the seven headers, the result's type and the chunkname, no other"
+        "the eight headers, the result's type and the chunkname, no other"
     );
     assert_eq!(e.headers.get("status"), Some("ok"));
     assert_eq!(e.headers.get("id"), Some(EVAL_ID));
@@ -289,17 +291,28 @@ fn stood_in(s: &Standin, id: &str) -> (Vec<u8>, Envelope) {
 }
 
 /// The stand-in against the executor on one reply: the same names in the
-/// same order, every value the same but the session's stamp, the same
-/// body, and bytes that differ, because the stand-in's dialect is not the
-/// Lua's and the parser read both as one envelope.
+/// same order, every value the same but the session's stamp and the cost
+/// the Lua measured, the same body, and bytes that differ, because the
+/// stand-in's dialect is not the Lua's and the parser read both as one
+/// envelope. The Lua's cost is a number of milliseconds to three places,
+/// whatever the clock read.
 fn agree(id: &str, lua: &(Vec<u8>, Envelope), stand_in: &(Vec<u8>, Envelope)) {
     assert_eq!(
         names(&stand_in.1),
         names(&lua.1),
         "{id}: the same headers in the same order"
     );
+    let cost = lua.1.headers.get("cpu_ms").unwrap_or_default();
+    let (whole, places) = cost.split_once('.').unwrap_or_default();
+    assert!(
+        !whole.is_empty()
+            && whole.bytes().all(|b| b.is_ascii_digit())
+            && places.len() == 3
+            && places.bytes().all(|b| b.is_ascii_digit()),
+        "{id}: cpu_ms is milliseconds to three places: {cost:?}"
+    );
     for (name, value) in lua.1.headers.iter() {
-        if name != "stamp" {
+        if name != "stamp" && name != "cpu_ms" {
             assert_eq!(stand_in.1.headers.get(name), Some(value), "{id}: {name}");
         }
     }

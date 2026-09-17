@@ -6,7 +6,7 @@
 -- What is proved. A `ping` planted under `req` is answered on the next
 -- frame under `res`, the request gone, and the reply is one envelope whose
 -- headers are exactly `status`, `protocol`, `host`, `stamp`, `phase`, `id`,
--- `tick`, `states`, `last_callback`, `callbacks`, in that order, with
+-- `tick`, `cpu_ms`, `states`, `last_callback`, `callbacks`, in that order, with
 -- `pong` as the body. `tick` counts frames from the load and stamps the
 -- reply with the frame that answered it; `states` is what the handshake
 -- declares; `last_callback` is the last callback other than the frame to
@@ -49,8 +49,8 @@ local TEMP = [[\Temp\DCS\]]
 -- The reply's headers, in order. The suite's own copy, kept apart from the
 -- executor's on purpose. HEAD is what every reply carries; a `ping` adds
 -- the three after it.
-local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick" }
-local PING = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "states", "last_callback", "callbacks" }
+local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms" }
+local PING = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "states", "last_callback", "callbacks" }
 
 local HOOK_STATES = "hook:carrier=local,returns=any,needs=always"
   .. " gui:carrier=dostring_in,returns=string,needs=menu"
@@ -338,7 +338,7 @@ do
   host.callbacks.onSimulationFrame()
   t.eq(entries(env, E.res), "5-a.res 5-b.res 5-c.res", "raise: every request is answered")
   local order, v, body = read(E, "5-a")
-  fields(order, { "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage" }, "raise")
+  fields(order, { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage" }, "raise")
   t.eq(v.status, "error", "raise: an op that raises is error")
   t.eq(v.stage, "bridge", "raise: under stage bridge")
   t.eq(body, "boom", "raise: with the message as the body")
@@ -364,7 +364,7 @@ do
   frame()
   t.eq(entries(env, E.req), "6-a.req", "held: the request stays")
   local order, v, body = read(E, "6-a")
-  fields(order, { "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage" }, "held")
+  fields(order, { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage" }, "held")
   t.eq(v.status, "error", "held: answered error")
   t.eq(v.stage, "bridge", "held: under stage bridge")
   t.check(body:find("could not be removed", 1, true), "held: saying why: " .. body)

@@ -53,10 +53,10 @@ local TEMP = [[\Temp\DCS\]]
 -- The reply's headers, in order. The suite's own copy, kept apart from the
 -- executor's on purpose. HEAD is a refusal; OK and ERR are an `eval` that
 -- was compiled; OVERSIZE a result refused.
-local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick" }
-local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "result_type", "chunkname" }
-local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage", "chunkname" }
-local OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage", "chunkname", "result_bytes" }
+local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms" }
+local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname" }
+local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname" }
+local OVERSIZE = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "result_bytes" }
 
 -- The entries of a directory as the model lists them, sorted, dots dropped.
 local function entries(env, dir)

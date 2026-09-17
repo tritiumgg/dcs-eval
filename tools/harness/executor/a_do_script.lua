@@ -59,13 +59,13 @@ local TEMP = [[\Temp\DCS\]]
 -- The reply's headers, in order. The suite's own copy, kept apart from the
 -- executor's on purpose. Every reply through `a_do_script` ends with the
 -- two that say so.
-local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "carrier", "via" }
-local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "result_type", "chunkname", "carrier", "via" }
-local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage", "chunkname", "carrier", "via" }
+local HEAD = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "carrier", "via" }
+local OK = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "result_type", "chunkname", "carrier", "via" }
+local ERR = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "carrier", "via" }
 local OVERSIZE = {
-  "status", "protocol", "host", "stamp", "phase", "id", "tick", "stage", "chunkname", "result_bytes", "carrier", "via",
+  "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "stage", "chunkname", "result_bytes", "carrier", "via",
 }
-local PLAIN = { "status", "protocol", "host", "stamp", "phase", "id", "tick" }
+local PLAIN = { "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms" }
 
 -- The entries of a directory as the model lists them, sorted, dots dropped.
 local function entries(env, dir)

@@ -5,7 +5,7 @@
 //! It stands in for the executor's `tick` and `reply` in
 //! `DcsEvalExecutor.lua`: a session directory with `req` and `res` under a
 //! stamp, a tick that lists requests and answers them in name order, a
-//! reply with the seven headers the executor puts first, the `ping` op,
+//! reply with the eight headers the executor puts first, the `ping` op,
 //! and `eval` as far as its checks go: no chunk runs here, and one that
 //! passes them is answered as one that returned nil. What it answers, it
 //! answers as the executor does, message for
@@ -30,6 +30,8 @@
 //! be published and the `dcs.log` line for one, the dormant probe on the
 //! arm file, which the executor does not have yet either, and the
 //! handshake and heartbeat files, which arrive with the readers for them.
+//! Nor is the tick budget: the stand-in answers every request it lists in
+//! one tick, and measures nothing, so every reply's `cpu_ms` is `0.000`.
 //! A request name that is not UTF-16 is read lossily where the executor
 //! reads bytes; no client mints one.
 
@@ -156,7 +158,7 @@ fn decode(bytes: &[u8]) -> Result<Decoded, String> {
 // ---- the session, the tick and the reply -----------------------------------
 
 /// The parts of a reply the tick composes for one request: the status, the
-/// op's own headers after the seven every reply carries, and the body.
+/// op's own headers after the eight every reply carries, and the body.
 struct Answer {
     status: &'static str,
     headers: Vec<(&'static str, String)>,
@@ -439,7 +441,7 @@ impl Standin {
         }
     }
 
-    /// A reply to `id`: the seven headers the executor puts first, in its
+    /// A reply to `id`: the eight headers the executor puts first, in its
     /// order, then `headers`, then `body`, encoded this side's way and
     /// published as `<res>/<id>.res` through `<id>.res.tmp` beside it. The
     /// refusal is the encoder's, or `<path>: <what the OS said>` as the
@@ -460,6 +462,7 @@ impl Standin {
             ("phase", self.phase.as_str()),
             ("id", id),
             ("tick", tick.as_str()),
+            ("cpu_ms", "0.000"),
         ];
         all.extend_from_slice(headers);
         let bytes = encode(&all, body)?;
@@ -490,7 +493,7 @@ mod tests {
     }
 
     /// The executor's reply shape with a caller's header after it.
-    const REPLY: [(&str, &str); 8] = [
+    const REPLY: [(&str, &str); 9] = [
         ("status", "ok"),
         ("protocol", "2"),
         ("host", "hook"),
@@ -498,6 +501,7 @@ mod tests {
         ("phase", "menu"),
         ("id", "0000000001-abcd"),
         ("tick", "0"),
+        ("cpu_ms", "0.000"),
         ("result_type", "string"),
     ];
 
@@ -664,8 +668,10 @@ mod tests {
     /// The reply's headers, in order: what every reply carries, and what
     /// a `ping` adds after it. The suite's own copy, kept apart from the
     /// module's.
-    const HEAD: [&str; 7] = ["status", "protocol", "host", "stamp", "phase", "id", "tick"];
-    const PING: [&str; 10] = [
+    const HEAD: [&str; 8] = [
+        "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms",
+    ];
+    const PING: [&str; 11] = [
         "status",
         "protocol",
         "host",
@@ -673,11 +679,12 @@ mod tests {
         "phase",
         "id",
         "tick",
+        "cpu_ms",
         "states",
         "last_callback",
         "callbacks",
     ];
-    const EVAL: [&str; 9] = [
+    const EVAL: [&str; 10] = [
         "status",
         "protocol",
         "host",
@@ -685,6 +692,7 @@ mod tests {
         "phase",
         "id",
         "tick",
+        "cpu_ms",
         "result_type",
         "chunkname",
     ];
@@ -718,7 +726,7 @@ mod tests {
     }
 
     /// A reply that is a refusal: its status and its message, with only the
-    /// seven headers.
+    /// eight headers.
     fn refused(s: &Standin, id: &str, status: &str, why: &str) {
         let e = read(s, id);
         fields(&e, &HEAD, id);

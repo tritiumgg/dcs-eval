@@ -369,7 +369,7 @@ mod tests {
 
     #[test]
     fn frame_the_executors_reply_shape() {
-        // The seven headers the executor puts before a caller's, then the
+        // The eight headers the executor puts before a caller's, then the
         // caller's, then the framer suite's body, byte for byte.
         let protocol = PROTOCOL.to_string();
         let headers = [
@@ -380,12 +380,13 @@ mod tests {
             ("phase", "menu"),
             ("id", "0000000001-abcd"),
             ("tick", "0"),
+            ("cpu_ms", "0.000"),
             ("result_type", "string"),
         ];
         let body = b"\xd0\xbf\xd1\x80\0\xff caf\xe9\r\nstatus: fake\n";
         let mut want =
             b"status: ok\nprotocol: 2\nhost: hook\nstamp: 0000000001-abcd\nphase: menu\n\
-                         id: 0000000001-abcd\ntick: 0\nresult_type: string\n\n"
+                         id: 0000000001-abcd\ntick: 0\ncpu_ms: 0.000\nresult_type: string\n\n"
                 .to_vec();
         want.extend_from_slice(body);
         assert_eq!(framed(&headers, body), want);
@@ -746,7 +747,7 @@ mod tests {
     // ---- round trips ------------------------------------------------------
 
     /// The executor's reply shape with a caller's header after it.
-    const REPLY: [(&str, &str); 8] = [
+    const REPLY: [(&str, &str); 9] = [
         ("status", "ok"),
         ("protocol", "2"),
         ("host", "hook"),
@@ -754,6 +755,7 @@ mod tests {
         ("phase", "menu"),
         ("id", "0000000001-abcd"),
         ("tick", "0"),
+        ("cpu_ms", "0.000"),
         ("result_type", "string"),
     ];
 

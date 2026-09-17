@@ -228,7 +228,7 @@ do
   t.eq(entries(env, E.res), id .. ".res", "after it the directory holds the reply and no .tmp")
   t.eq(slurp(final),
     "status: ok\nprotocol: 2\nhost: hook\nstamp: " .. E.stamp .. "\nphase: menu\nid: " .. id
-      .. "\ntick: 0\nresult_type: string\n\n" .. body,
+      .. "\ntick: 0\ncpu_ms: 0.000\nresult_type: string\n\n" .. body,
     "the reply is the session's headers, the caller's, the blank line, the body byte for byte")
 end
 
@@ -236,7 +236,7 @@ do
   local E, _, _, log = spied("export")
   t.eq(E and E.reply("1-a", "error", nil, "no"), true, "export: a reply with no headers of the caller's is published")
   t.eq(slurp(E.res .. "\\1-a.res"),
-    "status: error\nprotocol: 2\nhost: export\nstamp: " .. E.stamp .. "\nphase: loaded\nid: 1-a\ntick: 0\n\nno",
+    "status: error\nprotocol: 2\nhost: export\nstamp: " .. E.stamp .. "\nphase: loaded\nid: 1-a\ntick: 0\ncpu_ms: 0.000\n\nno",
     "export: the reply names its host and phase")
   t.eq(ops(log), published(E.res .. "\\1-a.res"), "export: the same sequence")
 end
