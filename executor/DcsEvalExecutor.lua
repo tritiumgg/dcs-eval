@@ -1399,15 +1399,25 @@ end
 -- request.
 local held = {}
 
--- The frame. Every frame the request directory is listed and every request
--- in it is answered, in name order, so replies come back in the order
+-- The frame. Every frame the request directory is listed and the requests
+-- in it are answered in name order, so replies come back in the order
 -- requests were published, and a client that publishes several shares the
 -- tick between them. Only a name ending in exactly `.req` is a request: a
 -- client publishes by rename from `.req.tmp`, and a reader with a looser
 -- suffix would meet a half-written file. Listing every frame is the armed
 -- shape; the dormant one, which lists nothing until a client wakes it, is
--- not built, and neither is the budget that stops the tick taking more
--- once it has spent its share of the frame.
+-- not built.
+--
+-- The tick is held to `TICK_BUDGET_MS` of the frame, counted by `os.clock`
+-- from before the listing, so the listing is spent from it too. The budget
+-- is read between requests and never inside one: a request once taken runs
+-- to its reply, and what bounds a single chunk is not this. Before each
+-- request after the first, a tick that has spent its budget stops, and
+-- every name it did not reach is left on the disk untouched, to be listed
+-- again and answered first on the next frame, so order holds across the
+-- break. The first request is never refused the tick, so a listing or a
+-- chunk that spends the whole budget alone answers one request a frame
+-- rather than none.
 --
 -- A request `admit` answered `error` and left on the disk is held, whether
 -- or not its reply reached the disk. A reply that could not be published,
@@ -1419,6 +1429,7 @@ tick = function()
   E.tick = E.tick + 1
   began = nil
   local clock = rawget(rawget(_G, "os"), "clock")
+  local start = clock()
   local lfs = rawget(_G, "lfs")
   local names, listed = {}, {}
   for name in lfs.dir(E.req) do
@@ -1435,9 +1446,12 @@ tick = function()
     end
   end
   table.sort(names)
-  for _, name in ipairs(names) do
-    local path = E.req .. SEP .. name
+  for i, name in ipairs(names) do
     began = clock()
+    if i > 1 and (began - start) * 1000 >= TICK_BUDGET_MS then
+      break
+    end
+    local path = E.req .. SEP .. name
     local req, status, why, unpublished = admit(path)
     local lost = unpublished and why
     if req then
