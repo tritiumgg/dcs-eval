@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-16
+**Last updated:** 2026-09-17
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T23 landed; T24 has not started.
+Nothing. T24 landed; T25 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,20 +25,19 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T24** — the instruction budget: `instr-budget: 2209 checks`. RUN source beside CONVERT sets a count hook in the chunk's state (`stage: budget`, position kept, spent stays spent, the executor's own gap ignored, a hook already set left alone as `none`); `max_instructions` read and clamped; `budget` after `chunkname`; the wrapper answers four fields (ADR 0005 supersedes 0003); bad figures stop the load; eight mutations seen red.
 - **T23** — the tick budget and `cpu_ms`: `tick-budget: 507 checks`. `cpu_ms` follows `tick` on every reply, charged from before the take; past `TICK_BUDGET_MS`, read by `os.clock` from before the listing, no request after the first is taken and the rest wait in order; no `os.clock` stops the load; the model clock moves only when a suite moves it; seven mutations seen red.
 - **T22** — the `a_do_script` shift fixture: `a_do_script-shift: 118 checks`. The suite's own `a_do_script` is held to the incumbent's measured table by `select("#")` (nothing-returned left unpinned), then a lone value crosses through `FAR`'s `0` and is lost without it, refused `stage: a_do_script`; four mutations seen red.
-- **T21** — `missionscripting` through `a_do_script`: `a_do_script: 706 checks`. `net.dostring_in` carries `NEAR` into `mission` with the body and `chunkname` as `%q` literals; `NEAR` reads `a_do_script` at use (`no-mission` without one) and passes them to the constant `FAR`, the wrapper reading them from `...` and ending `, 0`; slot 2 is read, a non-string there refused `stage: a_do_script` naming both slots; names from ADR 0004; every reply carries `carrier`/`via`; eight mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T24** — the instruction count-hook budget inside the chunk, refused at
-load for `0`/non-integer, `budget: none` in `mission`. Done when `lua5.1
-tools/harness.lua executor/instr-budget` shows a looping chunk stopped `stage:
-budget` where `debug` exists and `budget: none` in `mission`; mutation: an
-`INSTRUCTION_BUDGET` of `0` silently defaulted reddens the load-time refusal.
-Needs T18. The wrapper and the local carrier take the hook together.
+**Task T25** — the stamp fence: `for` ≠ stamp → `stale-session`, reply
+stamp mismatch → discarded `foreign`, chunk never runs. Done when `lua5.1
+tools/harness.lua executor/fence` shows a foreign `for` answered
+`stale-session` without running, at load and on a tick; mutation: running the
+chunk anyway reddens the kill-reproduction control. Needs T10.
 
 **An agent verifies** it: the harness under `lua5.1.exe` on PATH under mise.
 
@@ -75,11 +74,11 @@ entries at most: an eleventh means something here is finished, or belongs in
   one that raises inside `net.dostring_in`, and whether every state has
   `setfenv` and `_G`, is unmeasured; the model's stubs evaluate nothing. The
   carrier is proved against the incumbent's measured shift and `...`, not T49's.
-  Whether DCS's `os.clock` steps as the harness interpreter's does is unmeasured.
+  Unmeasured too: DCS's `os.clock` against the harness's, a count hook raising
+  inside either carrier, and a DCS state already holding one (`none`, ADR 0005).
 - **Declared before served, and absent before counted.** The handshake
   publishes `ops`, `states`, `eval` and the five figures from the first load,
-  the two instruction figures provisional; each task reads its constant. No
-  `budget` until T24. No `state` is `bad-request`: the maintainer's call, 2026-09-11.
+  the two instruction figures provisional. No `state` is `bad-request`: the maintainer's call, 2026-09-11.
 - **A path with a byte past ASCII stops the load.** Header values are ASCII,
   a user name past ASCII puts such a byte in every path the handshake names,
   and the executor refuses the file with the header named in `dcs.log`. The
