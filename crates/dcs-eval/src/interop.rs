@@ -26,6 +26,11 @@
 //! executor serves in place; the states behind `net.dostring_in` and
 //! `a_do_script` are proved by their own harness suites.
 //!
+//! A third request names another session's stamp, so the fence answers it
+//! `stale-session` with `for`, the one header no other reply carries. The
+//! chunk it sent is the same one the `eval` sends, and the reply says it
+//! never ran.
+//!
 //! A user name with a byte past ASCII puts that byte in every path the
 //! handshake names, and the executor refuses its own handshake: this test
 //! is red on such a machine by the executor's rule, not by a defect here.
@@ -42,6 +47,11 @@ use crate::testing::{Sandbox, entries, slurp};
 const SUITE: &str = "executor/interop";
 const PING_ID: &str = "0000000001-ping";
 const EVAL_ID: &str = "0000000002-eval";
+const FENCE_ID: &str = "0000000003-fence";
+
+/// The stamp the fenced request names. Two digits and a dash cannot be a
+/// stamp this session minted, whose pid alone is longer than that.
+const FOREIGN: &str = "1-1";
 
 /// The handshake's headers in order. The test's own copy, kept apart from
 /// the executor's and the harness's on purpose.
@@ -102,6 +112,10 @@ const EVAL: [&str; 11] = [
     "result_type",
     "chunkname",
     "budget",
+];
+/// And the one a fenced request adds: the stamp it named.
+const FENCE: [&str; 9] = [
+    "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "for",
 ];
 
 /// The checkout root: two above this crate's manifest.
@@ -283,8 +297,44 @@ fn the_eval_reply_parses_as_ok_with_an_empty_body() {
     );
     assert_eq!(
         entries(&r.res),
-        format!("{PING_ID}.res {EVAL_ID}.res"),
-        "both replies under their final names, no .tmp"
+        format!("{PING_ID}.res {EVAL_ID}.res {FENCE_ID}.res"),
+        "every reply under its final name, no .tmp"
+    );
+}
+
+#[test]
+fn the_fenced_reply_parses_and_names_the_stamp_it_was_sent_to() {
+    // The fence's reply is the one the client must read to know its
+    // request was refused rather than run, and `for` is the one header no
+    // other reply carries.
+    let r = run();
+    let (bytes, e) = reply(&r, FENCE_ID);
+    assert_eq!(names(&e), FENCE, "the eight, then the stamp it named");
+    assert_eq!(e.headers.get("status"), Some("stale-session"));
+    assert_eq!(e.headers.get("id"), Some(FENCE_ID));
+    assert_eq!(
+        e.headers.get("stamp"),
+        r.handshake.headers.get("stamp"),
+        "the session that refused it is the one the handshake names"
+    );
+    assert_eq!(
+        e.headers.get("for"),
+        Some(FOREIGN),
+        "and the stamp the request asked for is echoed, not the session's"
+    );
+    let stamp = r.handshake.headers.get("stamp").expect("a stamp");
+    assert_eq!(
+        e.body,
+        format!(
+            "for: {FOREIGN} is not this session's stamp, {stamp}: the request was \
+             written for another session and was not run"
+        )
+        .into_bytes(),
+        "the message names both stamps"
+    );
+    assert!(
+        bytes.ends_with(&e.body),
+        "the body is the message and nothing after it"
     );
 }
 
@@ -334,7 +384,7 @@ fn the_stand_in_answers_as_the_shipped_executor_does() {
     let r = run();
     let mut s = Standin::open(&r.b.join("standin"), "hook").expect("the stand-in opens");
     let stamp = s.stamp.clone();
-    // The same two requests the Lua suite plants, answered on one tick as
+    // The same three requests the Lua suite plants, answered on one tick as
     // the Lua answered them on one frame, so the ticks agree too.
     send(
         s.req(),
@@ -352,7 +402,48 @@ fn the_stand_in_answers_as_the_shipped_executor_does() {
         b"return nil",
     )
     .expect("the eval sends");
+    send(
+        s.req(),
+        s.arm(),
+        FENCE_ID,
+        &[("op", "eval"), ("for", FOREIGN), ("state", "hook")],
+        b"return nil",
+    )
+    .expect("the fenced eval sends");
     s.tick();
     agree(PING_ID, &reply(&r, PING_ID), &stood_in(&s, PING_ID));
     agree(EVAL_ID, &reply(&r, EVAL_ID), &stood_in(&s, EVAL_ID));
+    // The fenced reply's message names the session's own stamp, which is
+    // the one value the two sides cannot share, so this one is compared
+    // here rather than through `agree`: the same headers in the same order
+    // and the same values but `stamp` and `cpu_ms`, as `agree` holds them,
+    // and then the body with each side's own stamp masked.
+    let (lua, stand_in) = (reply(&r, FENCE_ID), stood_in(&s, FENCE_ID));
+    assert_eq!(
+        names(&stand_in.1),
+        names(&lua.1),
+        "{FENCE_ID}: the same headers in the same order"
+    );
+    for (name, value) in lua.1.headers.iter() {
+        if name != "stamp" && name != "cpu_ms" {
+            assert_eq!(
+                stand_in.1.headers.get(name),
+                Some(value),
+                "{FENCE_ID}: {name}"
+            );
+        }
+    }
+    assert_eq!(
+        stand_in.1.headers.get("for"),
+        lua.1.headers.get("for"),
+        "{FENCE_ID}: both echo the stamp the request named"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&stand_in.1.body).replace(&s.stamp, "<stamp>"),
+        String::from_utf8_lossy(&lua.1.body).replace(
+            r.handshake.headers.get("stamp").expect("a stamp"),
+            "<stamp>"
+        ),
+        "{FENCE_ID}: the same message but for the session that wrote it"
+    );
 }

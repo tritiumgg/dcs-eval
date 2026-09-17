@@ -14,18 +14,22 @@
 -- per run, unswept: the check below that the directory exists is the only
 -- guard, and this comment the warning.
 --
--- What is planted. A `ping` and an `eval`, then one frame. The `eval`
+-- What is planted. A `ping`, an `eval` and an `eval` for another session,
+-- then one frame. The `eval`
 -- names `hook`, the state the executor serves in place with the model's
 -- own `loadstring`, and returns nil, so its reply is `ok` with
 -- `result_type: nil` and an empty body: the wire's spelling for a chunk
 -- that answered nothing, which the reader must see as empty and not as
 -- absent. That is why `loadstring` is the model's own here and not the
--- failing one `executor/ping` installs.
+-- failing one `executor/ping` installs. The third names a stamp that is
+-- not this session's, so the fence answers it `stale-session` and echoes
+-- the stamp it named, which puts the one header no other reply carries on
+-- the wire for the client's parser to read.
 --
 -- What is proved here is only that the run went where the reader looks:
 -- the load got past containment over this box, nothing reached `dcs.log`,
--- both requests were taken and both replies published under their final
--- names, and the handshake is on the disk. No envelope is read here on
+-- every request was taken and every reply published under its final
+-- name, and the handshake is on the disk. No envelope is read here on
 -- purpose: reading them is the Rust half's claim, and a check here that
 -- read them would prove the suite's own reader, not the client's.
 local t = ...
@@ -76,12 +80,13 @@ t.eq(host.log, nil, "and nothing reached dcs.log: no refusal, no fallback")
 
 request(E, "0000000001-ping.req", "op: ping\nfor: " .. E.stamp .. "\n\n")
 request(E, "0000000002-eval.req", "op: eval\nfor: " .. E.stamp .. "\nstate: hook\n\nreturn nil")
+request(E, "0000000003-fence.req", "op: eval\nfor: 1-1\nstate: hook\n\nreturn nil")
 host.callbacks.onSimulationFrame()
 
 t.eq(E.tick, 1, "one frame ran")
-t.eq(entries(env, E.req), "", "both requests were taken")
-t.eq(entries(env, E.res), "0000000001-ping.res 0000000002-eval.res",
-  "both replies are under res by their final names, no .tmp")
+t.eq(entries(env, E.req), "", "every request was taken")
+t.eq(entries(env, E.res), "0000000001-ping.res 0000000002-eval.res 0000000003-fence.res",
+  "every reply is under res by its final name, no .tmp")
 t.eq(E.raised, 0, "nothing raised")
 t.eq(E.unpublished, 0, "nothing failed to publish")
 t.eq(env.lfs.attributes(E.handshake, "mode"), "file", "the handshake is on the disk")

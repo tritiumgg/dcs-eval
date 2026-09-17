@@ -99,6 +99,18 @@ pub fn encode(headers: &[(&str, &str)], body: &[u8]) -> Result<Vec<u8>, String> 
     Ok(out)
 }
 
+/// The start of a value for a message, as the executor excerpts one: the
+/// first 80 bytes and three dots where it is longer. Bytes, not characters,
+/// because the executor counts bytes and a header value is ASCII by the
+/// time either side reads it.
+fn excerpt(value: &str) -> String {
+    if value.len() > 80 {
+        format!("{}...", &value[..80])
+    } else {
+        value.to_owned()
+    }
+}
+
 /// The headers of a request as read, in wire order, and its body.
 type Decoded = (Vec<(String, String)>, Vec<u8>);
 
@@ -295,9 +307,10 @@ impl Standin {
     /// The request at `path` taken and answered, the executor's way and in
     /// its words: the size read first and one over the limit refused
     /// unopened; the bytes read and the file removed before anything is
-    /// done with them; then the envelope, `for`, `op` and the body checked
-    /// in that order, and the op dispatched. `None` when the file was gone
-    /// before it could be read, which the executor answers nothing to.
+    /// done with them; then the envelope, `for` present, `for` this
+    /// session's, `op` and the body checked in that order, and the op
+    /// dispatched. `None` when the file was gone before it could be read,
+    /// which the executor answers nothing to.
     fn answer(&self, path: &Path) -> Option<Answer> {
         let size = fs::metadata(path).ok()?.len();
         if size > MAX_REQUEST_BYTES {
@@ -326,11 +339,31 @@ impl Standin {
             Ok(decoded) => decoded,
             Err(why) => return Some(Answer::refusal("bad-request", why)),
         };
-        if header(&headers, "for").is_none_or(str::is_empty) {
-            return Some(Answer::refusal(
-                "bad-request",
-                "no for: the request does not name the session stamp it is for".to_owned(),
-            ));
+        match header(&headers, "for") {
+            None | Some("") => {
+                return Some(Answer::refusal(
+                    "bad-request",
+                    "no for: the request does not name the session stamp it is for".to_owned(),
+                ));
+            }
+            // The fence, in the executor's place and its words: a request
+            // for another session is answered on its stamp alone, before
+            // an op is looked for, and the stamp it named comes back so a
+            // client can see which session it addressed.
+            Some(named) if named != self.stamp => {
+                return Some(Answer {
+                    status: "stale-session",
+                    headers: vec![("for", named.to_owned())],
+                    body: format!(
+                        "for: {} is not this session's stamp, {}: the request was \
+                         written for another session and was not run",
+                        excerpt(named),
+                        self.stamp
+                    )
+                    .into_bytes(),
+                });
+            }
+            Some(_) => {}
         }
         let op = match header(&headers, "op") {
             Some(op) if !op.is_empty() => op,
@@ -701,6 +734,9 @@ mod tests {
     /// module's.
     const HEAD: [&str; 8] = [
         "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms",
+    ];
+    const FENCED: [&str; 9] = [
+        "status", "protocol", "host", "stamp", "phase", "id", "tick", "cpu_ms", "for",
     ];
     const PING: [&str; 11] = [
         "status",
@@ -1177,26 +1213,122 @@ mod tests {
     }
 
     #[test]
-    fn a_foreign_for_is_answered_as_the_executor_answers_it() {
-        // The executor requires `for` and does not yet compare it with its
-        // stamp; the fence that answers `stale-session` is a later task,
-        // on both sides. Until then a foreign stamp is answered, and this
-        // pins that the stand-in does what the executor does.
+    fn a_foreign_for_is_fenced_out_as_the_executor_fences_it() {
+        // The fence: a `for` that is not this session's stamp is answered
+        // `stale-session` before the op is looked for, so an `eval` whose
+        // body would have run does not reach one. A long stamp comes back
+        // whole in the header and excerpted in the message, the way the
+        // executor splits the two.
         let b = Sandbox::new();
         let mut s = opened(&b, "hook");
+        let long = "9".repeat(100);
         sent(
             &s,
             "0000000001-abcd",
             &[("op", "ping"), ("for", "1-1")],
             b"",
         );
-        assert_eq!(s.tick(), ["0000000001-abcd"]);
+        sent(
+            &s,
+            "0000000002-abcd",
+            &[("op", "eval"), ("for", &long), ("state", "hook")],
+            b"return 1",
+        );
+        sent(&s, "0000000003-abcd", &[("for", "1-1")], b"");
+        // The byte the excerpt turns on, in both directions: eighty is not
+        // longer than eighty and comes back whole, eighty-one is cut. The
+        // shipped Lua is pinned at the same two bytes by `executor/fence`,
+        // because a stamp of three bytes or of a hundred cannot tell a cut
+        // at eighty from a cut past it, and the two dialects would then be
+        // free to read the rule differently.
+        let eighty = "8".repeat(80);
+        let past = "7".repeat(81);
+        sent(&s, "0000000004-abcd", &[("for", &eighty)], b"");
+        sent(&s, "0000000005-abcd", &[("for", &past)], b"");
+        // The echo is uncapped on this side too. Nothing above is long
+        // enough to say so: a cap at the two hundred bytes a `chunkname` is
+        // capped at would leave every stamp here whole, and `executor/fence`
+        // pins the shipped Lua at three hundred for the same reason.
+        let uncapped = "6".repeat(300);
+        sent(&s, "0000000006-abcd", &[("for", &uncapped)], b"");
+        assert_eq!(s.tick().len(), 6);
+
         let e = read(&s, "0000000001-abcd");
-        assert_eq!(e.headers.get("status"), Some("ok"));
+        assert_eq!(e.headers.get("status"), Some("stale-session"));
         assert_eq!(
             e.headers.get("stamp"),
             Some(s.stamp.as_str()),
             "the reply names the real stamp"
+        );
+        fields(&e, &FENCED, "the eight, then the stamp the request named");
+        assert_eq!(e.headers.get("for"), Some("1-1"));
+        assert_eq!(
+            e.body,
+            format!(
+                "for: 1-1 is not this session's stamp, {}: the request was written \
+                 for another session and was not run",
+                s.stamp
+            )
+            .into_bytes()
+        );
+
+        let e = read(&s, "0000000002-abcd");
+        assert_eq!(e.headers.get("status"), Some("stale-session"));
+        assert_eq!(
+            e.headers.get("for"),
+            Some(long.as_str()),
+            "the header carries the stamp whole"
+        );
+        assert!(
+            e.body
+                .starts_with(format!("for: {}...", "9".repeat(80)).as_bytes()),
+            "and the message excerpts it at 80 bytes"
+        );
+
+        let e = read(&s, "0000000003-abcd");
+        assert_eq!(
+            e.headers.get("status"),
+            Some("stale-session"),
+            "the stamp is judged before the op, so a foreign request with none is foreign"
+        );
+
+        let e = read(&s, "0000000004-abcd");
+        assert_eq!(e.headers.get("for"), Some(eighty.as_str()));
+        assert_eq!(
+            e.body,
+            format!(
+                "for: {eighty} is not this session's stamp, {}: the request was written \
+                 for another session and was not run",
+                s.stamp
+            )
+            .into_bytes(),
+            "eighty bytes are not longer than eighty, so the message carries them whole"
+        );
+
+        let e = read(&s, "0000000005-abcd");
+        assert_eq!(e.headers.get("for"), Some(past.as_str()));
+        assert_eq!(
+            e.body,
+            format!(
+                "for: {}... is not this session's stamp, {}: the request was written \
+                 for another session and was not run",
+                "7".repeat(80),
+                s.stamp
+            )
+            .into_bytes(),
+            "eighty-one are, so the message is cut to eighty and three dots"
+        );
+
+        let e = read(&s, "0000000006-abcd");
+        assert_eq!(
+            e.headers.get("for"),
+            Some(uncapped.as_str()),
+            "three hundred bytes come back whole, uncapped at two hundred"
+        );
+        assert!(
+            e.body
+                .starts_with(format!("for: {}...", "6".repeat(80)).as_bytes()),
+            "while the message still excerpts at eighty"
         );
     }
 
