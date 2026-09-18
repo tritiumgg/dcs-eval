@@ -1721,6 +1721,16 @@ tick = function()
   if not E.armed then
     if E.tick % PROBE_EVERY == 0 and attributes(E.arm, "mode") then
       E.armed = true
+      E.quiet_since = nil
+      -- The waking frame says so in the events log, and no dormant frame
+      -- writes anything, which is why the dormant frame's cost is what it
+      -- is. The fields are the executor's own words, so none is cut or
+      -- stripped the way a client's spelling is; the first is `arm`,
+      -- neither of the two markers a reader keys on, so a supervisor
+      -- reading the dispatch pairs passes over this line without being
+      -- told about it. ADR 0007 is why the markers are the executor's to
+      -- spell and a client's to never.
+      record("arm|" .. E.stamp .. "|" .. E.tick)
     end
     return
   end

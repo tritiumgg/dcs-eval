@@ -206,6 +206,29 @@ do
   t.eq(E.armed, true, "and it is awake afterwards")
   t.eq(entries(spy, E.req), "", "the request was taken")
   t.eq(spy.dirs, 1, "an ordinary armed tick lists once")
+
+  local arms = marked(E, "arm")
+  t.eq(#arms, 1, "the wake wrote one arm line")
+  t.eq(arms[1], "arm|" .. E.stamp .. "|" .. PROBE_EVERY, "which names the session and the tick it woke on")
+  local first = arms[1]:match("^([^|]*)|")
+  t.check(first ~= "B" and first ~= "O", "whose first field is neither marker: " .. tostring(first))
+end
+
+--------------------------------------------------------------------------------
+-- A frame that finds nothing writes nothing
+--------------------------------------------------------------------------------
+
+do
+  local E, env, host, spy = loaded("hook")
+  local frame = framer("hook", env, host, spy)
+  E.armed = false
+  local before = #lines(E)
+  for _ = 1, 100 do
+    frame()
+  end
+  t.eq(E.armed, false, "a hundred dormant frames found no arm file")
+  t.eq(#lines(E), before, "and wrote not one line")
+  t.eq(#marked(E, "arm"), 0, "no arm line among them")
 end
 
 --------------------------------------------------------------------------------
