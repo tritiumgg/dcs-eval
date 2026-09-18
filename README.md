@@ -30,7 +30,10 @@ The dormant frame is built and held to zero allocations by the harness, and so
 are the two transitions around it: the executor loads asleep, wakes within a
 few frames of the arm file a client writes beside its first request, and after
 a few seconds with nothing to answer removes that file itself and goes back to
-sleep.
+sleep. While it is awake it writes a heartbeat file every couple of seconds,
+and at every arm, disarm and phase change; while it is asleep it writes none,
+which is the point — a tool asking how things are reads that file and the
+process id and costs the game nothing.
 
 ## Install — *not built*
 

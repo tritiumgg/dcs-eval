@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T28 landed; T29 has not started.
+Nothing. T29 landed; T30 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,23 +25,23 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T29** — the heartbeat writer: `heartbeat: 300 checks`. `<output>\heartbeat.txt` is one envelope carrying `protocol`, `host`, `stamp`, `transport`, `phase`, `armed`, `since`, `ticks`, `last_callback` and `callbacks` (ADR 0010 names the four of the specification's table this session does not keep, and why). It is written at every arm, at every disarm, on every phase change and every 2 s while armed, off the one `os.time` an armed frame now reads for both the beat and the quiet window (ADR 0009, which narrows ADR 0008's cost sentence and leaves its decision standing; `executor/arming`'s "reads no wall clock" check became "reads it exactly once"). A dormant frame writes nothing at all, and every phase change also appends `phase|<stamp>|<from>|<to>|<tick>` to `events.log`, whose first field is neither `B` nor `O`. Proved for both hosts: zero writes across 160 dormant frames spanning 160 intervals, one per transition, one per change and none for a callback repeating its phase, one per interval idle and busy alike, a transition and a due beat on one frame writing one file, and a hand-armed session's first armed frame answering without a raise. The mutation was seen red — a dormant path that keeps beating writes 160 where the suite wants zero. An agent verified every claim itself under the pinned lua5.1.5: the suite drives the frame, fakes the wall clock through a wrapper on `env.os.time` and counts the writes through one on `env.io.open` rather than trusting a counter the executor keeps about itself. It did not see, and does not claim, what one `os.time` per armed frame costs at DCS's frame rate, whether DCS's `os.time` and `os.date` behave in every state as they do here, or how often a beat lands on a loading screen; all Stage 9's.
 - **T28** — arming and disarming: `arming: 95 checks`. The load is asleep; the arm file a client writes beside its request wakes it within `PROBE_EVERY`+1 frames, and an armed frame that has listed nothing for `QUIET_S` seconds of `os.time` (ADR 0008) disarms in the order that makes the race unwinnable — arm file removed, one more listing, recreate and stay awake if it holds a request, otherwise record and sleep. Proved: a request published after that listing's snapshot answered, one published before it keeping the executor awake, an abandoned arm file costing one quiet period, a global in a target state outliving a sleep, and every arm and disarm an `events.log` line whose first field is neither `B` nor `O`. The mutation was seen red — the removal below the listing strands the request. An agent verified every claim itself under the pinned lua5.1.5 on this machine: the suite drives the frame, fakes the wall clock through a wrapper on `env.os.time`, counts and hooks the listings through one on `env.lfs.dir`, and reads the log and the arm file off a sandbox. It did not see, and does not claim, what a quiet period costs at DCS's frame rate or whether `os.time` behaves in every DCS state as it does here; both are Stage 9's.
 - **T27** — the dormant path: `dormant: 40 checks`. A frame that is not armed advances its counter and returns — no clock read, no listing, no table, no record — and probes the arm file through an `lfs.attributes` held from the load one frame in eight and on no other; a hundred thousand such frames grow `collectgarbage('count')` by zero once the callback wrapper's one-off 0.797 KB is paid, `lfs.dir` and `os.clock` are never called, and a probe that answers arms the frame again, so the path is escapable. An agent verified every claim itself under the pinned lua5.1.5 on this machine; the per-frame cost inside DCS is not claimed and stays T48's row, which now carries the baseline and its caveat.
-- **T26** — the events log and its markers: `events: 114 checks`. The load moves the last generation to `events.prev.log` and opens a new one with its banner; every dispatch is bracketed `B|<id>|<op>|<state>|<stamp>` and `O|<id>|<status>|<cpu_ms>` with the reply's own figures, a request refused before dispatch gets no pair, a field a client spells is cut at eighty bytes and stripped of the separator (ADR 0007), and the crossing into `missionscripting` is marked through `log.write` inside `mission`. The killer is read out of the file as the chunk that would have killed DCS sees it, by a reader kept in `tools/harness/crasher.lua`; thirteen mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T29** — the heartbeat writer: `armed`, `since`, `phase`, `ticks`,
-`last_callback`, `callbacks`, event-driven while dormant and every 2 s while
-armed. Done when `executor/heartbeat` shows it written at every arm, disarm
-and phase change and never per dormant frame, with every phase change also
-appended to `events.log` under a first field that is neither `B` nor `O` (ADR
-0007); mutation: a dormant executor that keeps writing every 2 s reddens the
-dormant-write-count check. Needs T28.
+**Task T30** — client path containment and resolution: `canonicalize`, the
+`\\?\` prefix stripped, case folded, the segment boundary, 8.3 short names and
+junctions. Done when `cargo test -p dcs-eval paths` prints its count on
+Windows; mutations: a path admitted through an 8.3 short spelling, a junction,
+or a byte-prefix match reddens the boundary check. Needs T02, which landed.
 
-**An agent verifies** it: the harness under `lua5.1.exe` on PATH under mise.
+**An agent verifies** it: `cargo test` under mise on this machine. Whether a
+junction the test makes behaves as one DCS would put in the way is the one
+thing it cannot see from here.
 
 ## After that
 
@@ -49,7 +49,7 @@ dormant-write-count check. Needs T28.
   DCS, the stand-in, the interop and round-trip controls. T17 closed it.
 - **Stage 3 is closed:** eval across the carriers with `<file>:47` true in
   every state, and the `a_do_script` shift reproduced.
-- **Stage 4's path is closed and Stage 5 has opened:** `tick-budget: 524`, `instr-budget: 2209`, `fence: 583`, `events: 114`, `dormant: 40`, `arming: 95`.
+- **Stage 4's path is closed and Stage 5 has opened:** `tick-budget: 524`, `instr-budget: 2209`, `fence: 583`, `events: 114`, `dormant: 40`, `arming: 95`, `heartbeat: 300`.
   Milestone B needs T53, the rest of Stages 5 and 6, the mutation sweep.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
   Everything provable off DCS is proved before it.
@@ -87,10 +87,11 @@ entries at most: an eleventh means something here is finished, or belongs in
   specification says nothing). The client's parser refuses such a value as the
   executor does, the maintainer's call at T13; a spelling for such a path on the
   wire is the writer's side, unsettled.
-- **The disarm owes a sweep, and no row asks for one.** T29 owns only the
-  heartbeat half of the transition the specification also sweeps once on.
+- **The disarm owes a sweep, and no row asks for one.** Its heartbeat half is
+  built (T29); the sweep on that same disarm is unclaimed.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is
   proved with a file the suite keeps open; a client's `ReadDirectoryChangesW` handle is Stage 9's.
 - **The client's half of the fence waits on T31,** whose row now names it: the
   executor fences a foreign `for` since T25, and discarding a reply with
   another session's `stamp`, with the round-trip's `superseded`, needs `collect`.
+  Both now have a heartbeat to read (ADR 0010), absent until the first arm.
