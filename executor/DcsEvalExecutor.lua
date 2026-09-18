@@ -1434,6 +1434,19 @@ end
 -- which is the mechanism; the slot-2 refusal is the backstop for a far
 -- chunk that escaped it, and not the mechanism.
 --
+-- `NEAR` marks the crossing where the events log cannot reach. The
+-- session's own markers bracket the dispatch, in a file this state has no
+-- `io` to write; these are the same grammar through `log.write`, into
+-- `dcs.log`, so a kill inside `missionscripting` leaves an opening marker
+-- with no closing one in each file and a reader of either names the same
+-- request. The opening one is written before `a_do_script` is looked for,
+-- the closing one once the answer is in hand, with the four fields the
+-- executor built and its `cpu_ms` empty: `mission` is sanitised and has
+-- no clock to charge one from, and the tick has already charged the
+-- crossing. ADR 0007 holds the shape. A state with no `log` is marked in
+-- neither direction rather than refused, as every other read of a host
+-- global here is.
+--
 -- `a_do_script` is nil at the main menu and whenever no mission is
 -- loaded, and `NEAR` reads it at the moment of use, never from a
 -- previous crossing, because this executor outlives any one mission.
@@ -1448,7 +1461,12 @@ local FAR = 'local body, chunkname, count = ... '
   .. '.. " chunkname and a " .. type(count) .. " count, where a_do_script passes its arguments on as strings", 0 end '
   .. WRAP_HEAD .. "tonumber(count)" .. WRAP_MID .. "body, chunkname" .. WRAP_TAIL .. ", 0"
 
-local NEAR_HEAD = "return (function(far, body, chunkname, count) local called, answered = pcall(function() "
+local NEAR_HEAD = "return (function(far, body, chunkname, count, mark) "
+  .. "local called, answered = pcall(function() "
+  .. 'local log = rawget(_G, "log") '
+  .. 'local marks = type(log) == "table" and type(log.write) == "function" '
+  .. 'if marks then log.write("' .. NAME .. '", log.INFO, "B|" .. mark) end '
+  .. "local crossing = (function() "
   .. 'local a_do_script = rawget(_G, "a_do_script") '
   .. 'if type(a_do_script) ~= "function" then return "no-mission\\n\\n\\nno mission is loaded: a_do_script is " '
   .. '.. type(a_do_script) .. " in the mission state, and it is defined only with a mission loaded" end '
@@ -1457,13 +1475,17 @@ local NEAR_HEAD = "return (function(far, body, chunkname, count) local called, a
   .. '.. (type(lead) == "string" and lead or "(error object is a " .. type(lead) .. " value)") end '
   .. 'if type(payload) ~= "string" then return "a_do_script\\n\\n\\nslot 1 is " .. type(lead) .. " and slot 2 is " '
   .. '.. type(payload) .. ", where a_do_script\'s shift puts a nil in slot 1 and the string payload in slot 2" end '
-  .. "return payload end) "
+  .. "return payload end)() "
+  .. 'if marks then log.write("' .. NAME .. '", log.INFO, "O|" .. mark:match("^[^|]*") '
+  .. '.. "|" .. crossing:match("^[^\\n]*") .. "|") end '
+  .. "return crossing end) "
   .. "if called then return answered end "
   .. 'return "bridge\\n\\n\\n" .. (type(answered) == "string" and answered or type(answered)) end)('
 
-local function near(body, chunkname, count)
+local function near(body, chunkname, count, mark)
   return NEAR_HEAD .. string.format("%q", FAR) .. ", " .. string.format("%q", body) .. ", "
-    .. string.format("%q", chunkname) .. ", " .. string.format('"%d"', count) .. ")"
+    .. string.format("%q", chunkname) .. ", " .. string.format('"%d"', count) .. ", "
+    .. string.format("%q", mark) .. ")"
 end
 
 -- The headers every reply through `a_do_script` carries, so a reader
@@ -1531,7 +1553,7 @@ end
 local function eval_dostring(req, chunkname, count, state, through_mission)
   local chunk, statuses, unshaped, tail = wrapper(req.body, chunkname, count), WRAPPER_STATUS, "dostring_in", nil
   if through_mission then
-    chunk, statuses, unshaped, tail = near(req.body, chunkname, count), A_DO_SCRIPT_STATUS, "a_do_script",
+    chunk, statuses, unshaped, tail = near(req.body, chunkname, count, marked(req)), A_DO_SCRIPT_STATUS, "a_do_script",
       A_DO_SCRIPT_TAIL
   end
   local net = rawget(_G, "net")

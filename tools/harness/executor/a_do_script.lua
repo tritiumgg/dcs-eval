@@ -395,8 +395,8 @@ do
   local chunk = hops[#hops].chunk
   local literal = string.format("%q", nul)
   t.eq(select(2, chunk:gsub("a\\0001b", "")), 1, "literal: the body's text appears once in the near chunk")
-  t.check(chunk:find(", " .. literal .. ', "@x.lua", "1000000")', 1, true),
-    "literal: as a %q literal, the chunkname and the count beside it")
+  t.check(chunk:find(", " .. literal .. ', "@x.lua", "1000000", "4-a|eval|missionscripting|' .. E.stamp .. '")', 1, true),
+    "literal: as a %q literal, the chunkname, the count and the marker beside it")
   local crossing = crossings[#crossings]
   t.eq(crossing.args.n, 3, "argument: the near chunk hands the far chunk three arguments")
   t.eq(crossing.args[1], nul, "argument: the body, byte for byte")
