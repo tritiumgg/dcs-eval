@@ -232,6 +232,87 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- An abandoned arm file costs one quiet period and then nothing
+--------------------------------------------------------------------------------
+
+do
+  local E, env, host, spy = loaded("hook")
+  local frame = framer("hook", env, host, spy)
+  E.armed = false
+  -- A client that created the arm file and died before publishing anything.
+  write(E.arm)
+  for _ = 1, PROBE_EVERY do
+    frame()
+  end
+  t.eq(E.armed, true, "the abandoned file woke it")
+
+  -- The first armed frame with nothing in front of it opens the window; the
+  -- clock is the suite's, so the period costs no real time.
+  frame()
+  t.eq(E.armed, true, "one quiet frame is not a quiet period")
+  t.eq(E.quiet_since, NOW, "and the window opened at the clock the frame read")
+  spy.now = NOW + QUIET_S
+  frame()
+  t.eq(E.armed, false, "the quiet period ended it")
+  t.eq(spy.dirs, 2, "the disarming tick listed twice: the frame's own, then the disarm's")
+  t.eq(env.lfs.attributes(E.arm, "mode"), nil, "the executor removed the arm file it did not create")
+  t.eq(E.quiet_since, nil, "and closed the window behind it")
+
+  local log = lines(E)
+  local arm, disarmed
+  for i, line in ipairs(log) do
+    local first = line:match("^([^|]*)|")
+    if first == "arm" then
+      arm = i
+    elseif first == "disarm" then
+      disarmed = i
+    end
+    if first == "arm" or first == "disarm" then
+      t.check(first ~= "B" and first ~= "O",
+        "a transition's first field is neither marker: " .. tostring(first))
+    end
+  end
+  t.eq(#marked(E, "arm"), 1, "one arm line")
+  t.eq(#marked(E, "disarm"), 1, "one disarm line")
+  t.check(arm and disarmed and arm < disarmed, "the arm line is before the disarm line")
+  t.eq(log[disarmed], "disarm|" .. E.stamp .. "|" .. E.tick, "which names the session and the tick it slept on")
+
+  -- And a dormant executor with no arm file stays where it is.
+  for _ = 1, PROBE_EVERY * 4 do
+    frame()
+  end
+  t.eq(E.armed, false, "it stayed asleep, because the file it removed is not back")
+  t.eq(#marked(E, "arm"), 1, "and wrote no second arm line")
+end
+
+--------------------------------------------------------------------------------
+-- A request every frame keeps it awake, and costs no clock read
+--------------------------------------------------------------------------------
+
+do
+  local E, env, host, spy = loaded("hook")
+  local frame = framer("hook", env, host, spy)
+  E.armed = false
+  write(E.arm)
+  for _ = 1, PROBE_EVERY do
+    frame()
+  end
+  t.eq(E.armed, true, "armed")
+  for i = 1, QUIET_S * 4 do
+    request(E, "4-" .. i, "op: ping\n")
+    spy.times = 0
+    -- Far more than a quiet period between frames: what holds it awake is
+    -- the work in front of it and nothing about the clock.
+    spy.now = spy.now + QUIET_S * 2
+    frame()
+    t.eq(spy.times, 0, "frame " .. i .. ": an armed frame with a request listed reads no wall clock")
+    t.eq(E.armed, true, "frame " .. i .. ": and stays awake")
+  end
+  t.eq(#marked(E, "disarm"), 0, "nothing disarmed while it had work")
+  t.eq(env.lfs.attributes(E.arm, "mode"), "file", "and the arm file is where the client left it")
+end
+
+--------------------------------------------------------------------------------
 -- A global left in a target state survives a sleep
 --------------------------------------------------------------------------------
 

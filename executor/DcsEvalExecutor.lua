@@ -1680,6 +1680,44 @@ end
 -- request.
 local held = {}
 
+-- The way back to sleep, in the order that makes the race unwinnable, which
+-- is the only reason the order is worth stating. A client publishes its
+-- request by rename and then, finding no arm file, creates one. So the arm
+-- file goes first and the last listing second: a request that lands after
+-- this listing lands beside an arm file the client had to create, because
+-- this executor had already let go of it, and the next probe finds both.
+-- Were the listing first, a client could publish between the listing and
+-- the removal, see the file still on the disk and create nothing, and the
+-- removal would then leave its request in front of an executor asleep with
+-- nothing left to wake it.
+--
+-- A listing that does hold a request is the other end of the same race: the
+-- arm file goes back, the executor stays awake, and the ordinary frame
+-- after this one answers what it found. A failure to put the file back is
+-- swallowed the way a failure to record a line is, because staying awake is
+-- the safe end of it and a client that finds the file gone creates it
+-- again.
+--
+-- The sweep and the heartbeat that belong with a disarm are not built.
+local function disarm()
+  local os = rawget(_G, "os")
+  os.remove(E.arm)
+  local lfs = rawget(_G, "lfs")
+  for name in lfs.dir(E.req) do
+    if name:sub(-4) == ".req" then
+      local fh = rawget(_G, "io").open(E.arm, "ab")
+      if fh then
+        fh:close()
+      end
+      E.quiet_since = nil
+      return
+    end
+  end
+  record("disarm|" .. E.stamp .. "|" .. E.tick)
+  E.armed = false
+  E.quiet_since = nil
+end
+
 -- The frame. Every frame the request directory is listed and the requests
 -- in it are answered in name order, so replies come back in the order
 -- requests were published, and a client that publishes several shares the
@@ -1792,6 +1830,22 @@ tick = function()
     end
   end
   began = nil
+  -- The quiet window, counted off the listing this frame already made. A
+  -- listing that held anything is work, and work closes the window without
+  -- a clock being read at all, so an executor with requests in front of it
+  -- pays nothing for this; only an armed frame with nothing to do reads
+  -- one, and it reads `os.time`, for the reason ADR 0008 gives. A held
+  -- request counts as something in front of it: it is still on the disk and
+  -- still this session's to answer.
+  if next(listed) == nil then
+    local now = rawget(rawget(_G, "os"), "time")()
+    E.quiet_since = E.quiet_since or now
+    if now - E.quiet_since >= QUIET_S then
+      disarm()
+    end
+  else
+    E.quiet_since = nil
+  end
 end
 
 -- The leaf of the file DCS loaded, read off the debug library rather than
