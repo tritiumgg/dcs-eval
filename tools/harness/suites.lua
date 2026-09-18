@@ -24,4 +24,5 @@ return {
   "executor/fence",
   "executor/events",
   "executor/dormant",
+  "executor/arming",
 }
