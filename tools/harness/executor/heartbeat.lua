@@ -38,10 +38,6 @@ local PROBE_EVERY = 8
 local QUIET_S = 3
 local HEARTBEAT_S = 2
 
--- The wall clock this suite hands the executor, in the seconds `os.time`
--- answers. Any number does; it is advanced by hand.
-local NOW = 1000000000
-
 -- One file, written through the runner's own `io`, which is not the
 -- executor's and is counted by nothing.
 local function write(path, bytes)
@@ -121,12 +117,19 @@ end
 -- load writes is counted too; the clock delegates to the model while the
 -- load runs, so the stamp and the rotation are the real ones.
 --
+-- The suite's own clock starts where the load left the session's, in
+-- `spy.base`, and every check that moves it moves it forward from there.
+-- That is not a convenience: a clock starting at some fixed number of the
+-- suite's choosing would sit behind the real one the load read, every
+-- interval this suite measured would come out negative, and a writer beating
+-- when it should not would go unseen.
+--
 -- Returns the namespace, the state, the host, and the spy.
 local function loaded(state)
   local box = t.sandbox()
   local host = { writedir = box .. SAVED, tempdir = box .. TEMP, clock = 0 }
   local env = t.state(state, host)
-  local spy = { writes = 0, now = NOW, model = true }
+  local spy = { writes = 0, now = 0, model = true }
   spy.rawdir = env.lfs.dir
   local open, time = env.io.open, env.os.time
   env.io.open = function(path, ...)
@@ -146,6 +149,10 @@ local function loaded(state)
   local E = rawget(env, NAME)
   t.eq(type(E), "table", state .. ": the namespace is published")
   t.eq(E.armed, false, state .. ": a load is asleep until a client says otherwise")
+  t.eq(type(E.beat_at), "number", state .. ": the load seeded the beat")
+  t.eq(E.since, E.beat_at, state .. ": and the time of the last transition with it")
+  spy.base = E.beat_at
+  spy.now = spy.base
   return E, env, host, spy
 end
 
@@ -214,18 +221,13 @@ for _, state in ipairs({ "hook", "export" }) do
   t.eq(entries(spy, E.output), "events.log executor.txt",
     state .. ": and the output holds what a first load leaves")
   t.eq(E.unbeaten, 0, state .. ": nothing was refused")
-  -- Seeded at load off the model's own clock, because the load takes its
-  -- stamp from the real one. What matters is that both are numbers a
-  -- subtraction can be made against before any transition has happened.
   local seeded = E.beat_at
-  t.eq(type(seeded), "number", state .. ": the beat is seeded at load")
-  t.eq(E.since, seeded, state .. ": and so is the time of the last transition")
 
   -- The check the resolution turns on: a dormant executor over frames
   -- spanning several intervals of the beat writes nothing at all. The clock
   -- moves under it the whole way, so a writer pacing off one would fire.
   for i = 1, PROBE_EVERY * 20 do
-    spy.now = NOW + i * HEARTBEAT_S
+    spy.now = spy.base + i * HEARTBEAT_S
     frame()
   end
   t.eq(E.armed, false, state .. ": still asleep, because no client wrote the arm file")
@@ -253,7 +255,7 @@ for _, state in ipairs({ "hook", "export" }) do
   t.eq(body, "", state .. ": which is an envelope with no body")
   t.eq(headers.armed, "yes", state .. ": saying it is awake")
   t.eq(headers.ticks, tostring(PROBE_EVERY), state .. ": on the frame that probed")
-  t.eq(headers.since, env.os.date("%Y-%m-%d %H:%M:%S", NOW),
+  t.eq(headers.since, env.os.date("%Y-%m-%d %H:%M:%S", spy.base),
     state .. ": since the clock the waking frame read")
   agrees(E, env, headers, state .. " arm")
 
@@ -262,7 +264,7 @@ for _, state in ipairs({ "hook", "export" }) do
   -- this stretch is the disarm's own.
   frame()
   t.eq(spy.writes, 1, state .. ": one quiet frame inside the interval wrote nothing more")
-  spy.now = NOW + QUIET_S
+  spy.now = spy.base + QUIET_S
   frame()
   t.eq(E.armed, false, state .. ": the quiet period put it back to sleep")
   t.eq(spy.writes, 2, state .. ": and the disarm wrote exactly one more")
@@ -270,14 +272,14 @@ for _, state in ipairs({ "hook", "export" }) do
   headers, body = beat(E)
   t.eq(body, "", state .. ": the disarm's heartbeat has no body either")
   t.eq(headers.armed, "no", state .. ": saying it went to sleep")
-  t.eq(headers.since, env.os.date("%Y-%m-%d %H:%M:%S", NOW + QUIET_S),
+  t.eq(headers.since, env.os.date("%Y-%m-%d %H:%M:%S", spy.base + QUIET_S),
     state .. ": since the later transition, not the earlier one")
   agrees(E, env, headers, state .. " disarm")
 
   -- And a dormant executor writes nothing afterwards, however far the clock
   -- moves under it.
   for i = 1, PROBE_EVERY * 4 do
-    spy.now = NOW + QUIET_S + i * HEARTBEAT_S
+    spy.now = spy.base + QUIET_S + i * HEARTBEAT_S
     frame()
   end
   t.eq(spy.writes, 2, state .. ": and it wrote nothing once it was asleep again")
@@ -293,7 +295,7 @@ for _, state in ipairs({ "hook", "export" }) do
   local was = E.phase
   local to, fired = moves(state, "in")
   local before = #lines(E)
-  spy.now = NOW
+  spy.now = spy.base
 
   phaser(state, env, host, "in")()
   t.eq(E.raised, 0, state .. ": the callback raised nothing")
@@ -361,7 +363,7 @@ local function armed(state)
   end
   t.eq(E.armed, true, state .. ": armed off the file a client writes")
   t.eq(spy.writes, 1, state .. ": with the arm's own heartbeat behind it")
-  t.eq(E.beat_at, NOW, state .. ": and the beat set to the arm's reading")
+  t.eq(E.beat_at, spy.base, state .. ": and the beat set to the arm's reading")
   return E, env, spy, frame
 end
 
@@ -370,13 +372,13 @@ end
 for _, state in ipairs({ "hook", "export" }) do
   local E, env, spy, frame = armed(state)
   for _ = 1, 20 do
-    spy.now = NOW + HEARTBEAT_S - 1
+    spy.now = spy.base + HEARTBEAT_S - 1
     frame()
   end
   t.eq(spy.writes, 1, state .. ": twenty idle frames inside the interval wrote nothing")
   t.eq(E.armed, true, state .. ": and none of them was a quiet period")
 
-  spy.now = NOW + HEARTBEAT_S
+  spy.now = spy.base + HEARTBEAT_S
   frame()
   t.eq(spy.writes, 2, state .. ": the frame past the interval wrote exactly one")
   local headers = beat(E)
@@ -396,7 +398,7 @@ for _, state in ipairs({ "hook", "export" }) do
   local E, env, spy, frame = armed(state)
   for i = 1, HEARTBEAT_S do
     request(E, "2-" .. i .. "-ping", "op: ping\n")
-    spy.now = NOW + i
+    spy.now = spy.base + i
     frame()
     t.check(slurp(E.res .. SEP .. "2-" .. i .. "-ping.res"),
       state .. ": frame " .. i .. " answered its request")
@@ -413,7 +415,7 @@ end
 for _, state in ipairs({ "hook", "export" }) do
   local E, _, spy, frame = armed(state)
   frame()
-  spy.now = NOW + QUIET_S + HEARTBEAT_S
+  spy.now = spy.base + QUIET_S + HEARTBEAT_S
   frame()
   t.eq(E.armed, false, state .. ": the quiet period ended it")
   t.eq(spy.writes, 2, state .. ": and the frame that disarmed with a beat due wrote one file")
