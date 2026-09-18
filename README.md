@@ -26,6 +26,10 @@ is asking. A dormant frame is a handful of VM instructions and one file stat
 every few frames; the executor wakes on a file appearing and goes back to sleep
 after a quiet period.
 
+The dormant frame is built and held to zero allocations by the harness; the
+waking and the sleeping are *not built* — the executor is armed from the load
+and stays armed.
+
 ## Install — *not built*
 
 Download `dcs-mcp.exe` and run:
