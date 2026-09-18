@@ -1059,6 +1059,17 @@ local function states(host)
   return table.concat(entries, " ")
 end
 
+-- The last callback other than the frame to fire, as `<name>@<tick>`, or
+-- the empty string while none has. Two files-worth of readers want the same
+-- string — a reply a client asked for, and the heartbeat a client reads
+-- without asking — and two spellings of one field would drift.
+local function last_callback()
+  if E.last_callback_name then
+    return E.last_callback_name .. "@" .. E.last_callback_tick
+  end
+  return ""
+end
+
 -- The ops, by the name a request spells, each taking an admitted request
 -- and answering what `reply` answers. The table is published on the
 -- namespace, so a driver off DCS can hang an op on it and see the tick
@@ -1075,13 +1086,9 @@ end
 local OPS = {}
 
 function OPS.ping(req)
-  local last = ""
-  if E.last_callback_name then
-    last = E.last_callback_name .. "@" .. E.last_callback_tick
-  end
   return reply(req.id, "ok", {
     { "states", states(E.host) },
-    { "last_callback", last },
+    { "last_callback", last_callback() },
     { "callbacks", table.concat(E.callbacks, ",") },
   }, "pong")
 end
