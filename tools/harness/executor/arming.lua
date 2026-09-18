@@ -325,7 +325,11 @@ do
     -- the work in front of it and nothing about the clock.
     spy.now = spy.now + QUIET_S * 2
     frame()
-    t.eq(spy.times, 0, "frame " .. i .. ": an armed frame with a request listed reads no wall clock")
+    -- One reading, taken at the top of the armed path, and no second one at
+    -- the foot: the heartbeat's cadence needs a reading on every armed
+    -- frame, so the same one that paces it closes the quiet window. ADR 0009
+    -- is why that reading is here at all and why there is only one.
+    t.eq(spy.times, 1, "frame " .. i .. ": an armed frame reads the wall clock exactly once")
     t.eq(E.armed, true, "frame " .. i .. ": and stays awake")
   end
   t.eq(#marked(E, "disarm"), 0, "nothing disarmed while it had work")

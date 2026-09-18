@@ -344,3 +344,93 @@ for _, state in ipairs({ "hook", "export" }) do
   frame()
   t.check(slurp(E.res .. SEP .. "1-ping.res"), state .. ": and the frame after it still answers")
 end
+
+--------------------------------------------------------------------------------
+-- An armed executor beats once per interval, idle or busy
+--------------------------------------------------------------------------------
+
+-- Armed off the arm file, with the clock where the arm left it and the arm's
+-- own heartbeat counted. Returns the namespace, the state, the spy and the
+-- frame.
+local function armed(state)
+  local E, env, host, spy = loaded(state)
+  local frame = framer(state, env, host)
+  write(E.arm)
+  for _ = 1, PROBE_EVERY do
+    frame()
+  end
+  t.eq(E.armed, true, state .. ": armed off the file a client writes")
+  t.eq(spy.writes, 1, state .. ": with the arm's own heartbeat behind it")
+  t.eq(E.beat_at, NOW, state .. ": and the beat set to the arm's reading")
+  return E, env, spy, frame
+end
+
+-- Idle: held under the interval, nothing more is written; past it, exactly
+-- one is.
+for _, state in ipairs({ "hook", "export" }) do
+  local E, env, spy, frame = armed(state)
+  for _ = 1, 20 do
+    spy.now = NOW + HEARTBEAT_S - 1
+    frame()
+  end
+  t.eq(spy.writes, 1, state .. ": twenty idle frames inside the interval wrote nothing")
+  t.eq(E.armed, true, state .. ": and none of them was a quiet period")
+
+  spy.now = NOW + HEARTBEAT_S
+  frame()
+  t.eq(spy.writes, 2, state .. ": the frame past the interval wrote exactly one")
+  local headers = beat(E)
+  t.eq(headers.ticks, tostring(E.tick), state .. ": on the frame it was written on")
+  t.eq(headers.armed, "yes", state .. ": saying it is awake")
+  t.eq(E.beat_at, spy.now, state .. ": and the beat moved to that reading")
+  agrees(E, env, headers, state .. " periodic beat")
+
+  frame()
+  t.eq(spy.writes, 2, state .. ": the frame after it is inside the new interval")
+end
+
+-- Busy: a request every frame across the interval. This is the check that a
+-- working executor is not silent — an executor that beat only when idle
+-- would read as stalled while it was answering.
+for _, state in ipairs({ "hook", "export" }) do
+  local E, env, spy, frame = armed(state)
+  for i = 1, HEARTBEAT_S do
+    request(E, "2-" .. i .. "-ping", "op: ping\n")
+    spy.now = NOW + i
+    frame()
+    t.check(slurp(E.res .. SEP .. "2-" .. i .. "-ping.res"),
+      state .. ": frame " .. i .. " answered its request")
+  end
+  t.eq(E.armed, true, state .. ": the work kept it awake the whole way")
+  t.eq(spy.writes, 2, state .. ": and it beat once across the interval, busy as it was")
+  local headers = beat(E)
+  t.eq(headers.armed, "yes", state .. ": saying so")
+  agrees(E, env, headers, state .. " busy beat")
+end
+
+-- A transition and a due beat on the same frame write one file, not two: the
+-- writer moves `E.beat_at` itself, so the transition is the beat.
+for _, state in ipairs({ "hook", "export" }) do
+  local E, _, spy, frame = armed(state)
+  frame()
+  spy.now = NOW + QUIET_S + HEARTBEAT_S
+  frame()
+  t.eq(E.armed, false, state .. ": the quiet period ended it")
+  t.eq(spy.writes, 2, state .. ": and the frame that disarmed with a beat due wrote one file")
+  t.eq(beat(E).armed, "no", state .. ": which is the disarm's, not a beat before it")
+end
+
+-- A session armed by hand, which is the shape most suites that drive the
+-- frame use: no arm file, no arm heartbeat, and therefore no reading of the
+-- clock behind it but the one the load seeded. Its first armed frame must
+-- answer its request rather than raise on arithmetic against nothing.
+for _, state in ipairs({ "hook", "export" }) do
+  local E, env, host, spy = loaded(state)
+  local frame = framer(state, env, host)
+  E.armed = true
+  request(E, "3-ping", "op: ping\n")
+  frame()
+  t.eq(E.raised, 0, state .. ": the first armed frame of a hand-armed session raised nothing")
+  t.check(slurp(E.res .. SEP .. "3-ping.res"), state .. ": and answered its request")
+  t.check(spy.writes <= 1, state .. ": writing at most the one beat its clock made due")
+end

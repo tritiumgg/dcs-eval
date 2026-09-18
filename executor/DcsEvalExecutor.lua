@@ -41,6 +41,7 @@ local INSTRUCTION_BUDGET = 1000000
 local INSTRUCTION_CEILING = 50000000
 local PROBE_EVERY = 8
 local QUIET_S = 3
+local HEARTBEAT_S = 2
 local MAX_REQUEST_BYTES = 262144
 local MAX_RESULT_BYTES = 65536
 
@@ -1824,6 +1825,13 @@ tick = function()
     return
   end
   began = nil
+  -- The one wall-clock reading an armed frame makes, and the only one. It
+  -- paces the heartbeat below and closes the quiet window at the foot of the
+  -- frame, so neither obligation costs a kernel entry the other did not
+  -- already pay. It is `os.time` and not the `os.clock` this frame also
+  -- reads, because that one is process CPU time and a liveness signal cannot
+  -- rest on it; ADR 0009 holds the argument and what it narrowed.
+  local now = rawget(rawget(_G, "os"), "time")()
   local clock = rawget(rawget(_G, "os"), "clock")
   local start = clock()
   local lfs = rawget(_G, "lfs")
@@ -1881,21 +1889,33 @@ tick = function()
     end
   end
   began = nil
-  -- The quiet window, counted off the listing this frame already made. A
-  -- listing that held anything is work, and work closes the window without
-  -- a clock being read at all, so an executor with requests in front of it
-  -- pays nothing for this; only an armed frame with nothing to do reads
-  -- one, and it reads `os.time`, for the reason ADR 0008 gives. A held
-  -- request counts as something in front of it: it is still on the disk and
-  -- still this session's to answer.
+  -- The quiet window, counted off the listing this frame already made and
+  -- off the reading taken at the top of it. A listing that held anything is
+  -- work, and work closes the window, so an executor with requests in front
+  -- of it never disarms; the clock behind the window is `os.time` for the
+  -- reason ADR 0008 gives. A held request counts as something in front of
+  -- it: it is still on the disk and still this session's to answer.
   if next(listed) == nil then
-    local now = rawget(rawget(_G, "os"), "time")()
     E.quiet_since = E.quiet_since or now
     if now - E.quiet_since >= QUIET_S then
       disarm(now)
     end
   else
     E.quiet_since = nil
+  end
+  -- The beat, last of the frame, so the `ticks`, the phase and the last
+  -- callback it carries are this frame's own and a frame that disarmed says
+  -- so rather than beating as though it had not. The interval is a floor and
+  -- not a promise: `os.time` counts whole seconds, so a beat lands between
+  -- `HEARTBEAT_S` and `HEARTBEAT_S` + 1 seconds after the last. `E.beat_at`
+  -- is moved by the writer itself, whatever called it, so a transition is a
+  -- beat and postpones the next one by a whole interval rather than being
+  -- followed by a second write on the same frame. A frame that answered a
+  -- request beats like an idle one: an executor kept busy that went silent
+  -- would read as stalled while it was working, which is the reading this
+  -- file exists to prevent.
+  if now - E.beat_at >= HEARTBEAT_S then
+    heartbeat(now)
   end
 end
 
