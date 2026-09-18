@@ -159,6 +159,12 @@ local function nothing() end
 -- The frame, defined once the session operations it drives exist.
 local tick
 
+-- `lfs.attributes`, read once at load and kept here. The dormant frame's
+-- one filesystem call must not walk a global table chain to find it: that
+-- path exists so a frame handling nothing costs nothing measurable, and a
+-- lookup per frame is a cost paid for nothing.
+local attributes
+
 -- The `os.clock` reading the tick took just before the request it is
 -- handling, which every reply to that request is charged from; nil while
 -- no request is being handled.
@@ -640,6 +646,13 @@ local function open_session(E, lfs, os, log)
   E.req = E.session .. SEP .. "req"
   E.res = E.session .. SEP .. "res"
   E.arm = E.session .. SEP .. "arm"
+  -- The field the frame branches on, and the call the dormant branch makes
+  -- to leave itself, taken from the same `lfs` the load already holds.
+  -- True at load, so the frame does today exactly what it has always done;
+  -- the load-time default becomes false, with the disarm and the heartbeat
+  -- that belong with it, in the change that follows this one.
+  E.armed = true
+  attributes = lfs.attributes
   for _, dir in ipairs({ E.req, E.res }) do
     ok, at, why = ensure(lfs, dir)
     if not ok then
@@ -1695,6 +1708,22 @@ local held = {}
 -- the take is nothing to answer, and nothing is counted.
 tick = function()
   E.tick = E.tick + 1
+  -- The dormant path. A frame that is not armed advances the counter and
+  -- returns: no clock read, no listing, no table, no concatenation, no
+  -- record. Measured on the interpreter the harness pins, that path grows
+  -- `collectgarbage('count')` by zero over a hundred thousand frames once
+  -- the callback wrapper has been entered at least once — the wrapper's
+  -- first entries cost a one-off 0.797 KB, `pcall` reserving stack, and
+  -- nothing per frame after. Every `PROBE_EVERY`-th frame makes the one
+  -- call that can end it, on the arm file a client writes. The branch is
+  -- escapable at all because a dormant executor that cannot see that file
+  -- is a dead one: nothing else on this path would ever look.
+  if not E.armed then
+    if E.tick % PROBE_EVERY == 0 and attributes(E.arm, "mode") then
+      E.armed = true
+    end
+    return
+  end
   began = nil
   local clock = rawget(rawget(_G, "os"), "clock")
   local start = clock()
