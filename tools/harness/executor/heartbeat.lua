@@ -29,6 +29,7 @@ local t = ...
 
 local NAME = "DcsEvalExecutor"
 
+local SEP = [[\]]
 local SAVED = [[\Saved Games\DCS\]]
 local TEMP = [[\Temp\DCS\]]
 
@@ -177,7 +178,7 @@ end
 
 -- A request under `E.req`, by its final name, as a client publishes one.
 local function request(E, id, headers, content)
-  write(E.req .. "\\" .. id .. ".req", headers .. "for: " .. E.stamp .. "\n\n" .. (content or ""))
+  write(E.req .. SEP .. id .. ".req", headers .. "for: " .. E.stamp .. "\n\n" .. (content or ""))
 end
 
 -- What every heartbeat says about the session that wrote it, whatever made
@@ -280,4 +281,66 @@ for _, state in ipairs({ "hook", "export" }) do
     frame()
   end
   t.eq(spy.writes, 2, state .. ": and it wrote nothing once it was asleep again")
+end
+
+--------------------------------------------------------------------------------
+-- A phase change writes one, and says so in the events log
+--------------------------------------------------------------------------------
+
+for _, state in ipairs({ "hook", "export" }) do
+  local E, env, host, spy = loaded(state)
+  local frame = framer(state, env, host)
+  local was = E.phase
+  local to, fired = moves(state, "in")
+  local before = #lines(E)
+  spy.now = NOW
+
+  phaser(state, env, host, "in")()
+  t.eq(E.raised, 0, state .. ": the callback raised nothing")
+  t.eq(E.phase, to, state .. ": the phase moved")
+  t.eq(spy.writes, 1, state .. ": and the change wrote exactly one heartbeat")
+
+  local headers, body = beat(E)
+  t.eq(body, "", state .. ": an envelope with no body, like the others")
+  t.eq(headers.phase, to, state .. ": naming the phase it moved to")
+  t.eq(headers.armed, "no", state .. ": on a session that is still asleep")
+  t.eq(headers.last_callback, fired .. "@" .. E.tick, state .. ": and the callback that moved it")
+  agrees(E, env, headers, state .. " phase change")
+
+  local log = lines(E)
+  t.eq(#log, before + 1, state .. ": one line reached the events log")
+  local changes = marked(E, "phase")
+  t.eq(#changes, 1, state .. ": which is the phase line")
+  t.eq(changes[1], "phase|" .. E.stamp .. "|" .. was .. "|" .. to .. "|" .. E.tick,
+    state .. ": naming the session, where it came from, where it went and the frame")
+  local first = changes[1]:match("^([^|]*)|")
+  t.check(first ~= "B" and first ~= "O",
+    state .. ": whose first field is neither dispatch marker: " .. tostring(first))
+
+  -- The same callback again is not a second change.
+  phaser(state, env, host, "in")()
+  t.eq(spy.writes, 1, state .. ": a callback repeating the phase it is in wrote nothing")
+  t.eq(#lines(E), before + 1, state .. ": and appended nothing")
+  t.eq(E.raised, 0, state .. ": still nothing raised")
+
+  -- A change on an armed session writes one too, and the frame carries on.
+  write(E.arm)
+  for _ = 1, PROBE_EVERY do
+    frame()
+  end
+  t.eq(E.armed, true, state .. ": the arm file woke it")
+  t.eq(spy.writes, 2, state .. ": the arm wrote the second")
+  local out, back = moves(state, "out")
+  phaser(state, env, host, "out")()
+  t.eq(E.phase, out, state .. ": an armed session changed phase too")
+  t.eq(spy.writes, 3, state .. ": which wrote the third")
+  headers = beat(E)
+  t.eq(headers.armed, "yes", state .. ": saying it is awake")
+  t.eq(headers.phase, out, state .. ": in the phase it moved to")
+  t.eq(headers.last_callback, back .. "@" .. E.tick, state .. ": under the callback that moved it")
+  t.eq(#marked(E, "phase"), 2, state .. ": and the events log holds both changes")
+
+  request(E, "1-ping", "op: ping\n")
+  frame()
+  t.check(slurp(E.res .. SEP .. "1-ping.res"), state .. ": and the frame after it still answers")
 end

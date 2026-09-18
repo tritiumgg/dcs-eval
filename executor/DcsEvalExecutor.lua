@@ -211,13 +211,30 @@ local function guard(name, phase, kind)
     body = nothing
   else
     body = function()
-      if phase then
-        E.phase = phase
-      end
+      -- A phase change, and only a change: a callback firing with the phase
+      -- the session is already in has moved nothing, and `onSimulationResume`
+      -- firing twice is not two changes. A change says so in the events log
+      -- and in the heartbeat, because a client reading the heartbeat while
+      -- the executor is asleep has the phase and nothing else to read. The
+      -- fields are the executor's own words, so none is cut or stripped the
+      -- way a client's spelling is, and the first is `phase`, neither of the
+      -- two dispatch markers, so a supervisor reading those passes over the
+      -- line; ADR 0007 is why the markers are the executor's to spell. The
+      -- clock is read here because a callback holds no frame's reading, and
+      -- a handful of firings a mission is not the armed frame this costs
+      -- nothing on. It runs after the callback has recorded itself, so the
+      -- heartbeat it writes names this callback as the last to fire rather
+      -- than the one before it.
       E.last_callback_name, E.last_callback_tick = name, E.tick
       if not seen[name] then
         seen[name] = true
         E.callbacks[#E.callbacks + 1] = name
+      end
+      if phase and phase ~= E.phase then
+        local was = E.phase
+        E.phase = phase
+        record("phase|" .. E.stamp .. "|" .. was .. "|" .. phase .. "|" .. E.tick)
+        heartbeat(rawget(rawget(_G, "os"), "time")())
       end
     end
   end
