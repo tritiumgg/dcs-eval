@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-17
+**Last updated:** 2026-09-18
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T26 landed; T27 has not started.
+Nothing. T27 landed; T28 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,21 +25,22 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T27** — the dormant path: `dormant: 40 checks`. A frame that is not armed advances its counter and returns — no clock read, no listing, no table, no record — and probes the arm file through an `lfs.attributes` held from the load one frame in eight and on no other; a hundred thousand such frames grow `collectgarbage('count')` by zero once the callback wrapper's one-off 0.797 KB is paid, `lfs.dir` and `os.clock` are never called, and a probe that answers arms the frame again, so the path is escapable. The load still arms, so the branch is the suite's until T28 flips the default. An agent verified every claim itself under the pinned lua5.1.5 on this machine; the per-frame cost inside DCS is not claimed and stays T48's, against the 0.098 ms baseline below.
 - **T26** — the events log and its markers: `events: 114 checks`. The load moves the last generation to `events.prev.log` and opens a new one with its banner; every dispatch is bracketed `B|<id>|<op>|<state>|<stamp>` and `O|<id>|<status>|<cpu_ms>` with the reply's own figures, a request refused before dispatch gets no pair, a field a client spells is cut at eighty bytes and stripped of the separator (ADR 0007), and the crossing into `missionscripting` is marked through `log.write` inside `mission`. The killer is read out of the file as the chunk that would have killed DCS sees it, by a reader kept in `tools/harness/crasher.lua`; thirteen mutations seen red.
 - **T25** — the stamp fence: `fence: 583 checks`. A `for` that is not this session's stamp is `stale-session` before an op is looked for, echoing the stamp it named whole and uncapped (ADR 0006), with nothing compiled, run or sent to a state — foreign `mission` and `missionscripting` requests pin the send at one hop and at two, and each host's control names a state that host serves — for a request in the session directory at load and one published on a tick; the stand-in and the interop control carry the new reply; fifteen mutations seen red.
-- **T24** — the instruction budget: `instr-budget: 2209 checks`. RUN source beside CONVERT sets a count hook in the chunk's state (`stage: budget`, position kept, spent stays spent, the executor's own gap ignored, a hook already set left alone as `none`); `max_instructions` read and clamped; `budget` after `chunkname`; the wrapper answers four fields (ADR 0005 supersedes 0003); bad figures stop the load; eight mutations seen red.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T27** — the dormant path: zero allocations and zero kernel entries
-per frame, one `lfs.attributes` every `PROBE_EVERY` frames, as a byte-count
-control. Done when `lua5.1 tools/harness.lua executor/dormant` shows 100,000
-dormant ticks growing `collectgarbage('count')` by zero and 12,500 ticks
-calling the stubbed `lfs.attributes` exactly 12,500 times, `lfs.dir` never;
-mutation: reintroducing the per-call closure in the callback wrapper reddens
-the byte count. Needs T04, T12.
+**Task T28** — arming and disarming: the arm-file wake, the ordered `QUIET_S`
+disarm, the race proof, state-in-target surviving a disarm; it flips the
+load-time default T27 left armed. Done when `executor/arming` shows a request
+published while dormant answered within `PROBE_EVERY`+1 ticks, one published
+on the disarm tick still answered, an abandoned arm file costing one quiet
+period, and every arm and disarm appended to `events.log` under a first field
+that is neither `B` nor `O` (ADR 0007); mutation: reversing the
+`os.remove`/list order in disarm reddens the strand-a-request proof. Needs T27.
 
 **An agent verifies** it: the harness under `lua5.1.exe` on PATH under mise.
 
@@ -49,8 +50,8 @@ the byte count. Needs T04, T12.
   DCS, the stand-in, the interop and round-trip controls. T17 closed it.
 - **Stage 3 is closed:** eval across the carriers with `<file>:47` true in
   every state, and the `a_do_script` shift reproduced.
-- **Stage 4's path is closed:** `tick-budget: 524`, `instr-budget: 2209`,
-  `fence: 583`, `events: 114`. Milestone B needs T53, Stages 5 and 6, the mutation sweep.
+- **Stage 4's path is closed and Stage 5 has opened:** `tick-budget: 524`, `instr-budget: 2209`, `fence: 583`, `events: 114`, `dormant: 40`.
+  Milestone B needs T53, the rest of Stages 5 and 6, the mutation sweep.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
   Everything provable off DCS is proved before it.
 
