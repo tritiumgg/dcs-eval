@@ -23,4 +23,5 @@ return {
   "executor/instr-budget",
   "executor/fence",
   "executor/events",
+  "executor/dormant",
 }
