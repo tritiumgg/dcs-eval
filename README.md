@@ -26,9 +26,11 @@ is asking. A dormant frame is a handful of VM instructions and one file stat
 every few frames; the executor wakes on a file appearing and goes back to sleep
 after a quiet period.
 
-The dormant frame is built and held to zero allocations by the harness; the
-waking and the sleeping are *not built* — the executor is armed from the load
-and stays armed.
+The dormant frame is built and held to zero allocations by the harness, and so
+are the two transitions around it: the executor loads asleep, wakes within a
+few frames of the arm file a client writes beside its first request, and after
+a few seconds with nothing to answer removes that file itself and goes back to
+sleep.
 
 ## Install — *not built*
 
