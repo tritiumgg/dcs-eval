@@ -274,8 +274,13 @@ fn a_ping_the_client_sends_is_answered_by_the_shipped_executor() {
         "the harness did not run the suite to the end ({}):\n{stdout}{stderr}",
         out.status
     );
+    // The arm file is still the client's: the executor removes it on its way
+    // back to sleep, and this suite ends on the reply, well inside a quiet
+    // period. Were the deadline above ever to let the Lua run past one, this
+    // would start failing, and the fix would be a suite that ends sooner
+    // rather than an assertion that expects less.
     assert!(
         live.arm.is_file(),
-        "the arm file is the client's, and the executor removed nothing"
+        "the arm file is the client's, and the executor had no quiet period in which to remove it"
     );
 }

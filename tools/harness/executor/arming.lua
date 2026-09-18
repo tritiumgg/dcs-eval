@@ -179,6 +179,7 @@ local function loaded(state)
   spy.dirs, spy.times = 0, 0
   local E = rawget(env, NAME)
   t.eq(type(E), "table", state .. ": the namespace is published")
+  t.eq(E.armed, false, state .. ": a load is asleep until a client says otherwise")
   return E, env, host, spy
 end
 
@@ -210,7 +211,6 @@ end
 do
   local E, env, host, spy = loaded("hook")
   local frame = framer("hook", env, host, spy)
-  E.armed = false
   -- The order a client sends in: the request under its final name, then the
   -- arm file.
   request(E, "1-ping", "op: ping\n")
@@ -244,7 +244,6 @@ end
 do
   local E, env, host, spy = loaded("hook")
   local frame = framer("hook", env, host, spy)
-  E.armed = false
   local before = #lines(E)
   for _ = 1, 100 do
     frame()
@@ -261,7 +260,6 @@ end
 do
   local E, env, host, spy = loaded("hook")
   local frame = framer("hook", env, host, spy)
-  E.armed = false
   -- A client that created the arm file and died before publishing anything.
   write(E.arm)
   for _ = 1, PROBE_EVERY do
@@ -315,7 +313,6 @@ end
 do
   local E, env, host, spy = loaded("hook")
   local frame = framer("hook", env, host, spy)
-  E.armed = false
   write(E.arm)
   for _ = 1, PROBE_EVERY do
     frame()
@@ -355,7 +352,6 @@ end
 local function quieted(state)
   local E, env, host, spy = loaded(state)
   local frame = framer(state, env, host, spy)
-  E.armed = false
   write(E.arm)
   for _ = 1, PROBE_EVERY + 1 do
     frame()

@@ -121,6 +121,9 @@ local function spied(state, host)
   end
   t.load_executor(env)()
   local E = rawget(env, NAME)
+  -- This suite drives the armed path, never the wake: a load is asleep, so
+  -- the arm the arm file would do is done here by hand.
+  E.armed = true
   for i = #log, 1, -1 do
     log[i] = nil
   end

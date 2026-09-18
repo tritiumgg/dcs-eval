@@ -130,8 +130,9 @@ t.eq(entries(env, E.req), "", "the request was taken")
 t.eq(entries(env, E.res), ID .. ".res", "the reply is under res by its final name, no .tmp")
 t.eq(E.raised, 0, "nothing raised")
 t.eq(E.unpublished, 0, "nothing failed to publish")
--- The executor names the arm file and never makes or removes it today, so
--- the one on the disk is the client's. When the dormant shape is built the
--- executor removes it on the way to sleep, and this check moves.
+-- The arm file on the disk is the client's: a client creates it, and the
+-- executor removes it only on the way back to sleep, which is a whole quiet
+-- period away from a suite that ends on the reply. That the executor woke on
+-- it at all is what this suite now shows end to end, the load being asleep.
 t.eq(env.lfs.attributes(E.arm, "mode"), "file", "the client armed the session")
 t.eq(env.lfs.attributes(E.handshake, "mode"), "file", "the handshake is on the disk")

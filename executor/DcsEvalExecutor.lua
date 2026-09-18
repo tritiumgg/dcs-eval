@@ -647,11 +647,12 @@ local function open_session(E, lfs, os, log)
   E.res = E.session .. SEP .. "res"
   E.arm = E.session .. SEP .. "arm"
   -- The field the frame branches on, and the call the dormant branch makes
-  -- to leave itself, taken from the same `lfs` the load already holds.
-  -- True at load, so the frame does today exactly what it has always done;
-  -- the load-time default becomes false, with the disarm and the heartbeat
-  -- that belong with it, in the change that follows this one.
-  E.armed = true
+  -- to leave itself, taken from the same `lfs` the load already holds. A
+  -- load is asleep because nothing has asked for anything yet: the arm file
+  -- a client writes is the only thing that says otherwise, and a session
+  -- nobody is using should cost a frame the counter and nothing else.
+  E.armed = false
+  E.quiet_since = nil
   attributes = lfs.attributes
   for _, dir in ipairs({ E.req, E.res }) do
     ok, at, why = ensure(lfs, dir)
@@ -1724,8 +1725,9 @@ end
 -- tick between them. Only a name ending in exactly `.req` is a request: a
 -- client publishes by rename from `.req.tmp`, and a reader with a looser
 -- suffix would meet a half-written file. Listing every frame is the armed
--- shape; the dormant one, which lists nothing until a client wakes it, is
--- not built.
+-- shape, and it is the shape a frame has only while a client is asking for
+-- something: a frame that is asleep lists nothing, and a frame that has had
+-- nothing to list for `QUIET_S` goes back to sleep.
 --
 -- The tick is held to `TICK_BUDGET_MS` of the frame, counted by `os.clock`
 -- from before the listing, so the listing is spent from it too. The budget

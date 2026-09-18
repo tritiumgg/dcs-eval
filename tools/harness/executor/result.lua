@@ -46,6 +46,9 @@ local function loaded()
   local env = t.state("hook", host)
   t.load_executor(env)()
   local E = rawget(env, NAME)
+  -- This suite drives the armed path, never the wake: a load is asleep, so
+  -- the arm the arm file would do is done here by hand.
+  E.armed = true
   t.eq(type(E), "table", "the executor loaded over hook")
   return E, env, host.callbacks.onSimulationFrame
 end

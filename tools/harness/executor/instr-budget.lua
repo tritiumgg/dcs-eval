@@ -84,6 +84,12 @@ local function loaded(state, source)
     t.load_executor(env)()
   end
   local E = rawget(env, NAME)
+  -- This suite drives the armed path, never the wake: a load is asleep, so
+  -- the arm the arm file would do is done here by hand. A load that
+  -- published no namespace is a copy this suite expects to have stopped.
+  if E then
+    E.armed = true
+  end
   local frame
   if E and state == "hook" then
     frame = host.callbacks.onSimulationFrame

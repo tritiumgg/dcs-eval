@@ -194,6 +194,9 @@ end
 local function load(env)
   t.load_executor(env)()
   local E = rawget(env, NAME)
+  -- This suite drives the armed path, never the wake: a load is asleep, so
+  -- the arm the arm file would do is done here by hand.
+  E.armed = true
   t.eq(type(E), "table", "the executor loaded and published its namespace")
   t.eq(E.stamp, STAMP, "and took the stamp this suite planted for")
   return E
