@@ -159,6 +159,14 @@ local function nothing() end
 -- The frame, defined once the session operations it drives exist.
 local tick
 
+-- One line appended to the events log, defined further down beside the
+-- session's other writers. It is declared here because the frame is not
+-- the only path that writes one: a rare callback, whose body is built
+-- above, writes a line of its own when the phase moves. Were the name
+-- resolved where that body sits, it would be a read of a global that is
+-- never set, and the guard's own `pcall` would swallow the raise.
+local record
+
 -- `lfs.attributes`, read once at load and kept here. The dormant frame's
 -- one filesystem call must not walk a global table chain to find it: that
 -- path exists so a frame handling nothing costs nothing measurable, and a
@@ -1008,7 +1016,7 @@ end
 -- goes on answering.
 --
 -- `true`, or nil.
-local function record(line)
+record = function(line)
   local io = rawget(_G, "io")
   local fh, why = io.open(E.events, "ab")
   if fh then
