@@ -164,6 +164,12 @@ local tick
 -- no request is being handled.
 local began
 
+-- The status and the cost of the last reply framed, kept so the marker
+-- that closes a request carries the figures the reply carried rather than
+-- a second reading of a clock that has moved since (ADR 0007). One
+-- request is handled at a time, so these are that request's.
+local answered, charged
+
 -- The callback names seen this session, as a set beside the list the
 -- namespace publishes, so a rare callback firing again is one lookup.
 local seen = {}
@@ -763,6 +769,7 @@ end
 local function reply(id, status, headers, body)
   local clock = rawget(rawget(_G, "os"), "clock")
   local now = clock()
+  answered, charged = status, string.format("%.3f", (now - (began or now)) * 1000)
   local all = {
     { "status", status },
     { "protocol", PROTOCOL },
@@ -771,7 +778,7 @@ local function reply(id, status, headers, body)
     { "phase", E.phase },
     { "id", id },
     { "tick", E.tick },
-    { "cpu_ms", string.format("%.3f", (now - (began or now)) * 1000) },
+    { "cpu_ms", charged },
   }
   for _, header in ipairs(headers or {}) do
     all[#all + 1] = header
@@ -1005,6 +1012,26 @@ local function record(line)
   E.unrecorded = E.unrecorded + 1
   E.last_unrecorded = E.events .. ": " .. tostring(why)
   return nil
+end
+
+-- One field of a marker, out of bytes a client wrote. The reader splits a
+-- record on `|` and on the line, so a value that carries either byte would
+-- be a record of the client's own writing, and a request may be a quarter
+-- of a megabyte where the file it lands in is bounded by two launches. So
+-- a field is cut to the excerpt every refusal message keeps and every byte
+-- in it that is not printable ASCII, the separator included, is written
+-- `?`. ADR 0007 holds the argument, and a field the executor spells — the
+-- stamp, a status, a cost — goes in as it is.
+local function field(value)
+  return (excerpt(tostring(value)):gsub("[^\32-\126]", "?"):gsub("|", "?"))
+end
+
+-- The four fields that open a marker for one request: which request, what
+-- it asked for, where, and the session that took it. An op that names no
+-- state, which is `ping`, leaves that field empty.
+local function marked(req)
+  return field(req.id) .. "|" .. field(req.headers.op) .. "|"
+    .. field(req.headers.state or "") .. "|" .. E.stamp
 end
 
 -- The `states` header for `host`: one entry per state it answers, in the
@@ -1674,7 +1701,20 @@ tick = function()
     local req, status, why, unpublished = admit(path)
     local lost = unpublished and why
     if req then
+      -- The markers a supervisor reads the killer out of, around the
+      -- dispatch and nothing else: the request is already off the disk,
+      -- so a chunk that takes the process with it leaves an opening
+      -- marker with no closing one, and the last such marker names it.
+      -- A request refused by `admit` never reached an op and never ran,
+      -- so it gets no pair; ADR 0007 holds that and what each field
+      -- carries. The closing marker reads the status and the cost off
+      -- the reply that was just framed, and an op that framed none — one
+      -- a driver hung on the namespace — leaves both fields empty rather
+      -- than the request unclosed.
+      answered, charged = nil, nil
+      record("B|" .. marked(req))
       local ok, failed = dispatch(req)
+      record("O|" .. field(req.id) .. "|" .. (answered or "") .. "|" .. (charged or ""))
       if not ok then
         lost = failed
       end

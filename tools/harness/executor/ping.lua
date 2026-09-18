@@ -167,9 +167,18 @@ local function published(path)
   return "open wb " .. path .. ".tmp\nremove " .. path .. "\nrename " .. path .. ".tmp " .. path
 end
 
--- A request taken and its reply published, and nothing else.
+-- One marker line, as the spy sees it: the open alone, because the write
+-- and the close are not spied. A request the tick dispatches makes two,
+-- one before the dispatch and one after.
+local function recorded(E)
+  return "open ab " .. E.events
+end
+
+-- A request taken, marked, its reply published and marked again, and
+-- nothing else.
 local function answered(E, id)
-  return taken(E.req .. "\\" .. id .. ".req") .. "\n" .. published(E.res .. "\\" .. id .. ".res")
+  return taken(E.req .. "\\" .. id .. ".req") .. "\n" .. recorded(E) .. "\n"
+    .. published(E.res .. "\\" .. id .. ".res") .. "\n" .. recorded(E)
 end
 
 -- A reply read back with the suite's own reader, not the executor's
@@ -217,8 +226,8 @@ do
   t.eq(E.tick, 1, "one frame is one tick")
   t.eq(entries(env, E.req), "", "the request is gone")
   t.eq(entries(env, E.res), "0000000001-abcd.res", "and the reply is under res, no .tmp")
-  t.eq(ops(log), taken(path) .. "\n" .. published(E.res .. "\\0000000001-abcd.res"),
-    "the request was taken, then the reply published, and nothing else was touched")
+  t.eq(ops(log), answered(E, "0000000001-abcd"),
+    "the request was taken, marked, the reply published and marked again, and nothing else was touched")
   local order, v, body = read(E, "0000000001-abcd")
   fields(order, PING, "ping")
   t.eq(v.status, "ok", "ping: ok")
@@ -386,7 +395,7 @@ do
 
   path = ping(E, "6-a.req")
   frame()
-  t.eq(ops(log), taken(path) .. "\n" .. published(E.res .. "\\6-a.res"), "held: the name come back is a new request")
+  t.eq(ops(log), answered(E, "6-a"), "held: the name come back is a new request")
   _, v, body = read(E, "6-a")
   t.eq(v.status, "ok", "held: answered ok")
   t.eq(v.tick, "5", "held: on the fifth frame")
