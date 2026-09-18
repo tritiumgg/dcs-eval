@@ -22,4 +22,5 @@ return {
   "executor/tick-budget",
   "executor/instr-budget",
   "executor/fence",
+  "executor/events",
 }
