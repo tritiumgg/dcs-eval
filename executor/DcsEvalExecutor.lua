@@ -148,7 +148,10 @@ local EXPORT_CALLBACKS = {
 -- with `last_callback_name` and `last_callback_tick` once one has fired;
 -- `unpublished` counts the replies the tick could not publish, with
 -- `last_unpublished` the reason for the latest. `handshake` is the path of
--- the file a client reads first.
+-- the file a client reads first, and `events` of the one a supervisor
+-- reads after a crash; `unrecorded` counts the lines that did not reach
+-- it, with `last_unrecorded` the reason for the latest, and
+-- `events_left` appears where the load could not rotate it.
 local E
 
 local function nothing() end
@@ -490,6 +493,30 @@ local function ensure(lfs, path)
   return true
 end
 
+-- The events log, rotated at load: `events.log` becomes `events.prev.log`
+-- and this session starts an empty one, so what a supervisor reads after
+-- a crash is this launch's and the launch before it, and the file has a
+-- ceiling of two sessions rather than growing for as long as the install
+-- lives. The remove of the older generation comes first, because Windows
+-- will not rename onto an existing name, and its answer is discarded: on
+-- a first launch there is nothing to remove. The rename is attempted only
+-- where there is a file to move, so a first launch is silent, and a
+-- failure — on Windows, a reader holding the file open — is recorded and
+-- not raised: the session then appends to the generation already there,
+-- which costs a reader one launch of extra history and is no reason to
+-- refuse to run.
+local function rotate(lfs, os, E)
+  if lfs.attributes(E.events, "mode") ~= "file" then
+    return
+  end
+  local prev = E.output .. SEP .. "events.prev.log"
+  os.remove(prev)
+  local ok, why = os.rename(E.events, prev)
+  if not ok then
+    E.events_left = E.events .. ": " .. tostring(why)
+  end
+end
+
 -- A session is two directories deep, `<stamp>\req` and `<stamp>\res`, with
 -- files in those. The sweep goes no deeper: a directory further down is
 -- not something a session made, and is left with the sibling it is in.
@@ -591,6 +618,8 @@ local function open_session(E, lfs, os, log)
   if not ok then
     error("the output directory " .. at .. " could not be created: " .. why, 0)
   end
+  E.events = E.output .. SEP .. "events.log"
+  rotate(lfs, os, E)
   ok, at, why = ensure(lfs, E.transport_root)
   if not ok and E.transport_source == "lfs.tempdir" then
     E.transport_refusal = at .. " could not be created: " .. why
@@ -944,6 +973,38 @@ local function admit(path)
     return nil, "error", "the " .. status .. " reply to " .. id .. " was not published: " .. tostring(failed), true
   end
   return nil, status, why
+end
+
+-- One line appended to the events log, with its newline. Append and not
+-- publish-by-rename: this file is a record a supervisor reads after the
+-- process died, so a line must be on the disk the moment it is written
+-- and the last line of a killed session is the point of the file. It is
+-- opened and closed per line for the same reason — a handle held open
+-- across the kill is a buffer nobody flushes — and that cost is paid per
+-- request handled and never per frame. A line that cannot be written is
+-- counted and swallowed: the events log is how a crash is read afterwards
+-- and never how a request is answered, so a session that cannot write it
+-- goes on answering.
+--
+-- `true`, or nil.
+local function record(line)
+  local io = rawget(_G, "io")
+  local fh, why = io.open(E.events, "ab")
+  if fh then
+    local ok
+    ok, why = fh:write(line .. "\n")
+    if ok then
+      ok, why = fh:close()
+    else
+      fh:close()
+    end
+    if ok then
+      return true
+    end
+  end
+  E.unrecorded = E.unrecorded + 1
+  E.last_unrecorded = E.events .. ": " .. tostring(why)
+  return nil
 end
 
 -- The `states` header for `host`: one entry per state it answers, in the
@@ -1736,7 +1797,7 @@ local function main()
   open_session(E, rawget(_G, "lfs"), rawget(_G, "os"), rawget(_G, "log"))
   E.frame, E.publish, E.reply, E.take, E.parse, E.admit = frame, publish, reply, take, parse, admit
   E.max_request_bytes = MAX_REQUEST_BYTES
-  E.ops, E.callbacks, E.unpublished = OPS, {}, 0
+  E.ops, E.callbacks, E.unpublished, E.unrecorded = OPS, {}, 0, 0
   E.host, E.phase, E.raised, E.tick = host, host == "hook" and "menu" or "loaded", 0, 0
   -- The handshake is how a client finds the session, so one that cannot be
   -- written stops the load the way an output directory that cannot be made
@@ -1746,6 +1807,14 @@ local function main()
   if not ok then
     error("the handshake could not be published: " .. why, 0)
   end
+  -- The load banner: the first line of the generation the rotation above
+  -- opened, so the file a supervisor reads exists from the load and names
+  -- the session whose records follow, and a launch that handled nothing
+  -- still says it ran. Its first field is `load` and not `B` or `O`, which
+  -- is how a reader of the markers passes over it; it is written after the
+  -- handshake, so no file under the output names a session a client could
+  -- not yet find.
+  record("load|" .. E.stamp .. "|" .. E.host .. "|" .. PROTOCOL)
   if host == "hook" then
     register_hook(DCS)
   else

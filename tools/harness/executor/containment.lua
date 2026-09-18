@@ -27,7 +27,8 @@
 -- that no sandbox can stand in for. `executor/session` proves what is
 -- created; here every path is a directory that exists, the handshake goes
 -- to a handle that keeps nothing, and any other call that would change
--- something raises.
+-- something raises. Two writes are modelled, because the load makes two:
+-- the handshake, and the line the load appends to the events log.
 local t = ...
 
 local NAME = "DcsEvalExecutor"
@@ -81,7 +82,7 @@ local function dry(env)
   env.lfs.mkdir = refuse("lfs.mkdir")
   env.lfs.rmdir = refuse("lfs.rmdir")
   env.io.open = function(path, mode)
-    if mode == "wb" and leaf(path) == "executor.txt.tmp" then
+    if (mode == "wb" and leaf(path) == "executor.txt.tmp") or (mode == "ab" and leaf(path) == "events.log") then
       return {
         write = function()
           return true

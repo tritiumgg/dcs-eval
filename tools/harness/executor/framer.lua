@@ -272,7 +272,7 @@ do
   t.eq(slurp(path), "two", "rewrite: the second publish wins")
   t.eq(ops(log), published(path) .. "\n" .. published(path),
     "rewrite: each publish removes the final name before the rename")
-  t.eq(entries(env, E.output), "executor.txt", "rewrite: no .tmp is left")
+  t.eq(entries(env, E.output), "events.log executor.txt", "rewrite: no .tmp is left")
 end
 
 -- A directory that is not there: the open refuses and nothing is made.

@@ -178,7 +178,7 @@ do
   local output = box .. OUTPUT .. "hook"
   t.eq(E and E.handshake, output .. [[\executor.txt]], "hook: the handshake is named under the output")
   t.eq(mode(env, E.handshake), "file", "hook: and is a file")
-  t.eq(entries(env, output), "executor.txt", "hook: the output holds it and nothing else, no .tmp")
+  t.eq(entries(env, output), "events.log executor.txt", "hook: the output holds it and the events log, no .tmp")
   local order, v, body = read(env, E.handshake)
   fields(order)
   t.eq(body, "", "hook: the envelope has no body")
@@ -221,7 +221,7 @@ do
   local E, env, box, host = session("export", 8)
   local output = box .. OUTPUT .. "export"
   t.eq(E and E.handshake, output .. [[\executor.txt]], "export: the handshake is under the export output")
-  t.eq(entries(env, output), "executor.txt", "export: the output holds it and nothing else")
+  t.eq(entries(env, output), "events.log executor.txt", "export: the output holds it and the events log")
   local order, v, body = read(env, E.handshake)
   fields(order)
   t.eq(body, "", "export: the envelope has no body")
@@ -318,8 +318,9 @@ do
   end
   t.load_executor(env)()
   t.eq(table.concat(log, "\n"),
-    "open wb " .. final .. ".tmp\nremove " .. final .. "\nrename " .. final .. ".tmp " .. final,
-    "publish: the .tmp is opened, the final name removed, and the .tmp renamed onto it")
+    "open wb " .. final .. ".tmp\nremove " .. final .. "\nrename " .. final .. ".tmp " .. final
+      .. "\nopen ab " .. box .. OUTPUT .. [[hook\events.log]],
+    "publish: the .tmp is opened, the final name removed, the .tmp renamed onto it, and the banner appended after")
   t.eq(at_rename.callbacks, nil, "publish: at the rename nothing is registered yet")
   t.eq(at_rename.req, "directory", "publish: and req already exists")
   t.eq(at_rename.res, "directory", "publish: and so does res")
@@ -338,7 +339,7 @@ do
   fields(order)
   t.eq(v.stamp, "1000-9", "stale: the stamp is this launch's")
   t.eq(bytes:find("999-1", 1, true), nil, "stale: nothing of the old file remains")
-  t.eq(entries(env, box .. OUTPUT .. "hook"), "executor.txt", "stale: the old .tmp is gone with it")
+  t.eq(entries(env, box .. OUTPUT .. "hook"), "events.log executor.txt", "stale: the old .tmp is gone with it")
 end
 
 -- A second launch into the same install: the file says the second.
