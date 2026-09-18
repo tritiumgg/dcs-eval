@@ -25,4 +25,5 @@ return {
   "executor/events",
   "executor/dormant",
   "executor/arming",
+  "executor/heartbeat",
 }

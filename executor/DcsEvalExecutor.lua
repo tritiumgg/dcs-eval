@@ -167,6 +167,11 @@ local tick
 -- never set, and the guard's own `pcall` would swallow the raise.
 local record
 
+-- The heartbeat writer, defined beside the handshake it is shaped like, and
+-- declared here for the same reason `record` is: the two transitions and the
+-- rare callback that call it are all written above it.
+local heartbeat
+
 -- `lfs.attributes`, read once at load and kept here. The dormant frame's
 -- one filesystem call must not walk a global table chain to find it: that
 -- path exists so a frame handling nothing costs nothing measurable, and a
@@ -1714,8 +1719,11 @@ local held = {}
 -- the safe end of it and a client that finds the file gone creates it
 -- again.
 --
--- The sweep and the heartbeat that belong with a disarm are not built.
-local function disarm()
+-- The sweep that belongs with a disarm is not built. The heartbeat is: it is
+-- written off the frame's own clock reading, which is why `now` comes in
+-- rather than being read here — this is only ever called from the foot of an
+-- armed frame, which already holds one (ADR 0009).
+local function disarm(now)
   local os = rawget(_G, "os")
   os.remove(E.arm)
   local lfs = rawget(_G, "lfs")
@@ -1732,6 +1740,8 @@ local function disarm()
   record("disarm|" .. E.stamp .. "|" .. E.tick)
   E.armed = false
   E.quiet_since = nil
+  E.since = now
+  heartbeat(now)
 end
 
 -- The frame. Every frame the request directory is listed and the requests
@@ -1786,6 +1796,13 @@ tick = function()
       -- told about it. ADR 0007 is why the markers are the executor's to
       -- spell and a client's to never.
       record("arm|" .. E.stamp .. "|" .. E.tick)
+      -- And the heartbeat that says so, off the one clock reading the waking
+      -- frame makes. It is made here and not above the branch because the
+      -- path that must cost nothing is the frame that stays asleep, and this
+      -- frame is the one leaving it.
+      local now = rawget(rawget(_G, "os"), "time")()
+      E.since = now
+      heartbeat(now)
     end
     return
   end
@@ -1858,7 +1875,7 @@ tick = function()
     local now = rawget(rawget(_G, "os"), "time")()
     E.quiet_since = E.quiet_since or now
     if now - E.quiet_since >= QUIET_S then
-      disarm()
+      disarm(now)
     end
   else
     E.quiet_since = nil
@@ -1952,6 +1969,51 @@ local function handshake()
   return publish(E.handshake, bytes)
 end
 
+-- The heartbeat, `<output>\heartbeat.txt`: what a client reads to decide
+-- whether this session is alive and ticking, without asking it anything. It
+-- is one envelope with no body, published by rename like the handshake, so a
+-- reader never meets a half-written one and the file a client stats is
+-- always whole. `now` is the caller's own clock reading: every caller
+-- already holds one, and a writer that read a second would put a kernel
+-- entry back on the armed frame that ADR 0009 keeps at one.
+--
+-- The fields are what this session actually keeps, which is not everything
+-- the specification's table names; ADR 0010 says which four are absent and
+-- why. `since` is the wall-clock time of the last transition, spelt the way
+-- the handshake spells `started`.
+--
+-- `E.beat_at` moves whether or not the write lands, so a session that cannot
+-- write this file does not try again every frame. A refusal is counted and
+-- swallowed for the reason `record` gives: a file a client reads for
+-- liveness is not how a request is answered, and a session that cannot write
+-- it goes on answering.
+heartbeat = function(now)
+  E.beat_at = now
+  local os = rawget(_G, "os")
+  local bytes, why = frame({
+    { "protocol", PROTOCOL },
+    { "host", E.host },
+    { "stamp", E.stamp },
+    { "transport", E.session },
+    { "phase", E.phase },
+    { "armed", E.armed and "yes" or "no" },
+    { "since", os.date("%Y-%m-%d %H:%M:%S", E.since) },
+    { "ticks", E.tick },
+    { "last_callback", last_callback() },
+    { "callbacks", table.concat(E.callbacks, ",") },
+  })
+  local ok
+  if bytes then
+    ok, why = publish(E.heartbeat, bytes)
+  end
+  if ok then
+    return true
+  end
+  E.unbeaten = E.unbeaten + 1
+  E.last_unbeaten = E.heartbeat .. ": " .. tostring(why)
+  return nil
+end
+
 local function main()
   -- Loaded once per state. DCS runs `Export.lua` at every mission start and
   -- whether the export state survives between missions is not measured; a
@@ -1970,11 +2032,21 @@ local function main()
   E.frame, E.publish, E.reply, E.take, E.parse, E.admit = frame, publish, reply, take, parse, admit
   E.max_request_bytes = MAX_REQUEST_BYTES
   E.ops, E.callbacks, E.unpublished, E.unrecorded = OPS, {}, 0, 0
+  E.unbeaten = 0
   E.host, E.phase, E.raised, E.tick = host, host == "hook" and "menu" or "loaded", 0, 0
+  -- The time of the last transition and the time of the last beat, both
+  -- seeded at load from one reading. Nothing is written here — the heartbeat
+  -- is written at a transition, a phase change or an elapsed interval, and a
+  -- load is none of those — but the armed path's arithmetic has to hold on a
+  -- session whose first armed frame is also its first transition, and a
+  -- `since` has to name something before the first transition names it.
+  E.since = rawget(_G, "os").time()
+  E.beat_at = E.since
   -- The handshake is how a client finds the session, so one that cannot be
   -- written stops the load the way an output directory that cannot be made
   -- does: an executor nothing can find is not running.
   E.handshake = E.output .. SEP .. "executor.txt"
+  E.heartbeat = E.output .. SEP .. "heartbeat.txt"
   local ok, why = handshake()
   if not ok then
     error("the handshake could not be published: " .. why, 0)
