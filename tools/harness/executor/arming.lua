@@ -16,10 +16,22 @@
 -- hand afterwards, so no check here waits on a real second and a frame that
 -- reads no clock can be told from one that does. `lfs.dir` is wrapped by a
 -- per-tick counter with two one-shot hooks, one fired on entry to the call
--- and one when the iterator it returned first hands back nil. The counter
--- is what tells the two listings of a disarming frame apart, and a hook
--- that could not tell them apart would fire on the wrong one and prove
--- nothing.
+-- and one when the iterator it returned first hands back nil. Each hook
+-- names the listing of the tick it wants and fires on that one alone: a
+-- disarming frame lists twice, the armed path's own listing and then the
+-- disarm's, and a hook that could not tell them apart would fire on the
+-- first and prove nothing about the order the second one is in.
+--
+-- What the two hooks prove, which is the race. Publishing a request from
+-- the `after` hook puts it on the disk after the disarm's listing was
+-- taken, which is the moment the specification's proof turns on: the
+-- executor sees nothing and sleeps, and the client, finding the arm file
+-- already gone, creates it, so the next probe wakes and answers. Reverse
+-- the removal and the listing in the executor and the same client finds the
+-- arm file still there, creates nothing, and the removal that follows
+-- strands its request in front of an executor with nothing left to wake it.
+-- Publishing from the `before` hook is the other end: the request is in the
+-- listing, so the executor puts the arm file back and stays awake.
 --
 -- The model's `lfs.dir` takes its snapshot inside the call, so a file
 -- created from the `after` hook is provably outside the listing being
@@ -119,27 +131,38 @@ local function loaded(state)
   local box = t.sandbox()
   local host = { writedir = box .. SAVED, tempdir = box .. TEMP, clock = 0 }
   local env = t.state(state, host)
-  local spy = { dirs = 0, times = 0, now = NOW, model = true, before = nil, after = nil }
+  local spy = { dirs = 0, times = 0, now = NOW, model = true }
   local dir, time = env.lfs.dir, env.os.time
   spy.rawdir = dir
+  -- A hook fires on the listing it names and on no other, and is gone once
+  -- it has: a hook that fired on whichever listing came first would fire on
+  -- the armed path's own and say nothing about the disarm's. `spy.on` sets
+  -- one and `spy.fired` says whether it went off, which is the check that
+  -- the listing it named ever happened.
+  local hooks = {}
+  spy.on = function(which, at, fn)
+    hooks[which] = { at = at, fn = fn }
+  end
+  spy.fired = function(which)
+    return hooks[which] == nil
+  end
+  local function fire(which)
+    local h = hooks[which]
+    if h and spy.dirs == h.at then
+      hooks[which] = nil
+      h.fn(spy.dirs)
+    end
+  end
   env.lfs.dir = function(path)
     spy.dirs = spy.dirs + 1
-    local before = spy.before
-    if before then
-      spy.before = nil
-      before(spy.dirs)
-    end
+    fire("before")
     local iter = dir(path)
     local drained = false
     return function()
       local name = iter()
       if name == nil and not drained then
         drained = true
-        local after = spy.after
-        if after then
-          spy.after = nil
-          after(spy.dirs)
-        end
+        fire("after")
       end
       return name
     end
@@ -313,21 +336,113 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- The disarm cannot strand a request
+--------------------------------------------------------------------------------
+
+-- What the client does in `send`, in that order: the request under its final
+-- name, then the arm file if it is not already there. The client never
+-- removes it.
+local function client(E, env, id)
+  request(E, id, "op: ping\n")
+  if env.lfs.attributes(E.arm, "mode") == nil then
+    write(E.arm)
+  end
+end
+
+-- An executor on the frame before the one it will disarm on: armed off the
+-- arm file, one quiet frame to open the window, and the suite's clock moved
+-- a whole quiet period on. The next frame is the disarming one.
+local function quieted(state)
+  local E, env, host, spy = loaded(state)
+  local frame = framer(state, env, host, spy)
+  E.armed = false
+  write(E.arm)
+  for _ = 1, PROBE_EVERY + 1 do
+    frame()
+  end
+  t.eq(E.armed, true, state .. ": armed, and one quiet frame in")
+  t.eq(E.quiet_since, NOW, state .. ": with the window open")
+  spy.now = NOW + QUIET_S
+  return E, env, host, spy, frame
+end
+
+-- What a failed race says, because "no reply" alone does not say which of
+-- the three ways it went wrong.
+local function said(E, spy)
+  return " (tick " .. E.tick .. ", armed " .. tostring(E.armed)
+    .. ", listings " .. spy.dirs .. ", req [" .. entries(spy, E.req)
+    .. "], res [" .. entries(spy, E.res) .. "])"
+end
+
+do
+  local E, env, _, spy, frame = quieted("hook")
+  -- The client publishes after the disarm's listing was taken, which is the
+  -- case the order exists for.
+  spy.on("after", 2, function(n)
+    t.eq(n, 2, "the hook fired on the disarm's listing and not the frame's own")
+    client(E, env, "5-ping")
+  end)
+  frame()
+  t.check(spy.fired("after"), "the disarm made its second listing" .. said(E, spy))
+  t.eq(spy.dirs, 2, "and made no third" .. said(E, spy))
+  t.eq(E.armed, false, "it slept: the request was not in the listing it took" .. said(E, spy))
+  t.eq(#marked(E, "disarm"), 1, "and said so once")
+  t.eq(env.lfs.attributes(E.arm, "mode"), "file",
+    "the client found the arm file gone and put it back" .. said(E, spy))
+
+  local at
+  for i = 1, PROBE_EVERY + 1 do
+    frame()
+    if not at and published(E, "5-ping") then
+      at = i
+    end
+  end
+  t.check(at, "the request published into the disarm was answered" .. said(E, spy))
+  t.eq(E.armed, true, "by an executor the arm file woke again")
+  t.eq(#marked(E, "arm"), 2, "which is the second arm of the session")
+end
+
+--------------------------------------------------------------------------------
+-- A request in the disarm's own listing keeps it awake
+--------------------------------------------------------------------------------
+
+do
+  local E, env, _, spy, frame = quieted("hook")
+  -- The other end of the same race: published before the disarm's listing
+  -- is taken, so it is in it.
+  spy.on("before", 2, function(n)
+    t.eq(n, 2, "the hook fired on the disarm's listing and not the frame's own")
+    client(E, env, "6-ping")
+  end)
+  frame()
+  t.check(spy.fired("before"), "the disarm made its second listing" .. said(E, spy))
+  t.eq(E.armed, true, "and stayed awake, because that listing held a request" .. said(E, spy))
+  t.eq(#marked(E, "disarm"), 0, "so nothing was recorded as a disarm")
+  t.eq(env.lfs.attributes(E.arm, "mode"), "file", "and the arm file is back on the disk")
+  t.eq(E.quiet_since, nil, "with the quiet window closed behind it")
+
+  frame()
+  t.check(published(E, "6-ping"), "the ordinary frame after it answered" .. said(E, spy))
+  t.eq(#marked(E, "arm"), 1, "and nothing woke, because nothing had slept")
+end
+
+--------------------------------------------------------------------------------
 -- A global left in a target state survives a sleep
 --------------------------------------------------------------------------------
 
 do
-  local E, env, host, spy = loaded("hook")
-  local frame = framer("hook", env, host, spy)
+  local E, env, _, spy, frame = quieted("hook")
   request(E, "2-set", "op: eval\nstate: hook\n", "ARMING_MARK = 'kept'; return 'set'")
   frame()
   t.eq(body(E, "2-set"), "set", "the first chunk ran while armed")
+  t.eq(E.armed, true, "and the work closed the quiet window" .. said(E, spy))
 
-  E.armed = false
-  for _ = 1, PROBE_EVERY * 3 do
-    frame()
-  end
-  t.eq(E.armed, false, "it slept, because nothing armed it")
+  -- A real disarm, not a hand-set flag: the window opens on the next quiet
+  -- frame and the one after the clock moves ends it.
+  frame()
+  spy.now = spy.now + QUIET_S
+  frame()
+  t.eq(E.armed, false, "then it slept" .. said(E, spy))
 
   request(E, "2-get", "op: eval\nstate: hook\n", "return ARMING_MARK")
   write(E.arm)
