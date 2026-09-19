@@ -58,8 +58,8 @@ Bullets, one per line, each `- name: value`:
 Then one or more fenced blocks whose info string is `sweep-edit <path>`:
 
     ```sweep-edit executor/DcsEvalExecutor.lua
-    -  local chunk, why = loadstring(req.body, chunkname)
-    +  local chunk, why = loadstring("\n" .. req.body, chunkname)
+    -   local chunk, why = loadstring(req.body, chunkname)
+    +   local chunk, why = loadstring("\n" .. req.body, chunkname)
     ```
 
 Inside a block, a *hunk* is a run of `- ` lines — the anchor, taken verbatim
@@ -100,8 +100,8 @@ not cover is printed by the sweep itself rather than left to be assumed.
 - reddens: `FAIL  executor/eval-hook`
 
 ```sweep-edit executor/DcsEvalExecutor.lua
--  local chunk, why = loadstring(req.body, chunkname)
-+  local chunk, why = loadstring("\n" .. req.body, chunkname)
+-   local chunk, why = loadstring(req.body, chunkname)
++   local chunk, why = loadstring("\n" .. req.body, chunkname)
 ```
 
 ---
@@ -115,11 +115,11 @@ not cover is printed by the sweep itself rather than left to be assumed.
 - reddens: `containment_stops_at_a_segment_boundary`
 
 ```sweep-edit crates/dcs-eval/src/paths.rs
--        let mut boundary = root;
--        if boundary.last() != Some(&SEPARATOR) {
--            boundary.push(SEPARATOR);
--        }
-+        let boundary = root;
+-         let mut boundary = root;
+-         if boundary.last() != Some(&SEPARATOR) {
+-             boundary.push(SEPARATOR);
+-         }
++         let boundary = root;
 ```
 
 ---

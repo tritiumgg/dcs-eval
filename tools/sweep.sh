@@ -149,4 +149,241 @@ if [ "$list" -eq 1 ]; then
     exit 0
 fi
 
-die "only --list is built so far" 2
+# --- the copies, the manifest and the breadcrumb ----------------------------
+#
+# Nothing here uses a git write path. `git checkout -- <file>` takes a working
+# tree's uncommitted work with it, so a restore built on it would silently
+# destroy an edit that had nothing to do with the sweep. Every mutated file is
+# restored from a copy this run took first and confirmed with `cmp`.
+#
+# That per-file `cmp` is the load-bearing check. The `git status` snapshot
+# around the run is the backstop, and it is a weaker one: it cannot see a
+# gitignored path at all, so a mutation under `target/` would walk straight
+# past it. What the snapshot catches that the copies cannot is a file created
+# rather than modified. A reader who takes the snapshot for the guarantee will
+# weaken the `cmp`; it is the other way round.
+
+breadcrumb="$root/.sweep-inflight"
+
+if [ -e "$breadcrumb" ]; then
+    printf '%s: a previous run did not finish.\n\n' "$me" >&2
+    cat "$breadcrumb" >&2
+    printf '\nRestore each file from its copy by hand, check it with cmp, then\n' >&2
+    printf 'remove %s. Nothing is swept until it is gone.\n' "$breadcrumb" >&2
+    exit 2
+fi
+
+work=$(mktemp -d)
+mkdir -p "$work/orig"
+: > "$work/manifest"
+keepwork=0
+interrupted=0
+
+note_breadcrumb() {
+    {
+        printf 'copies: %s\n' "$work/orig"
+        printf 'pid: %s\n' "$$"
+        printf 'control: %s\n' "${1:-<none yet>}"
+        printf '\nrestore each with:\n'
+        while IFS="$US" read -r path copy; do
+            printf '  cp -p "%s" "%s"\n' "$copy" "$root/$path"
+        done < "$work/manifest"
+    } > "$breadcrumb"
+}
+
+note_breadcrumb
+
+# Copy a file this control is about to touch, and record it. The manifest line
+# is written straight after the `cp` and before the next one, so an interrupt
+# between the two loses nothing: no file is edited until every copy is taken.
+take_copy() {
+    n=$(( $(wc -l < "$work/manifest") + 1 ))
+    flat=$(printf '%s' "$1" | tr '/\\:' '___')
+    copy=$(printf '%s/orig/%02d-%s' "$work" "$n" "$flat")
+    cp -p "$root/$1" "$copy"
+    printf '%s%s%s\n' "$1" "$US" "$copy" >> "$work/manifest"
+}
+
+# Put every copied file back and prove it went back. The manifest is the
+# authority, not the loop that mutated: a control that failed halfway restores
+# exactly what it had taken, in the same way as one that succeeded.
+restore_all() {
+    [ "$keepwork" -eq 0 ] || return 1
+    [ -s "$work/manifest" ] || return 0
+    bad=0
+    while IFS="$US" read -r path copy; do
+        tries=0
+        # A test process that has not fully exited can still hold the file on
+        # Windows, so a failing copy is retried briefly before it is believed.
+        while ! cp -p "$copy" "$root/$path" 2>/dev/null; do
+            tries=$((tries + 1))
+            [ "$tries" -ge 15 ] && break
+            sleep 0.2
+        done
+        if ! cmp -s "$copy" "$root/$path"; then
+            printf 'NOT-RESTORED  %s differs from its copy\n' "$path" >&2
+            printf '              cp -p "%s" "%s"\n' "$copy" "$root/$path" >&2
+            bad=1
+        fi
+    done < "$work/manifest"
+    if [ "$bad" -ne 0 ]; then
+        keepwork=1
+        printf '              copies kept at %s\n' "$work/orig" >&2
+        return 1
+    fi
+    : > "$work/manifest"
+    return 0
+}
+
+on_exit() {
+    status=$?
+    trap - EXIT
+    restored=$(wc -l < "$work/manifest" 2>/dev/null || echo 0)
+    restore_all || status=2
+    if [ "$interrupted" -eq 1 ]; then
+        printf 'interrupted: restored %s files from their copies\n' "$restored" >&2
+        [ "$status" -eq 2 ] || status=130
+    fi
+    [ "$keepwork" -eq 1 ] || { rm -f "$breadcrumb"; rm -rf "$work"; }
+    exit "$status"
+}
+trap on_exit EXIT
+trap 'interrupted=1; exit 130' INT TERM HUP
+
+# --- applying one control's edits -------------------------------------------
+
+# gawk on Windows opens a file in text mode and drops CR as it reads, so a
+# CRLF file would match an LF anchor and then be written back LF-only — a
+# silent conversion of a file the sweep promised not to change. MSYS grep is
+# blind to CR for the same reason, so the bytes are counted with tr instead.
+has_cr() {
+    [ -n "$(tr -dc '\r' < "$1" | head -c 1)" ]
+}
+
+# The applier. Reads the hunks of one file and rewrites that file, counting
+# every occurrence of an anchor before it changes anything: exactly one, or it
+# writes nothing and says which anchor and how many places it found.
+APPLY='
+function bail(msg) { printf "%s\n", msg > "/dev/stderr"; exit 3 }
+BEGIN {
+    while ((getline line < hunks) > 0) {
+        if (line == "") { mode = ""; continue }
+        head = substr(line, 1, 2)
+        if (head == "- " || line == "-") {
+            if (mode != "anchor") { nh++; na[nh] = 0; nr[nh] = 0; mode = "anchor" }
+            na[nh]++; A[nh, na[nh]] = (line == "-" ? "" : substr(line, 3))
+        } else if (head == "+ " || line == "+") {
+            if (mode == "") bail("a replacement line with no anchor above it: " line)
+            mode = "repl"
+            nr[nh]++; R[nh, nr[nh]] = (line == "+" ? "" : substr(line, 3))
+        } else {
+            bail("a block line is neither anchor nor replacement: " line)
+        }
+    }
+    close(hunks)
+    if (nh == 0) bail("the block holds no hunks")
+}
+{ L[NR] = $0 }
+END {
+    n = NR
+    for (h = 1; h <= nh; h++) {
+        c = 0
+        for (i = 1; i + na[h] - 1 <= n; i++) {
+            ok = 1
+            for (k = 1; k <= na[h]; k++) if (L[i + k - 1] != A[h, k]) { ok = 0; break }
+            if (ok) { c++; at[h] = i }
+        }
+        if (c == 0) bail(sprintf("no hunk matching \"%s\" (0 of 1 located)", A[h, 1]))
+        if (c > 1) bail(sprintf("the anchor \"%s\" matches %d places, wanted exactly 1", A[h, 1], c))
+    }
+    for (h = 1; h <= nh; h++)
+        for (g = h + 1; g <= nh; g++)
+            if (at[h] <= at[g] + na[g] - 1 && at[g] <= at[h] + na[h] - 1)
+                bail("two hunks of this block overlap")
+    for (i = 1; i <= n; i++) {
+        hit = 0
+        for (h = 1; h <= nh; h++) if (at[h] == i) hit = h
+        if (hit) {
+            for (k = 1; k <= nr[hit]; k++) print R[hit, k]
+            i += na[hit] - 1
+            continue
+        }
+        print L[i]
+    }
+}'
+
+# The paths one control touches, in the order its blocks name them.
+paths_of() {
+    awk '/^F\t/ { p = $0; sub(/^F\t/, "", p); print p }' "$work/edits"
+}
+
+hunks_of() {
+    awk -v want="$1" '
+        /^F\t/ { p = $0; sub(/^F\t/, "", p); on = (p == want); next }
+        on && /^L\t/ { t = $0; sub(/^L\t/, "", t); print t }
+    ' "$work/edits"
+}
+
+# Apply every edit of one control. Sets `unperformed` and returns 1 when the
+# mutation no longer applies; whatever had already been mutated is left for
+# restore_all, which is called by the caller either way.
+apply_control() {
+    unperformed=
+    edits_of "$1" > "$work/edits"
+    if [ ! -s "$work/edits" ]; then
+        unperformed="the inventory carries no sweep-edit block"
+        return 1
+    fi
+    paths=$(paths_of)
+    if [ "$(printf '%s\n' "$paths" | sort | uniq -d)" != "" ]; then
+        unperformed="two blocks name the same file; the format wants one per file"
+        return 1
+    fi
+    # Every file is checked before any file is copied, and every copy is taken
+    # before any file is written.
+    for p in $paths; do
+        if [ ! -f "$root/$p" ]; then
+            unperformed="no such file: $p"
+            return 1
+        fi
+        if has_cr "$root/$p"; then
+            unperformed="$p carries CR line endings; anchors compare on LF lines, so no anchor can match"
+            return 1
+        fi
+    done
+    for p in $paths; do take_copy "$p"; done
+    for p in $paths; do
+        hunks_of "$p" > "$work/hunks"
+        if why=$(awk -v hunks="$work/hunks" "$APPLY" "$root/$p" 2>&1 >"$work/out"); then
+            mv "$work/out" "$root/$p"
+        else
+            unperformed="$p: $why"
+            return 1
+        fi
+    done
+    return 0
+}
+
+# --- the run ----------------------------------------------------------------
+
+failures=0
+
+printf '%s\n' "$rows" | grep -v "${US}out${US}" > "$work/todo" || true
+
+while IFS="$US" read -r id kind cmd reddens controls reason; do
+    selected "$id" || continue
+    note_breadcrumb "$id"
+    if apply_control "$id"; then
+        printf 'APPLIED       %s\n' "$id"
+    else
+        printf 'UNPERFORMED   %s\n' "$id"
+        printf '              %s\n' "$unperformed"
+        failures=$((failures + 1))
+    fi
+    restore_all || exit 2
+done < "$work/todo"
+
+note_breadcrumb
+
+[ "$failures" -eq 0 ] || exit 1
+exit 0

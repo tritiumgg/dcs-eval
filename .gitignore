@@ -14,3 +14,7 @@
 # Live-run output. A measurement of one session on one DCS build; STATE.md
 # and the decision records carry what it established, not the raw rows.
 /runs/
+
+# The mutation sweep's breadcrumb. It names the copies a run in flight can be
+# restored from; a later run refuses to start while one is present.
+/.sweep-inflight
