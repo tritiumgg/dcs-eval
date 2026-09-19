@@ -96,6 +96,10 @@ run = [
   # first, and a guard that has stopped refusing fails here rather
   # than passing quietly below.
   "sh tools/check-lua-test.sh",
+  # The mutation sweep's own cases. The sweep is not run here — it is slow and
+  # it edits files — but a runner that stopped failing honestly would make
+  # every later sweep worthless, and these cases need no toolchain either.
+  "sh tools/sweep-test.sh",
   "sh tools/check-lua.sh",
   "mise exec -- lua-language-server --check . --checklevel=Warning",
   # The harness runner, driven against suites that must fail: proof that it

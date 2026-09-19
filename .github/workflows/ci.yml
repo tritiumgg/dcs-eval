@@ -27,6 +27,10 @@ jobs:
       # That the real interpreter satisfies it is the windows job's claim.
       - name: Prove the interpreter guard refuses a wrong version
         run: sh tools/check-lua-test.sh
+      # No toolchain needed: the cases drive a copy of the sweep over a
+      # sandbox of fixture files and fake commands.
+      - name: Prove the mutation sweep still fails honestly
+        run: sh tools/sweep-test.sh
       - name: Test every hook against its payload
         run: sh tools/hooktest.sh
       - name: Every shell script parses as sh
