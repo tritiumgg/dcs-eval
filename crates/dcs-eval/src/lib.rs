@@ -11,6 +11,7 @@ pub mod paths;
 pub mod protocol;
 pub mod publish;
 pub mod readers;
+pub mod status;
 
 // The crate carries `unsafe`, which it did not before, and all of it is in
 // this one module: the Win32 calls it makes, each declared beside a safe
