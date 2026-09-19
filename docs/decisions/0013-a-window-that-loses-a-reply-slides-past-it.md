@@ -44,9 +44,10 @@ gives an answer that is neither a reply nor a death. A single-request caller
 that gets `pending` waits again or gives up, and that is the end of it; a
 window has W-1 other requests in flight behind the one that went quiet, and an
 unstated rule here is the difference between a driver that drains and one that
-stops dead behind a request the executor never reached. Four such answers exist
+stops dead behind a request the executor never reached. Five such answers exist
 — a head that ran out of time, a spec that could not be published at all, a
-head that came back terminal, and a read of the session that failed outright —
+head that came back terminal, a read of the session that failed outright, and
+a counter with no ten-digit `seq` left to name the next request with —
 and none of them has a rule in the frozen text.
 
 ## Decision
@@ -89,6 +90,17 @@ refilled.
   the same way for ever. The error is yielded once and the iterator returns
   nothing afterwards for good, so a caller looping over it terminates instead
   of receiving an unbounded stream of identical errors.
+- **A counter with no id left is reported behind the window it already
+  filled, once, and ends the drain.** A `<seq>` is ten digits and a client
+  that has spent all ten thousand million of them can mint no name the
+  executor would take; the specs still waiting have nowhere to go. But the
+  requests already on the disk were asked for first and are owed their
+  answers, so the window drains in front of the refusal, which is also the
+  caller's own order — the spec that could not be minted sits behind them.
+  The refusal is then yielded once and the iterator ends, for the reason an
+  unreadable session ends it: nothing about a spent counter changes on a
+  retry, and an error yielded without ending is a `for` loop that never
+  returns.
 - **What was never published comes back.** `unsent()` is how many specs the
   drain never reached and `into_unsent()` hands them back, because a caller
   that gave the window its specs by value cannot retry what it cannot get
@@ -103,6 +115,10 @@ Alternatives rejected:
   the session never justified when the head was `dead`.
 - *Report neighbours without collecting them.* Discards replies already on the
   disk.
+- *Report an exhausted counter the moment the mint fails.* The refusal jumps
+  the window: requests already on the disk are never waited on, never yielded
+  and their ids never reach the caller, which cannot collect what it cannot
+  name.
 - *Keep re-waiting a head whose `wait` errored.* Unbounded; each re-wait is
   another `upto` and nothing bounds the loop, so the caller gets a hang rather
   than an error.

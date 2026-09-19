@@ -20,10 +20,10 @@
 //! a zero-padded counter is what makes "lowest id" and "published first"
 //! the same thing.
 //!
-//! What a window does when the head gives an answer that is not a reply —
-//! ran out of time, could not be published at all, came back terminal, or
-//! could not be read — is decided in decision record 0013, and every
-//! branch below points at it.
+//! What a window does when a spec gives an answer that is not a reply —
+//! ran out of time, could not be published at all, came back terminal,
+//! could not be read, or had no id left to be given — is decided in
+//! decision record 0013, and every branch below points at it.
 
 use std::collections::VecDeque;
 use std::fmt;
@@ -66,7 +66,9 @@ impl Spec {
 #[derive(Debug)]
 pub enum PipeError {
     /// The counter has run past ten digits and there is no id left to
-    /// mint. Nothing was published and nothing was consumed.
+    /// mint. Nothing was published and nothing was consumed; it is
+    /// yielded once, after everything the window had already published,
+    /// and it ends the drain.
     Exhausted,
     /// A spec that did not reach the disk, in `send`'s own words. It is
     /// yielded in that spec's own place and the window is not short a
@@ -170,6 +172,10 @@ pub struct Pipeline {
     /// id still in flight is collected once and then reported in this
     /// word.
     gone: Option<Gone>,
+    /// Set once the minter ran out: the specs left in `specs` will never
+    /// be published, and the refusal is owed to the caller once the
+    /// window in front of it has drained.
+    exhausted: bool,
     /// Set once nothing more will ever be yielded, so the iterator is
     /// fused rather than re-waiting a head it already gave up on.
     done: bool,
@@ -210,6 +216,7 @@ impl Pipeline {
             specs: specs.into(),
             flight: VecDeque::new(),
             gone: None,
+            exhausted: false,
             done: false,
         }
     }
@@ -245,16 +252,22 @@ impl Pipeline {
     /// publish. A spec that refuses takes its place in the queue as a
     /// refusal and the filling goes on, so the window is W deep whatever
     /// any one spec did.
-    fn fill(&mut self) -> Result<(), PipeError> {
+    fn fill(&mut self) {
         while self.gone.is_none() && self.published() < self.depth {
             if self.specs.is_empty() {
-                return Ok(());
+                return;
             }
             // The id is minted before the spec is taken, so a minter with
             // nothing left leaves the spec where it was: `unsent` still
             // counts it, and a caller can retry it under a fresh minter.
+            //
+            // The refusal is recorded rather than raised. It belongs
+            // behind every request already on the disk, which the caller
+            // asked for first, so the window drains in front of it and
+            // the error is yielded when the queue runs out.
             let Some(id) = self.minter.mint() else {
-                return Err(PipeError::Exhausted);
+                self.exhausted = true;
+                return;
             };
             let spec = self.specs.pop_front().expect("the queue was just read");
             let headers: Vec<(&str, &str)> = spec
@@ -269,7 +282,19 @@ impl Pipeline {
                 },
             );
         }
-        Ok(())
+    }
+
+    /// Nothing is left in flight, so the drain ends — and says why, if
+    /// the reason was a minter with nothing left. A window stopped by a
+    /// terminal outcome ends silently instead: what kept the rest of the
+    /// specs off the disk there was the session and not the counter, and
+    /// `unsent` is where a caller reads that.
+    fn finish(&mut self) -> Option<Result<Outcome, PipeError>> {
+        self.done = true;
+        if self.exhausted && self.gone.is_none() {
+            return Some(Err(PipeError::Exhausted));
+        }
+        None
     }
 
     /// One neighbour of a head that came back terminal: collected once,
@@ -300,15 +325,12 @@ impl Iterator for Pipeline {
         if self.done {
             return None;
         }
-        if let Err(err) = self.fill() {
-            return Some(Err(err));
-        }
+        self.fill();
         if let Some(gone) = self.gone {
-            let neighbour = self.next_neighbour(gone);
-            if neighbour.is_none() {
-                self.done = true;
+            if let Some(neighbour) = self.next_neighbour(gone) {
+                return Some(neighbour);
             }
-            return neighbour;
+            return self.finish();
         }
         let head = match self.flight.front() {
             Some(Slot::Sent(sent)) => sent.clone(),
@@ -321,10 +343,7 @@ impl Iterator for Pipeline {
                 };
                 return Some(Err(PipeError::Send(err)));
             }
-            None => {
-                self.done = true;
-                return None;
-            }
+            None => return self.finish(),
         };
         let outcome = match wait(&self.session, &head, self.upto) {
             Ok(outcome) => outcome,
@@ -348,10 +367,7 @@ impl Iterator for Pipeline {
         // reply for — and a window refilled on the way back in would be W
         // deep only while nothing was being done with the replies, which
         // is the one moment it does not matter.
-        // The one thing `fill` can refuse is a minter with no ten-digit
-        // seq left, and that leaves its spec where it was, so the next
-        // call refuses again in the same words with nothing lost.
-        let _ = self.fill();
+        self.fill();
         Some(Ok(outcome))
     }
 }
@@ -893,6 +909,43 @@ mod tests {
             format!("{quiet}.req"),
             "and the quiet one is still lying where it was published"
         );
+    }
+
+    #[test]
+    fn an_exhausted_minter_ends_the_drain_behind_what_it_had_published() {
+        // The counter starts on the last ten-digit seq, so one request is
+        // published and the two specs behind it have no id to be given.
+        // Three things are proved together: the published request is
+        // still waited on and yielded rather than abandoned on the disk,
+        // the refusal comes after it — where the caller put the spec that
+        // could not be minted — and the drain ends. An iterator that
+        // reported the refusal without ending would refuse for ever, and
+        // `for outcome in pipeline` would never return.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let specs = pings(&s, 3);
+        let minter = Minter::seeded_at(11, 9_999_999_999);
+        let tag = minter.tag().to_owned();
+        let mut p = Pipeline::over_with(&h, minter, specs, 3, UPTO);
+        let got: Vec<_> = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                until(s.req(), ".req", 1, UPTO);
+                s.tick()
+            });
+            p.by_ref().take(4).collect()
+        });
+        assert_eq!(
+            ids(&got),
+            [
+                format!("9999999999-{tag}"),
+                "error: the minter has no ten-digit seq left".to_owned(),
+            ],
+            "the one it published, then the refusal, then nothing"
+        );
+        assert!(matches!(got[0], Ok(Outcome::Reply(_))), "{:?}", ids(&got));
+        assert!(p.next().is_none(), "and it stays ended");
+        assert_eq!(p.unsent(), 2, "the two that were never minted come back");
+        assert_eq!(p.into_unsent().len(), 2);
     }
 
     #[test]
