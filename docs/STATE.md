@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T53 landed; T57 has not started.
+Nothing. T57 landed and Milestone B closed with it.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,23 +25,21 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T57** — the mutation sweep: `sh tools/sweep.sh` performs 31 controls across Stages 3 to 6 in 3m24s on a warm `target/`, all 31 red, tree identical before and after. `docs/mutations.md` is the inventory; `tools/sweep-cover.sh` holds it to the plan's rows. 38 controls are out of scope and the run says so. The pull request holds the evidence.
 - **T53** — the two whole echoes cut at eighty: `ping: 336`, `eval-hook: 672`, `standin` 34, harness 8545. Comparing the dialects first turned up a third: the stand-in echoed a malformed `state` whole where the Lua already cut it. All five mutations seen red. The pull request holds the rest.
 - **T36** — the game-state derivation: `game_state` prints 92, the crate 448. Six axes and the `ui` record, every `unknown` naming its reason, no axis filled from another's evidence (ADR 0018). The axes the first live run is meant to fill in are left undecided on purpose. All eight mutations seen red — one only after the sweep was widened to spoil every arm rather than one in seven.
-- **T35** — the game-state reads: `game_reads` prints 53, the crate 354. Nine reads in a constant table, one `pcall` each, tier 2 built and off; an answer has five arms so an errored, absent, false and malformed read stay distinct (ADR 0017). `vet` refuses a never-sent or unlisted name at the publication seam. All twelve mutations seen red, three saying something other than what was predicted.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T57** — the mutation sweep, scripted: one runner that applies each
-control's named mutation to a copy, runs the one command that must redden,
-restores and reports. Done when `sh tools/sweep.sh` prints one row per control
-and exits non-zero if any control stayed green or any file did not come back
-identical; a mutation that no longer applies is reported unperformed, never
-skipped silently, and restoring with `git checkout` reddens the tree-clean
-check.
+**Task T37** — Milestone C opens: `rmcp` stdio wiring, the `serve` role, the
+client built per call. Done when `cargo test -p dcs-mcp serve` shows only
+protocol frames on stdout and diagnostics on stderr; the mutation is a
+diagnostic written to stdout, and its row goes into `docs/mutations.md` with
+the task, as every control's now does.
 
-**An agent verifies** it here: every control it drives already runs off DCS.
+**An agent verifies** it here: the transport is proved off DCS.
 
 ## After that
 
@@ -50,7 +48,7 @@ check.
 - **Stage 3 is closed:** eval across the carriers with `<file>:47` true in
   every state, and the `a_do_script` shift reproduced.
 - **Stage 4's path is closed and Stage 5 has opened:** `tick-budget: 524`, `instr-budget: 2209`, `fence: 583`, `events: 114`, `dormant: 40`, `arming: 95`, `heartbeat: 300`. Stage 6 has opened on the client side: `paths: 15`, `readers: 24`, `wait: 32`, `status: 24`, `id: 7`, `pipeline: 17`, `file_refusals: 27`, `file_source: 40`, `watch: 13`, `game_reads: 55`, `game_state: 92` under `cargo test`, the crate at 448.
-  Milestone B needs the rest of Stage 5 and the mutation sweep.
+  Milestone B is closed: every Stage 3 to 6 row is built and swept.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
   Everything provable off DCS is proved before it.
 
@@ -84,8 +82,8 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A path with a byte past ASCII stops the load.** Header values are ASCII, so a user name past ASCII puts one in every path the handshake names and the load refuses, naming the header in `dcs.log` (`docs/audit.md`, Open: the spec says nothing).
   The client parses it as the executor does, the maintainer's call at T13; a
   spelling for such a path on the wire is the writer's side, unsettled.
-- **The disarm owes a sweep, and no row asks for one.** Its heartbeat half is
-  built (T29); the sweep on that same disarm is unclaimed.
+- **Two sweeps are owed, no row asks for either.** The disarm's own (its heartbeat
+  half is T29's), and Stages 0 to 2, which `sweep-cover.sh` does not reach.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is proved
   with a file the suite keeps open. T56's directory handle refuses a removal here
   too; that no server holds one between tool calls is T41's.
