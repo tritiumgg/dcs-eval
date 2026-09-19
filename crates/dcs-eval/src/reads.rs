@@ -229,6 +229,64 @@ impl fmt::Display for NotSent {
     }
 }
 
+/// Why no `ok` reply came back, kept as data rather than as prose.
+///
+/// The arms are here so that nothing downstream has to prefix-match a
+/// sentence to tell one from another. A reply that came back and said
+/// something other than `ok` is a fact about the carrier the request
+/// named, and which thing it says is in the status and the stage; a
+/// pending, a superseded session, a session that is gone and a window
+/// that could not publish say nothing about a carrier at all. Rendering
+/// any of it as a sentence is [`fmt::Display`]'s job, so a change to the
+/// wording cannot change what a reader can tell apart.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unanswered {
+    /// A reply came back and its status was not `ok`. Both fields are
+    /// the headers verbatim, and `stage` is `None` where the reply
+    /// carried none.
+    NotOk {
+        status: String,
+        stage: Option<String>,
+        detail: String,
+    },
+    /// The window gave up with the request still unanswered.
+    Pending { id: String, phase: String },
+    /// The session was superseded before it answered.
+    Superseded { id: String },
+    /// The session was gone before it answered.
+    Dead { id: String },
+    /// The window could not publish the request or could not read its
+    /// reply.
+    Window { detail: String },
+    /// The window yielded fewer items than it was handed specs, so there
+    /// was nothing to read for this one.
+    Unyielded,
+}
+
+impl fmt::Display for Unanswered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NotOk {
+                status,
+                stage,
+                detail,
+            } => match stage {
+                Some(stage) => write!(f, "{status} at {stage}: {detail}"),
+                None => write!(f, "{status}: {detail}"),
+            },
+            Self::Pending { id, phase } => {
+                write!(f, "{id} is still pending, the session in {phase}")
+            }
+            Self::Superseded { id } => {
+                write!(f, "{id}: the session was superseded before it answered")
+            }
+            Self::Dead { id } => write!(f, "{id}: the session was gone before it answered"),
+            Self::Window { detail } => write!(f, "{detail}"),
+            Self::Unyielded => write!(f, "the window ended before this request was yielded"),
+        }
+    }
+}
+
 /// What one read came to. Five arms and no default: an errored read, an
 /// absent read, a false read and a far end that has stopped speaking the
 /// grammar are four different findings, and the derivation that reads
@@ -252,10 +310,11 @@ pub enum Answer {
     Malformed { body: Vec<u8> },
     /// Anything that is not an `ok` reply: a refusal with its status and
     /// stage, a pending, a session superseded or gone, or a window that
-    /// could not publish or could not read. All of it means the same
-    /// thing to a reader — no answer came back — and none of it says
-    /// anything about the game.
-    Unanswered { why: String },
+    /// could not publish or could not read. None of it says anything
+    /// about the game, and which of them it was stays on the arm as
+    /// data, because a refusal is evidence about the carrier and the
+    /// rest is not.
+    Unanswered { why: Unanswered },
     /// The read was never published.
     NotSent { why: NotSent },
 }
@@ -268,6 +327,36 @@ const OPAQUE: [&str; 4] = ["table", "function", "userdata", "thread"];
 const TYPES: [&str; 8] = [
     "nil", "boolean", "number", "string", "table", "function", "userdata", "thread",
 ];
+
+/// The `ok` reply a window's item carries, or why there is none.
+///
+/// Everything that rides a reads window goes through here — a read, the
+/// ping, the probe — so that "no answer came back" is decided once and
+/// in one shape, and each caller is left with only what an `ok` reply of
+/// its own kind means.
+fn replied(item: Result<Outcome, PipeError>) -> Result<Envelope, Unanswered> {
+    let envelope = match item {
+        Ok(Outcome::Reply(envelope)) => envelope,
+        Ok(Outcome::Pending { id, phase, .. }) => return Err(Unanswered::Pending { id, phase }),
+        Ok(Outcome::Superseded { id }) => return Err(Unanswered::Superseded { id }),
+        Ok(Outcome::Dead { id }) => return Err(Unanswered::Dead { id }),
+        Err(err) => {
+            return Err(Unanswered::Window {
+                detail: err.to_string(),
+            });
+        }
+    };
+    let status = envelope.headers.get("status").unwrap_or_default();
+    if status == "ok" {
+        return Ok(envelope);
+    }
+    let stage = envelope.headers.get("stage").unwrap_or_default();
+    Err(Unanswered::NotOk {
+        status: status.to_owned(),
+        stage: (!stage.is_empty()).then(|| stage.to_owned()),
+        detail: String::from_utf8_lossy(&envelope.body).into_owned(),
+    })
+}
 
 /// What the pipeline's item for one read says that read came to.
 ///
@@ -283,44 +372,10 @@ const TYPES: [&str; 8] = [
 /// and cannot be mistaken for one that threw.
 #[must_use]
 pub fn answer_of(item: Result<Outcome, PipeError>) -> Answer {
-    let envelope = match item {
-        Ok(Outcome::Reply(envelope)) => envelope,
-        Ok(Outcome::Pending { id, phase, .. }) => {
-            return Answer::Unanswered {
-                why: format!("{id} is still pending, the session in {phase}"),
-            };
-        }
-        Ok(Outcome::Superseded { id }) => {
-            return Answer::Unanswered {
-                why: format!("{id}: the session was superseded before it answered"),
-            };
-        }
-        Ok(Outcome::Dead { id }) => {
-            return Answer::Unanswered {
-                why: format!("{id}: the session was gone before it answered"),
-            };
-        }
-        Err(err) => {
-            return Answer::Unanswered {
-                why: err.to_string(),
-            };
-        }
+    let envelope = match replied(item) {
+        Ok(envelope) => envelope,
+        Err(why) => return Answer::Unanswered { why },
     };
-    let status = envelope.headers.get("status").unwrap_or_default();
-    if status != "ok" {
-        let stage = envelope.headers.get("stage").unwrap_or_default();
-        let stage = if stage.is_empty() {
-            String::new()
-        } else {
-            format!(" at {stage}")
-        };
-        return Answer::Unanswered {
-            why: format!(
-                "{status}{stage}: {}",
-                String::from_utf8_lossy(&envelope.body)
-            ),
-        };
-    }
     // The chunk always returns a string, so a reply that says it returned
     // anything else did not run the chunk this side built.
     if envelope.headers.get("result_type").unwrap_or_default() != "string" {
@@ -635,7 +690,7 @@ pub fn gather(
     for r in &reads {
         let answer = items.next().map_or(
             Answer::Unanswered {
-                why: "the window ended before this read was yielded".to_owned(),
+                why: Unanswered::Unyielded,
             },
             answer_of,
         );
@@ -963,57 +1018,137 @@ mod game_reads {
             "",
             b"attempt to index global 'DCS' (a nil value)",
         ));
-        let Answer::Unanswered { why } = got else {
-            panic!("wanted Unanswered, got {got:?}");
-        };
-        assert!(why.starts_with("error"), "{why}");
-        assert!(why.contains("nil value"), "{why}");
+        assert_eq!(
+            got,
+            Answer::Unanswered {
+                why: Unanswered::NotOk {
+                    status: "error".to_owned(),
+                    stage: None,
+                    detail: "attempt to index global 'DCS' (a nil value)".to_owned(),
+                }
+            }
+        );
     }
 
     #[test]
-    fn a_refusal_is_unanswered_naming_its_status_and_stage() {
+    fn a_refusal_keeps_its_status_and_stage_as_data_and_not_as_a_sentence() {
+        // The derivation built on this has to tell a refusal from a
+        // pending without reading prose, so the status and the stage are
+        // fields. The sentence is rendered from them and is nobody's
+        // input.
         let got = answer_of(Ok(Outcome::Reply(envelope(
-            &[("status", "unsupported"), ("stage", "eval")],
+            &[("status", "refused"), ("stage", "eval")],
             b"gui is declared and not yet served by this executor",
         ))));
         let Answer::Unanswered { why } = got else {
             panic!("wanted Unanswered, got {got:?}");
         };
-        assert!(why.contains("unsupported"), "{why}");
-        assert!(why.contains("at eval"), "{why}");
-        assert!(why.contains("not yet served"), "{why}");
+        let Unanswered::NotOk {
+            status,
+            stage,
+            detail,
+        } = &why
+        else {
+            panic!("wanted NotOk, got {why:?}");
+        };
+        assert_eq!(status, "refused");
+        assert_eq!(stage.as_deref(), Some("eval"));
+        assert!(detail.contains("not yet served"), "{detail}");
+        assert_eq!(
+            why.to_string(),
+            "refused at eval: gui is declared and not yet served by this executor"
+        );
     }
 
     #[test]
     fn a_pipeline_error_is_unanswered_and_not_a_missing_read() {
         // The error half of the window's item has nowhere else to go, and
         // dropping it would turn a window that could not publish into a
-        // read that was never listed.
+        // read that was never listed. It is its own arm, so a reader
+        // cannot take it for a carrier that refused.
         let got = answer_of(Err(PipeError::Exhausted));
-        let Answer::Unanswered { why } = got else {
-            panic!("wanted Unanswered, got {got:?}");
+        let Answer::Unanswered {
+            why: Unanswered::Window { detail },
+        } = got
+        else {
+            panic!("wanted Unanswered::Window, got {got:?}");
         };
-        assert!(why.contains("ten-digit seq"), "{why}");
+        assert!(detail.contains("ten-digit seq"), "{detail}");
     }
 
     #[test]
-    fn a_pending_and_a_dead_session_are_unanswered_each_in_its_own_words() {
+    fn a_pending_and_a_dead_session_are_unanswered_each_on_its_own_arm() {
         let pending = answer_of(Ok(Outcome::Pending {
             id: "0000000001-ab".to_owned(),
             phase: "menu".to_owned(),
             flag: None,
         }));
-        let Answer::Unanswered { why } = pending else {
-            panic!("wanted Unanswered, got {pending:?}");
-        };
-        assert!(why.contains("pending") && why.contains("menu"), "{why}");
+        assert_eq!(
+            pending,
+            Answer::Unanswered {
+                why: Unanswered::Pending {
+                    id: "0000000001-ab".to_owned(),
+                    phase: "menu".to_owned(),
+                }
+            }
+        );
         let dead = answer_of(Ok(Outcome::Dead {
             id: "0000000001-ab".to_owned(),
         }));
-        let Answer::Unanswered { why } = dead else {
-            panic!("wanted Unanswered, got {dead:?}");
-        };
-        assert!(why.contains("gone"), "{why}");
+        assert_eq!(
+            dead,
+            Answer::Unanswered {
+                why: Unanswered::Dead {
+                    id: "0000000001-ab".to_owned(),
+                }
+            }
+        );
+        let superseded = answer_of(Ok(Outcome::Superseded {
+            id: "0000000001-ab".to_owned(),
+        }));
+        assert_ne!(superseded, dead, "a superseded session is not a dead one");
+    }
+
+    #[test]
+    fn every_reason_no_answer_came_back_is_its_own_arm() {
+        // The whole point of keeping these apart: no two of them are
+        // equal, so a reader cannot land on one thinking it is another.
+        let all = [
+            Unanswered::NotOk {
+                status: "refused".to_owned(),
+                stage: Some("eval".to_owned()),
+                detail: "no".to_owned(),
+            },
+            Unanswered::NotOk {
+                status: "invalid-state".to_owned(),
+                stage: Some("eval".to_owned()),
+                detail: "no".to_owned(),
+            },
+            Unanswered::Pending {
+                id: "0000000001-ab".to_owned(),
+                phase: "menu".to_owned(),
+            },
+            Unanswered::Superseded {
+                id: "0000000001-ab".to_owned(),
+            },
+            Unanswered::Dead {
+                id: "0000000001-ab".to_owned(),
+            },
+            Unanswered::Window {
+                detail: "no window".to_owned(),
+            },
+            Unanswered::Unyielded,
+        ];
+        for (i, one) in all.iter().enumerate() {
+            for (j, other) in all.iter().enumerate() {
+                assert_eq!(i == j, one == other, "{one:?} against {other:?}");
+                assert_eq!(
+                    i == j,
+                    one.to_string() == other.to_string(),
+                    "{one} against {other}"
+                );
+            }
+        }
     }
 
     /// Long enough that a busy box delays a test rather than turning a
