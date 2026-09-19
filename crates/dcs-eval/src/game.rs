@@ -1110,6 +1110,91 @@ pub fn bridge_of(
     }
 }
 
+/// Where a [`Ui`] record's callbacks came from.
+///
+/// On the record rather than in a sentence beside it, because the two
+/// sources are worth different amounts: a ping's callbacks are this tick's,
+/// and a heartbeat's `last_callback` is written at the next heartbeat
+/// write, so it may lag while the session is dormant. A reader has to know
+/// which they are holding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UiSource {
+    /// The ping answered, so these are this tick's.
+    Ping,
+    /// No ping answered; the file's, which may lag while dormant.
+    Heartbeat,
+    /// Neither: no ping answered and there was no usable heartbeat.
+    Nothing,
+}
+
+impl fmt::Display for UiSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Ping => f.write_str("this tick, from the ping"),
+            Self::Heartbeat => f.write_str("from the heartbeat, which may lag while dormant"),
+            Self::Nothing => f.write_str("from nothing: no ping answered and no heartbeat"),
+        }
+    }
+}
+
+/// What the session has seen fire. Evidence, and never a state.
+///
+/// No axis takes one of these, which is the signature-level form of
+/// "never a state": there is nowhere for a callback to become an answer.
+/// An empty `last_callback` is a value — the session has seen no callback
+/// — rather than a header the file is short of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Ui {
+    pub last_callback: Option<String>,
+    pub callbacks: Vec<String>,
+    pub source: UiSource,
+}
+
+/// What has fired, preferring the ping's answer because it is this tick's.
+#[must_use]
+pub fn ui_of(
+    ping: Option<&Result<crate::protocol::Envelope, crate::reads::Unanswered>>,
+    beat: Option<&Beat>,
+) -> Ui {
+    if let Some(Ok(envelope)) = ping {
+        let last = envelope.headers.get("last_callback").unwrap_or_default();
+        return Ui {
+            last_callback: (!last.is_empty()).then(|| last.to_owned()),
+            callbacks: split_callbacks(envelope.headers.get("callbacks").unwrap_or_default()),
+            source: UiSource::Ping,
+        };
+    }
+    match beat {
+        Some(Beat::Ours {
+            last_callback,
+            callbacks,
+            ..
+        }) => Ui {
+            last_callback: last_callback.clone(),
+            callbacks: callbacks.clone(),
+            source: UiSource::Heartbeat,
+        },
+        Some(Beat::Foreign { .. } | Beat::WrongHost { .. } | Beat::Unreadable { .. }) | None => {
+            Ui {
+                last_callback: None,
+                callbacks: Vec::new(),
+                source: UiSource::Nothing,
+            }
+        }
+    }
+}
+
+/// The callbacks header split, the way the heartbeat reader splits its
+/// own: a comma-separated list, with nothing kept for an empty one.
+fn split_callbacks(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
 /// The facts, one after another, for a line that prints all of them.
 fn joined(facts: &[Fact]) -> String {
     facts
@@ -2165,6 +2250,94 @@ mod game_state {
             },
             "another session's armed word was read as this session's"
         );
+    }
+
+    #[test]
+    fn the_ui_record_prefers_the_pings_callbacks() {
+        // The ping's are this tick's; the heartbeat's may lag while the
+        // session is dormant.
+        let ping = Ok(
+            crate::protocol::parse(
+                b"status: ok\nlast_callback: onSimulationStart@44\ncallbacks: onSimulationStart@44,onShowGameMenu@61\n\n",
+            )
+            .expect("the reply parses"),
+        );
+        let beat = Beat::Ours {
+            host: Host::Hook,
+            phase: Phase::Sim,
+            armed: true,
+            last_callback: Some("onMissionLoadEnd@2".to_owned()),
+            callbacks: vec!["onMissionLoadEnd@2".to_owned()],
+        };
+        let got = ui_of(Some(&ping), Some(&beat));
+        assert_eq!(got.source, UiSource::Ping);
+        assert_eq!(got.last_callback.as_deref(), Some("onSimulationStart@44"));
+        assert_eq!(got.callbacks.len(), 2, "{:?}", got.callbacks);
+    }
+
+    #[test]
+    fn a_heartbeat_sourced_record_says_where_it_came_from() {
+        let beat = Beat::Ours {
+            host: Host::Hook,
+            phase: Phase::Menu,
+            armed: false,
+            last_callback: Some("onMissionLoadEnd@2".to_owned()),
+            callbacks: vec!["onMissionLoadEnd@2".to_owned()],
+        };
+        let got = ui_of(None, Some(&beat));
+        assert_eq!(got.source, UiSource::Heartbeat);
+        assert_eq!(got.last_callback.as_deref(), Some("onMissionLoadEnd@2"));
+        assert!(got.source.to_string().contains("lag"), "{}", got.source);
+    }
+
+    #[test]
+    fn an_empty_last_callback_is_a_value_and_not_an_absence() {
+        // The session has seen no callback, which is a fact about the
+        // session and not a header the file is short of.
+        let beat = Beat::Ours {
+            host: Host::Hook,
+            phase: Phase::Menu,
+            armed: false,
+            last_callback: None,
+            callbacks: Vec::new(),
+        };
+        let got = ui_of(None, Some(&beat));
+        assert_eq!(got.last_callback, None);
+        assert!(got.callbacks.is_empty());
+        assert_eq!(
+            got.source,
+            UiSource::Heartbeat,
+            "a session with nothing fired yet still has a source"
+        );
+    }
+
+    #[test]
+    fn a_record_from_neither_source_says_so() {
+        let got = ui_of(None, None);
+        assert_eq!(got.source, UiSource::Nothing);
+    }
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn the_ui_record_appears_in_no_axis() {
+        // A signature-level check: there is nowhere in any of these for a
+        // callback to become an answer. A `Ui` added to one of these
+        // parameter lists stops this compiling.
+        let _: fn(Option<&Beat>, Option<&reads::Answer>) -> Activity = activity_of;
+        let _: fn(&Activity, Option<&Beat>, Option<&reads::Answer>) -> PauseAxis = pause_of;
+        let _: fn(
+            &Activity,
+            Option<&reads::Probe>,
+            reads::Tiers,
+            Option<&reads::Answer>,
+            Option<&reads::Answer>,
+        ) -> SessionAxis = session_of;
+        let _: fn(Option<&reads::Answer>) -> Track = track_of;
+        let _: fn(&Found, Option<&crate::status::Process>) -> ProcessAxis = process_of;
+        let _: fn(
+            Option<&Result<crate::protocol::Envelope, reads::Unanswered>>,
+            Option<&Beat>,
+        ) -> BridgeAxis = bridge_of;
     }
 
     #[test]
