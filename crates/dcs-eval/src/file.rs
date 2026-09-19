@@ -124,11 +124,36 @@ impl Roots {
 /// `max_request_bytes` less the header block less `size` — the bytes a
 /// reader still has in hand once this file's bytes are in the envelope —
 /// defined here once so nobody has to derive it a second time.
+///
+/// The fields are private for the reason [`Real`]'s is: [`check`] is then
+/// the only thing that can make one, so a reader taking an `Admitted` has
+/// the judgement in its signature rather than in a note asking its callers
+/// to have run one. A public field would let any caller assemble a path
+/// nothing judged and a size that came from nowhere.
 #[derive(Clone, Debug)]
 pub struct Admitted {
-    pub path: Real,
-    pub size: u64,
-    pub headroom: u64,
+    path: Real,
+    size: u64,
+    headroom: u64,
+}
+
+impl Admitted {
+    /// The resolved path that was judged, which is the one to open: a
+    /// reader that re-spells it has stepped outside what was checked.
+    pub fn path(&self) -> &Real {
+        &self.path
+    }
+
+    /// What the stat said, in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    /// What is left of the request ceiling once the header block and a file
+    /// of `size` are in the envelope.
+    pub fn headroom(&self) -> u64 {
+        self.headroom
+    }
 }
 
 /// Whether `real` may be read and would fit, deciding both before anything
@@ -643,8 +668,8 @@ mod file_refusals {
         let size = h.max_request_bytes - header_bytes;
         let real = sized(&s, "exact.lua", size);
         let ok = check(&s.roots(), &h, HEADERS, &real).expect("exactly at the ceiling");
-        assert_eq!(ok.size, size, "the size is what the stat said");
-        assert_eq!(ok.headroom, 0, "and nothing is left over");
+        assert_eq!(ok.size(), size, "the size is what the stat said");
+        assert_eq!(ok.headroom(), 0, "and nothing is left over");
     }
 
     #[test]
