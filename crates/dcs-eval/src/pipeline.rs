@@ -277,8 +277,20 @@ impl Pipeline {
     /// publish. A spec that refuses takes its place in the queue as a
     /// refusal and the filling goes on, so the window is W deep whatever
     /// any one spec did.
+    ///
+    /// The queue holding them is bounded all the same, at twice the
+    /// depth. A refusal costs the window no place, so a run of specs the
+    /// framer refuses would otherwise be consumed to the end of the list
+    /// in one call: a driver's million specs would mint a million ids and
+    /// hold a million refusals before the first of them was yielded, for
+    /// a window of eight. Filling stops there whatever is published, and
+    /// nothing stalls — each `next()` takes one off the front, so a queue
+    /// that long is one the caller has not drained yet.
     fn fill(&mut self) {
-        while self.gone.is_none() && self.published() < self.depth {
+        while self.gone.is_none()
+            && self.published() < self.depth
+            && self.flight.len() < self.depth.saturating_mul(2)
+        {
             if self.specs.is_empty() {
                 return;
             }
@@ -744,6 +756,44 @@ mod tests {
             vec![3, 3, 2, 1],
             "three deep across the refusal, and only then draining out"
         );
+    }
+
+    #[test]
+    fn a_run_of_refusals_does_not_swallow_the_spec_list() {
+        // Five specs the framer will refuse and a window two deep.
+        // Nothing reaches the disk, so a client that filled on the count
+        // of published requests alone would mint an id for all five and
+        // hold all five refusals before yielding the first — on a
+        // driver's list that is the whole list in memory for a window of
+        // two. What is proved is that the first `next()` left some of the
+        // list alone, and that bounding the queue costs nothing: all five
+        // still come back, in their places.
+        let b = Sandbox::new();
+        let (s, h) = ticking(&b);
+        let mut specs = pings(&s, 5);
+        for spec in &mut specs {
+            spec.headers.push(("note".to_owned(), "a\u{e9}".to_owned()));
+        }
+        let mut p = Pipeline::over_with(&h, Minter::seeded(11), specs, 2, UPTO);
+        let first = p.next().expect("the first refusal");
+        assert!(
+            matches!(first, Err(PipeError::Send(SendError::Frame(_)))),
+            "{:?}",
+            first.map(|o| o.id().to_owned())
+        );
+        assert!(
+            p.unsent() > 0,
+            "the first call minted an id for every spec in the list"
+        );
+        assert_eq!(entries(s.req()), "", "and none of them reached the disk");
+        let rest: Vec<_> = p.collect();
+        assert_eq!(rest.len(), 4, "the other four still come back");
+        for (at, item) in rest.iter().enumerate() {
+            assert!(
+                matches!(item, Err(PipeError::Send(SendError::Frame(_)))),
+                "{at}: {item:?}"
+            );
+        }
     }
 
     /// A session restarted under the window: the thread waits for the

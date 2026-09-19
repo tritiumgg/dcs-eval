@@ -68,7 +68,12 @@ refilled.
   id's place, and the slot refills.** The window is W *published* requests, and
   a spec the disk refused was never one of them; shrinking the window each time
   a publish fails would make a run of transient failures quietly serialise the
-  whole drain.
+  whole drain. The queue of refusals waiting their turn is bounded all the
+  same, at twice the window: costing the window no place means a run of specs
+  that all refuse would otherwise be consumed to the end of the caller's list
+  in a single `next()`, minting an id for each and holding every refusal
+  before the first was yielded, so what the client holds would be the size of
+  the caller's list rather than of its window.
 - **A terminal head stops publication, and each id still in flight is
   collected once before it is reported.** §3.3's neighbours "are simply
   unanswered", but that is a claim about the tick that killed the process, not
