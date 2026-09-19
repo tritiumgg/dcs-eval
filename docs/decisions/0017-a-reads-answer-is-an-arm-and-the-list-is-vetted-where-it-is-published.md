@@ -58,6 +58,16 @@ arm. `Malformed { body }` — an `ok` reply that is not the grammar.
 `Unanswered { why }` — anything that is not an `ok` reply. `NotSent { why }` —
 never published, because tier 2 is off or the session is loading.
 
+**`why` is data and not a sentence.** `Unanswered` carries its own arms —
+`NotOk { status, stage, detail }`, `Pending`, `Superseded`, `Dead`, `Window`
+and `Unyielded` — and `Display` renders the prose from them. The derivation
+built on this has to tell a refusal from a pending, and the two refusals the
+document gives the probe, `refused` and `invalid-state`, from each other; doing
+that by prefix-matching a formatted string is a default arm wearing a string
+match, and a later change to the wording would silently change what it decides.
+The status and the stage are what the far end said, so they are kept as the far
+end's words rather than folded into this side's.
+
 `Malformed` is not folded into `Raised` because a far end that has stopped
 speaking the grammar is a finding about this build, not a fact about the game;
 folding them would let a broken executor report itself as a game that threw.
@@ -105,7 +115,19 @@ All nine reads go to `state: hook`; the reachability probe is an `eval` of
 **The window carries the ping first, the reads, and the probe last.** A window
 is one wake and one quiet period whatever is in it, so taking them separately
 would cost two. What the ping and the probe *mean* is not decided here: the
-ping comes back as the envelope it was and the probe as an answer.
+ping comes back as the envelope it was and the probe as its own answer.
+
+**Neither the ping nor the probe speaks the read grammar, so neither is given a
+read's answer.** The probe has `Reachable`, `Unanswered { why }` and
+`Malformed { body }`: its success is a body of `ok`, which carries no tab, so a
+probe read as a read would report the one outcome meaning "this state can be
+reached" on the arm reserved for a far end that has stopped speaking — a
+finding about this build standing in for a fact about the session. The three
+answers the document gives it land on three of ours: `ok` is `Reachable`, and
+`refused` and `invalid-state` are the status on `NotOk`. The ping comes back as
+`Result<Envelope, Unanswered>`, so a ping that was refused is told from a
+window that was never opened, which the load branch's `None` means; collapsing
+both to `None` would lose exactly the distinction the read arms exist to keep.
 
 Alternatives rejected: a default arm folding absence into a value — it is
 exactly the confusion the next stage must not be able to make; a blocklist
