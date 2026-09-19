@@ -23,7 +23,7 @@ use std::time::Duration;
 use crate::pipeline::{PipeError, Pipeline, Spec};
 use crate::protocol::Envelope;
 use crate::readers::Handshake;
-use crate::wait::{Outcome, PHASE_LOAD};
+use crate::wait::{Flag, Outcome, PHASE_LOAD};
 
 /// Which tier a read belongs to, and so whether it is sent by default.
 ///
@@ -250,7 +250,18 @@ pub enum Unanswered {
         detail: String,
     },
     /// The window gave up with the request still unanswered.
-    Pending { id: String, phase: String },
+    ///
+    /// `flag` is the wait's own verdict, carried rather than re-derived:
+    /// re-deriving it would be a second implementation of the table the
+    /// wait already reads. **No flag does not mean armed and answering.**
+    /// The wait leaves one off on three branches — armed and fresh, and
+    /// either branch while the session is loading — so a flagless pending
+    /// is three readings at once and is evidence for none of them.
+    Pending {
+        id: String,
+        phase: String,
+        flag: Option<Flag>,
+    },
     /// The session was superseded before it answered.
     Superseded { id: String },
     /// The session was gone before it answered.
@@ -274,8 +285,13 @@ impl fmt::Display for Unanswered {
                 Some(stage) => write!(f, "{status} at {stage}: {detail}"),
                 None => write!(f, "{status}: {detail}"),
             },
-            Self::Pending { id, phase } => {
-                write!(f, "{id} is still pending, the session in {phase}")
+            Self::Pending { id, phase, flag } => {
+                write!(f, "{id} is still pending, the session in {phase}")?;
+                match flag {
+                    Some(Flag::Waking) => write!(f, ", waking"),
+                    Some(Flag::Stalled) => write!(f, ", stalled"),
+                    None => Ok(()),
+                }
             }
             Self::Superseded { id } => {
                 write!(f, "{id}: the session was superseded before it answered")
@@ -337,7 +353,9 @@ const TYPES: [&str; 8] = [
 fn replied(item: Result<Outcome, PipeError>) -> Result<Envelope, Unanswered> {
     let envelope = match item {
         Ok(Outcome::Reply(envelope)) => envelope,
-        Ok(Outcome::Pending { id, phase, .. }) => return Err(Unanswered::Pending { id, phase }),
+        Ok(Outcome::Pending { id, phase, flag }) => {
+            return Err(Unanswered::Pending { id, phase, flag });
+        }
         Ok(Outcome::Superseded { id }) => return Err(Unanswered::Superseded { id }),
         Ok(Outcome::Dead { id }) => return Err(Unanswered::Dead { id }),
         Err(err) => {
@@ -1149,6 +1167,7 @@ mod game_reads {
                 why: Unanswered::Pending {
                     id: "0000000001-ab".to_owned(),
                     phase: "menu".to_owned(),
+                    flag: None,
                 }
             }
         );
@@ -1170,6 +1189,50 @@ mod game_reads {
     }
 
     #[test]
+    fn a_pending_read_carries_the_waits_own_flag() {
+        // The flag is the wait's verdict about a session that has not
+        // answered, and it is the only thing downstream has to tell a
+        // waking session from a stalled one. Dropping it here would make
+        // that distinction unrecoverable and invite a second
+        // implementation of the table the wait already read.
+        for flag in [Flag::Waking, Flag::Stalled] {
+            let got = answer_of(Ok(Outcome::Pending {
+                id: "0000000001-ab".to_owned(),
+                phase: "sim".to_owned(),
+                flag: Some(flag),
+            }));
+            assert_eq!(
+                got,
+                Answer::Unanswered {
+                    why: Unanswered::Pending {
+                        id: "0000000001-ab".to_owned(),
+                        phase: "sim".to_owned(),
+                        flag: Some(flag),
+                    }
+                },
+                "the {flag:?} flag did not survive the answer"
+            );
+        }
+    }
+
+    #[test]
+    fn a_pending_with_no_flag_reads_as_one_that_is_simply_waiting() {
+        let got = answer_of(Ok(Outcome::Pending {
+            id: "0000000001-ab".to_owned(),
+            phase: "sim".to_owned(),
+            flag: None,
+        }));
+        let Answer::Unanswered { why } = &got else {
+            panic!("wanted Unanswered, got {got:?}");
+        };
+        let said = why.to_string();
+        assert!(
+            !said.contains("waking") && !said.contains("stalled"),
+            "a flagless pending said {said}"
+        );
+    }
+
+    #[test]
     fn every_reason_no_answer_came_back_is_its_own_arm() {
         // The whole point of keeping these apart: no two of them are
         // equal, so a reader cannot land on one thinking it is another.
@@ -1187,6 +1250,17 @@ mod game_reads {
             Unanswered::Pending {
                 id: "0000000001-ab".to_owned(),
                 phase: "menu".to_owned(),
+                flag: None,
+            },
+            Unanswered::Pending {
+                id: "0000000001-ab".to_owned(),
+                phase: "menu".to_owned(),
+                flag: Some(Flag::Waking),
+            },
+            Unanswered::Pending {
+                id: "0000000001-ab".to_owned(),
+                phase: "menu".to_owned(),
+                flag: Some(Flag::Stalled),
             },
             Unanswered::Superseded {
                 id: "0000000001-ab".to_owned(),
