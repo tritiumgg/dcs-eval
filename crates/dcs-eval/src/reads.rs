@@ -23,7 +23,7 @@ use std::time::Duration;
 use crate::pipeline::{PipeError, Pipeline, Spec};
 use crate::protocol::Envelope;
 use crate::readers::Handshake;
-use crate::wait::Outcome;
+use crate::wait::{Outcome, PHASE_LOAD};
 
 /// Which tier a read belongs to, and so whether it is sent by default.
 ///
@@ -695,7 +695,9 @@ pub fn gather(
             ));
         }
     }
-    if phase == "load" {
+    // The word is the wait's own, so the half that decides a load and the
+    // half that skips the window cannot come to spell it differently.
+    if phase == PHASE_LOAD {
         for r in &reads {
             entries.push((
                 r,
@@ -1385,7 +1387,7 @@ mod game_reads {
     fn a_loading_phase_publishes_nothing_at_all() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gather(&h, "load", Tiers::default(), UPTO).expect("not refused");
+        let readings = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
         assert_eq!(
             published(s.req()),
             0,
@@ -1507,7 +1509,7 @@ mod game_reads {
         // gone either way.
         let b = Sandbox::new();
         let (_s, h) = ticking(&b);
-        let readings = gather(&h, "load", Tiers::default(), UPTO).expect("not refused");
+        let readings = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
         assert_eq!(
             readings.of("multiplayer"),
             Some(&Answer::NotSent {
@@ -1712,7 +1714,7 @@ mod game_reads {
         );
         // The other half of the distinction, from the branch that sends
         // no ping at all.
-        let loaded = gather(&h, "load", Tiers::default(), UPTO).expect("not refused");
+        let loaded = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
         assert!(loaded.ping().is_none(), "a load asks nothing");
     }
 
@@ -1820,7 +1822,7 @@ mod game_reads {
     fn a_loading_phase_sends_no_ping_and_no_probe_either() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gather(&h, "load", Tiers::default(), UPTO).expect("not refused");
+        let readings = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
         assert_eq!(
             published(s.req()),
             0,

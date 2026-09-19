@@ -200,7 +200,7 @@ pub const WAKE_DEADLINE: Duration = Duration::from_secs(10);
 const PHASE_UNKNOWN: &str = "unknown";
 
 /// The phase a mission load takes, during which nothing fires at all.
-const PHASE_LOAD: &str = "load";
+pub(crate) const PHASE_LOAD: &str = "load";
 
 /// What a `pending` is waiting on, where there is something to say about
 /// it. No flag is the ordinary case: alive, ticking and answering.
