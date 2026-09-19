@@ -499,8 +499,16 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ## Out of scope
 
-The counts below are read off `docs/PLAN.md`: one for each distinct code edit a
-row's `mutations:` clause names, so a cell naming two edits counts two.
+The counts below are read off `docs/PLAN.md` by hand, and nothing re-derives
+them: `tools/sweep-cover.sh` checks that a Stage 3–6 row has an entry, not what
+any row's count is. They are part of the figure every run prints, so each one
+carries its per-row working below and can be re-counted against the plan.
+
+The rule: one for each distinct code edit a row's `mutations:` clause names, so
+a cell naming two edits counts two. An edit named to show that a control does
+*not* fire — the comment byte in T16, which must leave the interop control
+green — is not counted, because the sweep has no verdict for an edit that is
+meant to change nothing.
 
 ### out/stages-0-to-2
 
@@ -508,7 +516,11 @@ row's `mutations:` clause names, so a cell naming two edits counts two.
   its mutations are not source edits at all — a second interpreter binary, a CI
   step removed, a workspace member removed. No plan row asks for a sweep over
   them, and one is owed.
-- controls: 23
+- controls: 25
+- breakdown: T01–T06 one each, 6; T07 three refusals, 3; T08, T09, T10 two
+  each, 6; T11 one, 1; T12 one, 1; T13 two, 2; T14, T15 one each, 2; T16 two
+  (the comment byte uncounted), 2; T17 two, 2 — the `superseded` half its cell
+  defers is not counted, because no row has claimed it yet.
 
 ### out/stages-7-to-9
 
@@ -516,6 +528,8 @@ row's `mutations:` clause names, so a cell naming two edits counts two.
   the live proofs; there is no code to mutate, and the last of them needs a
   running game rather than a runner.
 - controls: 13
+- breakdown: T37–T40, T42, T43, T45, T46 one each, 8; T41 two, T44 two, 4;
+  T52 one, 1. Stage 9's remaining rows name no mutation and are owed none.
 
 ### out/the-runner-itself
 

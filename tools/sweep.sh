@@ -574,7 +574,10 @@ $rows
 EOF
 
 printf '\n'
-printf 'coverage: %s of %s controls swept, %s out of scope\n' \
+# The out-of-scope figure is a hand count in the inventory and nothing
+# re-derives it from the plan, so the line says so rather than letting a
+# reader take the whole total for something a tool checked.
+printf 'coverage: %s of %s controls swept, %s out of scope (counted by hand off the plan)\n' \
     "$performed" "$((in_total + out_total))" "$out_total"
 printf '          %s of %s in-scope controls performed, %s unperformed\n' \
     "$performed" "$in_total" "$unperformed_c"
