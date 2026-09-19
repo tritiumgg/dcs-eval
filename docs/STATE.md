@@ -25,7 +25,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T57** — the mutation sweep: `sh tools/sweep.sh` performs 31 controls across Stages 3 to 6 in 3m31s on a warm `target/`, all 31 red (30 entries, one folding two), tree identical before and after. `docs/mutations.md` is the inventory; `tools/sweep-cover.sh` holds it to the plan's rows. 40 controls are out of scope, hand-counted off the plan with the working shown, and the run says so. The pull request holds the evidence.
+- **T57** — the mutation sweep: `sh tools/sweep.sh` performs 31 of the 71 mutations the Stage 3–6 plan cells name, 3m31s warm, all 31 red, tree identical. 40 are out of scope and the run says so, as it says what its figure counts. `docs/mutations.md` is the inventory, `sweep-cover.sh` holds it to the plan, `.github/workflows/sweep.yml` runs it weekly — **the maintainer** sees that first scheduled run.
 - **T53** — the two whole echoes cut at eighty: `ping: 336`, `eval-hook: 672`, `standin` 34, harness 8545. Comparing the dialects first turned up a third: the stand-in echoed a malformed `state` whole where the Lua already cut it. All five mutations seen red. The pull request holds the rest.
 - **T36** — the game-state derivation: `game_state` prints 92, the crate 448. Six axes and the `ui` record, every `unknown` naming its reason, no axis filled from another's evidence (ADR 0018). The axes the first live run is meant to fill in are left undecided on purpose. All eight mutations seen red — one only after the sweep was widened to spoil every arm rather than one in seven.
 
@@ -82,8 +82,8 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A path with a byte past ASCII stops the load.** Header values are ASCII, so a user name past ASCII puts one in every path the handshake names and the load refuses, naming the header in `dcs.log` (`docs/audit.md`, Open: the spec says nothing).
   The client parses it as the executor does, the maintainer's call at T13; a
   spelling for such a path on the wire is the writer's side, unsettled.
-- **Two sweeps are owed, no row asks for either.** The disarm's own (its heartbeat
-  half is T29's), and Stages 0 to 2, which `sweep-cover.sh` does not reach.
+- **Three sweeps are owed, no row asks for any.** The disarm's own (its heartbeat half is T29's),
+  Stages 0 to 2, which `sweep-cover.sh` does not reach, and the mutations proved past what a plan cell named — a dozen at T35 — which are in neither figure the run prints.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is proved
   with a file the suite keeps open. T56's directory handle refuses a removal here
   too; that no server holds one between tool calls is T41's.
