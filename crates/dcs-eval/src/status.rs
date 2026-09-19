@@ -602,7 +602,7 @@ mod tests {
     use std::io::{self, ErrorKind};
 
     use crate::standin::Standin;
-    use crate::testing::{Sandbox, a_pid_that_has_exited, real, slurp, with};
+    use crate::testing::{Sandbox, a_pid_that_has_exited, entries, real, slurp, with};
 
     /// A stand-in session with its handshake published, naming `pid` as
     /// its process and this host's temp directory as the one its `lfs`
@@ -1114,5 +1114,120 @@ mod tests {
             line.contains("could not be established") && !line.contains("gone"),
             "the line cannot be read as death: {line}"
         );
+    }
+
+    /// A stand-in session whose frame panics, holding the only handle on
+    /// it, so that nothing in a test can tick it by accident.
+    ///
+    /// What the panicking frame is worth, plainly: [`status`] takes a path
+    /// and cannot reach this double, so the panic guards a later `status`
+    /// that is handed a driver and carries none of today's claim. Today's
+    /// claim rests on what the test looks at afterwards — the four
+    /// directories, the two files' bytes and modification times, the arm
+    /// file, and a rename the OS refuses while a handle is open.
+    struct Idle(Standin);
+
+    impl Idle {
+        fn output(&self) -> &Path {
+            self.0.output()
+        }
+
+        fn session(&self) -> &Path {
+            self.0.session()
+        }
+
+        fn req(&self) -> &Path {
+            self.0.req()
+        }
+
+        fn res(&self) -> &Path {
+            self.0.res()
+        }
+
+        fn arm(&self) -> &Path {
+            self.0.arm()
+        }
+
+        // Never called, and that is the point: it is here so that a later
+        // `status` handed this double goes red rather than quiet.
+        #[allow(dead_code)]
+        fn tick(&mut self) -> Vec<String> {
+            panic!("status made a round trip: the executor ticked")
+        }
+    }
+
+    #[test]
+    fn status_costs_the_executor_nothing() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        s.beat(SystemTime::now() - Duration::from_secs(60))
+            .expect("the heartbeat publishes");
+        // From here the session is reachable only through the double.
+        let s = Idle(s);
+
+        let out = b.join("out");
+        let handshake = s.output().join("executor.txt");
+        let heartbeat = s.output().join("heartbeat.txt");
+        let listing = |s: &Idle| {
+            [
+                entries(s.req()),
+                entries(s.res()),
+                entries(s.session()),
+                entries(s.output()),
+            ]
+        };
+        let stamped = |path: &Path| {
+            let at = fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .expect("the file has a modification time");
+            (slurp(path), at)
+        };
+
+        let before = listing(&s);
+        assert_eq!(before[0], "", "nothing is published before the call");
+        assert_eq!(before[1], "", "nothing has been replied to");
+        assert_eq!(
+            before[2], "req res",
+            "the session directory holds its two directories and nothing else"
+        );
+        let files_before = (stamped(&handshake), stamped(&heartbeat));
+
+        let report = status(s.output());
+        let session = report.session.expect("the session reports");
+
+        assert_eq!(
+            listing(&s),
+            before,
+            "nothing appeared and nothing vanished: no request, no arm file, no half-written file \
+             beside either of the two"
+        );
+        assert_eq!(
+            (stamped(&handshake), stamped(&heartbeat)),
+            files_before,
+            "neither file's bytes nor its modification time moved, so reading the heartbeat did \
+             not refresh the stamp its age is taken from"
+        );
+        assert!(!s.arm().exists(), "nothing here ensures an arm file");
+        assert!(!session.arm_file, "and the report says so");
+
+        // No handle held. Windows refuses to rename a directory holding an
+        // open file, so a handle left open on either file reddens this
+        // line — and the line is only as good as the mutation that leaves
+        // one open. If that mutation does not redden it, this check proved
+        // nothing and is rebuilt rather than kept.
+        let moved = b.join("out-moved");
+        fs::rename(&out, &moved).expect("no handle is held under the output directory");
+        fs::rename(&moved, &out).expect("the directory goes back");
+
+        // The second leg: an arm file this test made is neither removed
+        // nor refreshed, and the field is read off the disk.
+        fs::write(s.arm(), b"").expect("the arm file lands");
+        let armed = stamped(s.arm());
+        let report = status(s.output());
+        assert!(
+            report.session.expect("the session reports").arm_file,
+            "the field is wired to the disk"
+        );
+        assert_eq!(stamped(s.arm()), armed, "and nothing here touched the file");
     }
 }
