@@ -352,7 +352,7 @@ mod tests {
         let sent = just_sent();
         let mut tally = Tally::default();
         let got = wait_while(
-            Duration::from_millis(150),
+            Duration::from_millis(500),
             || {
                 s.reply(ID, "ok", &[], b"a reply the watch never mentioned")
                     .expect("the reply publishes");
@@ -373,11 +373,18 @@ mod tests {
         };
         assert_eq!(envelope.body, b"a reply the watch never mentioned");
         assert_eq!(tally.events, 0, "nothing reported anything: {tally:?}");
-        // The count, not merely one: the reply lands 150 ms into a
+        // The count, not merely one: the reply lands 500 ms into a
         // five-second deadline, so a sleep bounded by the poll looks
-        // about six times before it finds it and a sleep bounded by the
-        // deadline looks once. One look would be satisfied by a wait
+        // about twenty times before it finds it and a sleep bounded by
+        // the deadline looks once. One look would be satisfied by a wait
         // with no poll in it at all, which is the thing being checked.
+        //
+        // The floor is four rather than twenty on purpose. A count is
+        // evidence here precisely because it is not a stopwatch, and a
+        // floor set near the expectation would smuggle the stopwatch back
+        // in: a machine whose sleeps overshoot badly would redden it with
+        // nothing wrong. Five times under leaves no room for that and
+        // still separates a poll from no poll.
         assert!(
             tally.polls >= 4,
             "polls: {}, wanted at least 4 — the sleep ran to the deadline rather than to the \
