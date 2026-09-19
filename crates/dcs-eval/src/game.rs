@@ -235,6 +235,14 @@ pub enum Why {
     /// The axis this one is gated on is itself unknown. The gate selects
     /// among this axis's own values; it never supplies one.
     GateUnknown { gate: &'static str },
+    /// The gate axis is definite and puts the session outside a mission,
+    /// where the question this axis answers does not arise. Kept apart
+    /// from [`Self::GateUnknown`], which says the gate had no answer: a
+    /// gate that answered and a gate that did not are two findings, and
+    /// saying the first as the second states the evidence falsely. The
+    /// axis has no `n/a` value to take, so the finding is an unknown
+    /// whose reason says which unknown it is.
+    OutsideMission { gate: &'static str, said: String },
     /// The process id was never probed, so nothing was established about
     /// it. Kept apart from a probe that could not decide, which is a
     /// probe that ran.
@@ -296,6 +304,10 @@ impl fmt::Display for Why {
                 "unknown: no read is possible on the {host} host, where DCS is nil"
             ),
             Self::GateUnknown { gate } => write!(f, "unknown: {gate} is itself unknown"),
+            Self::OutsideMission { gate, said } => write!(
+                f,
+                "unknown: {gate} said {said}, and this is answered only in a mission"
+            ),
             Self::NotProbed => f.write_str("unknown: the process id was never probed"),
         }
     }
@@ -818,7 +830,29 @@ pub fn session_of(
                 },
             };
         }
-        Activity::MenuOrEditor | Activity::Loading | Activity::Unknown { .. } => {
+        // Three unknowns and not one. The load is purchasable by
+        // waiting and says so; the menu is a gate that answered and put
+        // the session where the question does not arise; only the third
+        // is a gate with no answer. Rendering all three as "activity is
+        // itself unknown" would state the evidence falsely in the first
+        // two — the headline says `loading` in the same line — and would
+        // hide from a reader which of the three they have.
+        Activity::Loading => {
+            return SessionAxis::Unknown {
+                why: Why::NotSent {
+                    why: crate::reads::NotSent::Loading,
+                },
+            };
+        }
+        Activity::MenuOrEditor => {
+            return SessionAxis::Unknown {
+                why: Why::OutsideMission {
+                    gate: "activity",
+                    said: "menu-or-editor".to_owned(),
+                },
+            };
+        }
+        Activity::Unknown { .. } => {
             return SessionAxis::Unknown {
                 why: Why::GateUnknown { gate: "activity" },
             };
@@ -2156,9 +2190,13 @@ mod game_state {
     }
 
     #[test]
-    fn session_outside_a_mission_is_unknown_naming_the_gate() {
-        let beat = ours(Host::Hook, "load", true);
+    fn session_is_unknown_naming_the_gate_where_activity_is_unknown() {
+        // The gate has to be *actually* unknown for this sentence to be
+        // true. A load and the menu are gates that answered, and they
+        // get their own reasons below.
+        let beat = ours(Host::Export, "sim", true);
         let activity = activity_of(Some(&beat), None);
+        assert!(matches!(activity, Activity::Unknown { .. }), "{activity:?}");
         let got = session_of(
             &activity,
             Some(&reads::Probe::Reachable),
@@ -2172,6 +2210,54 @@ mod game_state {
                 why: Why::GateUnknown { gate: "activity" }
             }
         );
+    }
+
+    #[test]
+    fn the_three_ways_session_is_unknown_outside_a_mission_do_not_render_alike() {
+        // A load is purchasable by waiting, the menu is a question that
+        // does not arise there, and an unknown activity is a gate with
+        // no answer. A reader who cannot tell them apart cannot tell
+        // whether waiting would buy the answer.
+        let reachable = reads::Probe::Reachable;
+        let unknown = |beat: &Beat| {
+            session_of(
+                &activity_of(Some(beat), None),
+                Some(&reachable),
+                reads::Tiers::default(),
+                None,
+                None,
+            )
+        };
+        let all = [
+            unknown(&ours(Host::Hook, "load", true)),
+            unknown(&ours(Host::Hook, "menu", true)),
+            unknown(&ours(Host::Export, "sim", true)),
+        ];
+        for (i, one) in all.iter().enumerate() {
+            for (j, other) in all.iter().enumerate() {
+                assert_eq!(i == j, one == other, "{one:?} against {other:?}");
+                assert_eq!(i == j, one.to_string() == other.to_string(), "{one}");
+            }
+        }
+        assert_eq!(all[0].to_string(), "unknown (the session is loading)");
+    }
+
+    #[test]
+    fn the_headline_does_not_call_a_definite_activity_unknown() {
+        // The rendered line carries both, eight words apart: a headline
+        // that says `loading` and then says activity is unknown asserts
+        // two contradictory things about the same evidence.
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        for phase in ["load", "menu"] {
+            let line = headline(&s, |e| {
+                e.beat = Some(ours(Host::Hook, phase, true));
+            });
+            assert!(
+                !line.contains("activity is itself unknown"),
+                "the {phase} phase answered the gate: {line}"
+            );
+        }
     }
 
     #[test]
@@ -3345,6 +3431,10 @@ mod game_state {
             },
             Why::NoReadPossible { host: Host::Export },
             Why::GateUnknown { gate: "activity" },
+            Why::OutsideMission {
+                gate: "activity",
+                said: "menu-or-editor".to_owned(),
+            },
             Why::NotProbed,
         ]
     }
