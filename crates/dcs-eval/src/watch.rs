@@ -367,9 +367,16 @@ mod tests {
         };
         assert_eq!(envelope.body, b"a reply the watch never mentioned");
         assert_eq!(tally.events, 0, "nothing reported anything: {tally:?}");
+        // The count, not merely one: the reply lands 150 ms into a
+        // five-second deadline, so a sleep bounded by the poll looks
+        // about six times before it finds it and a sleep bounded by the
+        // deadline looks once. One look would be satisfied by a wait
+        // with no poll in it at all, which is the thing being checked.
         assert!(
-            tally.polls >= 1,
-            "so the 25 ms poll is what looked again: {tally:?}"
+            tally.polls >= 4,
+            "polls: {}, wanted at least 4 — the sleep ran to the deadline rather than to the \
+             25 ms poll, and the reply was found on the way out",
+            tally.polls
         );
     }
 
