@@ -85,7 +85,7 @@ pub struct SessionStatus {
     /// not a problem: it is one of the two things a caller needs in order
     /// to tell a stalled session from an unasked one, and which of those
     /// it is belongs to the caller.
-    pub arm_file: bool,
+    pub arm_file: ArmFile,
     pub app_version: VersionCheck,
     /// What the executor's temp directory was, against this client's.
     pub tempdir: Agreement,
@@ -169,6 +169,39 @@ impl fmt::Display for Process {
             Self::Running => f.write_str("running"),
             Self::Exited => f.write_str("gone"),
             Self::Undecided { why } => write!(f, "could not be established: {why}"),
+        }
+    }
+}
+
+/// What the stat of the arm path established.
+///
+/// Three answers and not a `bool`, for the reason [`Process`] has three:
+/// a stat that failed over a permission refusal, a path this process
+/// cannot traverse, or a disk that would not answer has not established
+/// that nothing has armed the session — it has established nothing. A
+/// `bool` would report every one of those as "not armed", which is a
+/// caller's cue that the session is idle rather than stalled, and the one
+/// place in this module where a failure to find out would be dressed as a
+/// fact.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ArmFile {
+    /// The file is there.
+    Present,
+    /// The file is not there, which the filesystem said in those words.
+    Absent,
+    /// The stat failed for some reason other than the file not being
+    /// there, so whether anything has armed this session is unknown.
+    Undecided { why: String },
+}
+
+impl fmt::Display for ArmFile {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Present => f.write_str("armed"),
+            Self::Absent => f.write_str("not armed"),
+            Self::Undecided { why } => {
+                write!(f, "whether it is armed could not be established: {why}")
+            }
         }
     }
 }
@@ -301,6 +334,10 @@ pub enum Problem {
     /// whether it is alive got no answer — and worded so that it can never
     /// be read as death.
     ProcessUndecided { pid: u32, why: String },
+    /// The arm path could not be stated. A problem because a caller who
+    /// asked whether anything has armed the session got no answer — and
+    /// worded so that it can never be read as "nothing has".
+    ArmUndecided { path: PathBuf, why: String },
     /// The executor's temp directory and this client's are not the same
     /// directory.
     TempdirDisagrees { executor: Real, client: Real },
@@ -343,6 +380,11 @@ impl fmt::Display for Problem {
                 f,
                 "whether process {pid} is running could not be established: {why}"
             ),
+            Self::ArmUndecided { path, why } => write!(
+                f,
+                "{}: whether the session is armed could not be established: {why}",
+                path.display()
+            ),
             Self::TempdirDisagrees { executor, client } => write!(
                 f,
                 "the executor's temp directory is {executor}, and this client's is {client}"
@@ -373,6 +415,37 @@ pub fn process_of(pid: u32, saw: sys::Liveness) -> (Process, Option<Problem>) {
             (
                 Process::Undecided { why: why.clone() },
                 Some(Problem::ProcessUndecided { pid, why }),
+            )
+        }
+    }
+}
+
+/// What a stat of the arm path means for the report, and what it is worth
+/// reporting.
+///
+/// A pure function over an answer already in hand, for the reason
+/// [`process_of`] is one: the interesting case cannot be reached reliably
+/// through the filesystem. A refusal has to be arranged with an access
+/// control list, and the arrangement answers differently depending on who
+/// is running the tests — an elevated host traverses what an unelevated
+/// one does not — so a test that could only reach `Undecided` by statting
+/// a real path would prove nothing on half the machines it ran on.
+///
+/// Only `NotFound` becomes [`ArmFile::Absent`]. Every other failure is the
+/// stat saying it could not tell, which is not the same finding and is
+/// never folded into it.
+pub fn arm_of(path: &Path, stat: std::io::Result<()>) -> (ArmFile, Option<Problem>) {
+    match stat {
+        Ok(()) => (ArmFile::Present, None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => (ArmFile::Absent, None),
+        Err(err) => {
+            let why = err.to_string();
+            (
+                ArmFile::Undecided { why: why.clone() },
+                Some(Problem::ArmUndecided {
+                    path: path.to_owned(),
+                    why,
+                }),
             )
         }
     }
@@ -534,6 +607,13 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
     // only a file this reader understood has, so one that is both another
     // session's and unreadable is a parse problem rather than a foreign
     // one — the order a wait takes, for the same reason.
+    // A stat, which costs the executor nothing and is the only way to ask
+    // whether the file is there. Nothing here makes one and nothing here
+    // removes one.
+    let arm = handshake.arm.as_path();
+    let (arm_file, undecided) = arm_of(arm, std::fs::metadata(arm).map(|_| ()));
+    problems.extend(undecided);
+
     let beat = match Heartbeat::read(session.heartbeat()) {
         Ok(beat) => {
             let (status, found) = beat_of(&beat, &handshake, now);
@@ -562,10 +642,7 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
             process,
             transport: handshake.transport.clone(),
             eval: handshake.eval,
-            // A stat, which costs the executor nothing and is the only way
-            // to answer whether the file is there. Nothing here makes one
-            // and nothing here removes one.
-            arm_file: handshake.arm.as_path().exists(),
+            arm_file,
             app_version: measured_against(handshake.app_version.as_deref(), MEASURED_ON),
             tempdir,
             beat,
@@ -1005,10 +1082,66 @@ mod tests {
         let b = Sandbox::new();
         let s = live(&b);
         let before = status(s.output()).session.expect("the session reports");
-        assert!(!before.arm_file, "nothing has armed this session");
+        assert_eq!(
+            before.arm_file,
+            ArmFile::Absent,
+            "nothing has armed this session, and the filesystem said so in those words"
+        );
         fs::write(s.arm(), b"").expect("the arm file lands");
         let after = status(s.output()).session.expect("the session reports");
-        assert!(after.arm_file, "the field is wired to the disk");
+        assert_eq!(
+            after.arm_file,
+            ArmFile::Present,
+            "the field is wired to the disk"
+        );
+    }
+
+    #[test]
+    fn a_stat_that_could_not_tell_is_undecided_and_never_not_armed() {
+        let path = Path::new(r"C:\nowhere\dcs\arm.txt");
+        assert_eq!(
+            arm_of(path, Ok(())),
+            (ArmFile::Present, None),
+            "a stat that answered is the file being there"
+        );
+        assert_eq!(
+            arm_of(path, Err(io::Error::from(ErrorKind::NotFound))),
+            (ArmFile::Absent, None),
+            "and the one failure that is a fact about the file is its absence"
+        );
+        // Every other failure. A permission refusal is the one a real host
+        // hands over, and the point of the third answer is that it is not
+        // the second: a caller reading `Absent` would tell its user the
+        // session is idle when nothing established that.
+        let (saw, problem) = arm_of(
+            path,
+            Err(io::Error::new(ErrorKind::PermissionDenied, "access denied")),
+        );
+        match saw {
+            ArmFile::Undecided { why } => {
+                assert!(why.contains("access denied"), "the stat's own words: {why}")
+            }
+            other => panic!("saw {other:?}, wanted Undecided"),
+        }
+        match problem {
+            Some(Problem::ArmUndecided { path: named, why }) => {
+                assert_eq!(
+                    named, path,
+                    "the problem names the path that would not stat"
+                );
+                assert!(why.contains("access denied"), "and why: {why}");
+            }
+            other => panic!("saw {other:?}, wanted ArmUndecided"),
+        }
+        // Worded so that no reader can take it for "nothing has armed it".
+        let said = ArmFile::Undecided {
+            why: "access denied".to_owned(),
+        }
+        .to_string();
+        assert!(
+            said.contains("could not be established"),
+            "an unknown is not a denial: {said}"
+        );
     }
 
     #[test]
@@ -1208,7 +1341,7 @@ mod tests {
              not refresh the stamp its age is taken from"
         );
         assert!(!s.arm().exists(), "nothing here ensures an arm file");
-        assert!(!session.arm_file, "and the report says so");
+        assert_eq!(session.arm_file, ArmFile::Absent, "and the report says so");
 
         // No handle held. Windows refuses to rename a directory holding an
         // open file, so a handle left open on either file reddens this
@@ -1224,8 +1357,9 @@ mod tests {
         fs::write(s.arm(), b"").expect("the arm file lands");
         let armed = stamped(s.arm());
         let report = status(s.output());
-        assert!(
+        assert_eq!(
             report.session.expect("the session reports").arm_file,
+            ArmFile::Present,
             "the field is wired to the disk"
         );
         assert_eq!(stamped(s.arm()), armed, "and nothing here touched the file");
