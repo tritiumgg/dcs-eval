@@ -9,7 +9,10 @@
 //! answers them in name order, a
 //! reply with the eight headers the executor puts first, the `ping` op,
 //! and `eval` as far as its checks go: no chunk runs here, and one that
-//! passes them is answered as one that returned nil. What it answers, it
+//! passes them is answered as one that returned nil — unless a test has
+//! *told* it what to answer, which is still not running one: a script
+//! matched on the request body substitutes a status, a `result_type` and
+//! a body for the nil a chunk that ran nothing would give. What it answers, it
 //! answers as the executor does, message for
 //! message, because a client that reads a refusal reads the executor's
 //! words. Whether those are the executor's bytes is not this module's
@@ -112,6 +115,12 @@ fn excerpt(value: &str) -> String {
     }
 }
 
+/// Whether `needle` appears in `haystack`. A script is matched on the
+/// request's body, which is Lua and need not be text this side can decode.
+fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+}
+
 /// The headers of a request as read, in wire order, and its body.
 type Decoded = (Vec<(String, String)>, Vec<u8>);
 
@@ -193,6 +202,28 @@ impl Answer {
     }
 }
 
+/// One request as it was read off the disk, raw.
+///
+/// The bytes are what the file held, recorded before anything tries to
+/// make sense of them, so a request that would not decode is still in the
+/// ledger. That is the point of it: a check that sweeps what left the
+/// client for a name it must never send has to see the headers too, and a
+/// request the far end could not read is exactly the one a decoded record
+/// would lose.
+#[derive(Debug, Clone)]
+pub struct Seen {
+    pub bytes: Vec<u8>,
+}
+
+/// One answer a test has told this side to give: the first entry whose
+/// `when` appears in the request body decides an `eval`.
+struct Script {
+    when: String,
+    status: &'static str,
+    result_type: String,
+    body: Vec<u8>,
+}
+
 /// One stand-in executor session: a stamped directory under a root, a
 /// tick counter, and the three values every reply names. The public fields
 /// are a test's to set between ticks, the way a live session's phase
@@ -229,6 +260,8 @@ pub struct Standin {
     req: PathBuf,
     res: PathBuf,
     arm: PathBuf,
+    seen: Vec<Seen>,
+    scripts: Vec<Script>,
 }
 
 impl Standin {
@@ -270,6 +303,8 @@ impl Standin {
             session,
             req,
             res,
+            seen: Vec::new(),
+            scripts: Vec::new(),
         })
     }
 
@@ -296,6 +331,31 @@ impl Standin {
     /// The arm file's path, which a client makes and this side leaves.
     pub fn arm(&self) -> &Path {
         &self.arm
+    }
+
+    /// Every request this side has read off the disk, in the order it
+    /// read them, raw.
+    pub fn seen(&self) -> &[Seen] {
+        &self.seen
+    }
+
+    /// Answer the next `eval` whose body holds `when` with `status`, a
+    /// `result_type` and `body`, rather than as one that returned nil.
+    ///
+    /// It is matched after the shape refusals an executor makes before it
+    /// looks at a state's carrier, and *before* the carrier is looked up.
+    /// The order is the whole use of it: placed after the carrier, a
+    /// script could never give a `gui` eval anything but `unsupported`,
+    /// and a control that needs to see a client handle some other answer
+    /// from a state this host declares but does not serve would have no
+    /// way to stage one.
+    pub fn script(&mut self, when: &str, status: &'static str, result_type: &str, body: &[u8]) {
+        self.scripts.push(Script {
+            when: when.to_owned(),
+            status,
+            result_type: result_type.to_owned(),
+            body: body.to_vec(),
+        });
     }
 
     /// One frame: the counter up, the request directory listed, every
@@ -341,7 +401,11 @@ impl Standin {
         let mut answered = Vec::new();
         for id in ids {
             let name = format!("{id}.req");
-            let Some(answer) = self.answer(&self.req.join(&name)) else {
+            // The path is hoisted because answering records the request
+            // in the ledger, so it borrows this side mutably and cannot
+            // also be reading `self.req` for its argument.
+            let path = self.req.join(&name);
+            let Some(answer) = self.answer(&path) else {
                 continue;
             };
             let headers: Vec<(&str, &str)> = answer
@@ -366,7 +430,7 @@ impl Standin {
     /// session's, `op` and the body checked in that order, and the op
     /// dispatched. `None` when the file was gone before it could be read,
     /// which the executor answers nothing to.
-    fn answer(&self, path: &Path) -> Option<Answer> {
+    fn answer(&mut self, path: &Path) -> Option<Answer> {
         let size = fs::metadata(path).ok()?.len();
         if size > MAX_REQUEST_BYTES {
             let _ = fs::remove_file(path);
@@ -379,6 +443,12 @@ impl Standin {
             ));
         }
         let bytes = fs::read(path).ok()?;
+        // Recorded here, before the decode: what the ledger is for is
+        // saying what really reached the disk, and a request that would
+        // not decode is one nothing else would ever show.
+        self.seen.push(Seen {
+            bytes: bytes.clone(),
+        });
         if let Err(why) = fs::remove_file(path) {
             return Some(Answer {
                 status: "error",
@@ -432,7 +502,7 @@ impl Standin {
         }
         Some(match op {
             "ping" => self.ping(),
-            "eval" => self.eval(&headers),
+            "eval" => self.eval(&headers, &body),
             other => Answer::refusal("bad-request", format!("unknown op: {other}")),
         })
     }
@@ -452,7 +522,7 @@ impl Standin {
     /// control that needs a value back is a control on the shipped Lua.
     /// An install with eval disabled is not modelled: every stand-in has
     /// it on, so the empty-body refusal above is unconditional here.
-    fn eval(&self, headers: &[(String, String)]) -> Answer {
+    fn eval(&self, headers: &[(String, String)], body: &[u8]) -> Answer {
         let state = match header(headers, "state") {
             Some(state) if !state.is_empty() => state,
             _ => {
@@ -505,6 +575,27 @@ impl Standin {
         } else {
             format!("instructions={count}")
         };
+        // A script sits here, after every refusal an executor decides on
+        // the request's own shape and before the state's carrier is
+        // looked up, so a test can stage an answer for a state this host
+        // declares and does not serve.
+        if let Some(scripted) = self
+            .scripts
+            .iter()
+            .find(|s| contains(body, s.when.as_bytes()))
+        {
+            let mut headers = Vec::new();
+            if !scripted.result_type.is_empty() {
+                headers.push(("result_type", scripted.result_type.clone()));
+                headers.push(("chunkname", chunkname.to_owned()));
+                headers.push(("budget", budget));
+            }
+            return Answer {
+                status: scripted.status,
+                headers,
+                body: scripted.body.clone(),
+            };
+        }
         let states = if self.host == "export" {
             EXPORT_STATES
         } else {
@@ -968,6 +1059,114 @@ mod tests {
         assert_eq!(e.headers.get("status"), Some(status), "{id}");
         assert_eq!(e.headers.get("id"), Some(id));
         assert_eq!(e.body, why.as_bytes(), "{id}: the body is the message");
+    }
+
+    #[test]
+    fn the_ledger_holds_a_request_that_would_not_decode() {
+        // The bytes are recorded before the decode, so the one request
+        // nothing else can show is in the ledger too. A sweep for a name
+        // that must never be sent depends on that: a forbidden name in a
+        // header of a request the far end could not read would otherwise
+        // be invisible.
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        fs::write(
+            s.req().join("0000000001-abcd.req"),
+            b"not an envelope at all",
+        )
+        .expect("the request is written");
+        s.tick();
+        assert_eq!(s.seen().len(), 1, "the ledger holds the request");
+        assert_eq!(s.seen()[0].bytes, b"not an envelope at all");
+        refused(
+            &s,
+            "0000000001-abcd",
+            "bad-request",
+            "the headers never end: no blank line before the bytes ran out, \
+             after 0 header lines",
+        );
+    }
+
+    #[test]
+    fn a_scripted_eval_comes_back_with_the_status_and_body_it_was_given() {
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        let stamp = s.stamp.clone();
+        s.script("getPause", "ok", "string", b"boolean\ttrue");
+        sent(
+            &s,
+            "0000000001-abcd",
+            &[("op", "eval"), ("for", &stamp), ("state", "hook")],
+            b"return DCS.getPause()",
+        );
+        s.tick();
+        let e = read(&s, "0000000001-abcd");
+        assert_eq!(e.headers.get("status"), Some("ok"));
+        assert_eq!(e.headers.get("result_type"), Some("string"));
+        assert_eq!(e.body, b"boolean\ttrue");
+    }
+
+    #[test]
+    fn a_script_can_give_a_gui_eval_a_status_the_carrier_check_would_not() {
+        // The seam this is here to hold open: `gui` is declared and not
+        // served, so without a script no client control could ever see a
+        // `gui` eval answered any other way.
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        let stamp = s.stamp.clone();
+        s.script("return 'ok'", "refused", "", b"eval is off in this install");
+        sent(
+            &s,
+            "0000000001-abcd",
+            &[("op", "eval"), ("for", &stamp), ("state", "gui")],
+            b"return 'ok'",
+        );
+        s.tick();
+        refused(
+            &s,
+            "0000000001-abcd",
+            "refused",
+            "eval is off in this install",
+        );
+    }
+
+    #[test]
+    fn an_unscripted_gui_eval_is_still_unsupported() {
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        let stamp = s.stamp.clone();
+        s.script("some other body", "refused", "", b"never matched");
+        sent(
+            &s,
+            "0000000001-abcd",
+            &[("op", "eval"), ("for", &stamp), ("state", "gui")],
+            b"return 'ok'",
+        );
+        s.tick();
+        refused(
+            &s,
+            "0000000001-abcd",
+            "unsupported",
+            "gui is declared and not yet served by this executor",
+        );
+    }
+
+    #[test]
+    fn an_unscripted_local_eval_still_answers_as_one_that_returned_nil() {
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        let stamp = s.stamp.clone();
+        sent(
+            &s,
+            "0000000001-abcd",
+            &[("op", "eval"), ("for", &stamp), ("state", "hook")],
+            b"return 1",
+        );
+        s.tick();
+        let e = read(&s, "0000000001-abcd");
+        assert_eq!(e.headers.get("status"), Some("ok"));
+        assert_eq!(e.headers.get("result_type"), Some("nil"));
+        assert_eq!(e.body, b"");
     }
 
     #[test]
