@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=31
+CASES=32
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -270,6 +270,44 @@ out=$(run_) && got=0 || got=$?
 tree_intact || got=98
 check 'a CR in the target is named, not left as a mysterious zero match' \
     1 "$got" "carries CR line endings" "$out"
+
+# A control owns what sits under its own `###` heading and nothing past the
+# next heading. The inventory's prose sections illustrate the block format, so
+# a block written under a `##` must be documentation rather than a hunk handed
+# to whichever control was last read — which is invisible when it happens,
+# because it fails as an anchor that does not match.
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/applies
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+
+## Out of scope
+
+What a block looks like, written out here for a reader:
+
+```sweep-edit alpha.txt
+- a line this file does not carry
++ replaced
+```
+
+- command: `sh -c 'exit 1'`
+
+### out/not-reached
+
+- out-of-scope: nothing here is built yet.
+- controls: 5
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+check 'a block under a prose heading is not a hunk of the control above it' \
+    0 "$got" "REDDENED      fixture/applies" "$out"
 
 # --- a run that never finished ----------------------------------------------
 

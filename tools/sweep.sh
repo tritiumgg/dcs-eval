@@ -97,6 +97,11 @@ index() {
         }
         /^```/ { fenced = !fenced; next }
         fenced { next }
+        # A control ends at the next heading of any level, not only at the next
+        # `###`. Without this a bullet written under a `##` — a preamble
+        # illustrating the format, say — would be read as another bullet of the
+        # control above it, and would silently overwrite that control command.
+        /^## / || /^# / { emit(); next }
         /^### / { emit(); id = $0; sub(/^### /, "", id); kind = "in"; controls = 1; next }
         id == "" { next }
         /^- command:[ \t]/ { cmd = value($0); next }
@@ -116,6 +121,10 @@ index() {
 edits_of() {
     awk -v want="$1" '
         /^### / { id = $0; sub(/^### /, "", id); on = (id == want); next }
+        # And a control owns no block past the next heading of any level, for
+        # the same reason: a `sweep-edit` block in a `##` preamble is
+        # documentation, not a hunk of whichever control happens to precede it.
+        !fenced && (/^## / || /^# /) { id = ""; on = 0; next }
         !on { next }
         /^```sweep-edit / { path = $0; sub(/^```sweep-edit[ \t]+/, "", path); fenced = 1; printf "F\t%s\n", path; next }
         fenced && /^```/ { fenced = 0; next }
