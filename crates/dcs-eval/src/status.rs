@@ -415,19 +415,46 @@ fn tempdir_of(named: &Diagnostic) -> Agreement {
     }
 }
 
-/// The heartbeat as this report carries it.
+/// The heartbeat as this report carries it, and everything the file is
+/// worth reporting.
+///
+/// The three comparisons are against the handshake, and all three are
+/// worth making: two installs writing into one output directory is the
+/// thing they exist to surface, and a session that is gone leaves a file
+/// behind that looks like one. `host` and `transport` are carried in the
+/// file for exactly this, so comparing only the stamp would drop half of
+/// what they were kept for.
 ///
 /// `armed` decides what the age is before the age is taken, and the arm is
 /// read off this file's own header even where the file is another
 /// session's, because the age is a fact about the file in hand.
-fn beat_of(beat: &Heartbeat, h: &Handshake, now: SystemTime) -> BeatStatus {
+fn beat_of(beat: &Heartbeat, h: &Handshake, now: SystemTime) -> (BeatStatus, Vec<Problem>) {
+    let mut problems = Vec::new();
+    if beat.stamp != h.stamp {
+        problems.push(Problem::ForeignStamp {
+            saw: beat.stamp.clone(),
+            wanted: h.stamp.clone(),
+        });
+    }
+    if beat.host != h.host {
+        problems.push(Problem::ForeignHost {
+            saw: beat.host.clone(),
+            wanted: h.host.clone(),
+        });
+    }
+    if !same_place(&beat.transport, &h.transport) {
+        problems.push(Problem::ForeignTransport {
+            saw: beat.transport.clone(),
+            wanted: h.transport.clone(),
+        });
+    }
     let elapsed = beat.age(now);
     let age = if beat.armed {
         Age::Ticking(elapsed)
     } else {
         Age::Dormant(elapsed)
     };
-    BeatStatus {
+    let status = BeatStatus {
         belongs: beat.stamp == h.stamp,
         host: beat.host.clone(),
         transport: beat.transport.clone(),
@@ -438,7 +465,8 @@ fn beat_of(beat: &Heartbeat, h: &Handshake, now: SystemTime) -> BeatStatus {
         last_callback: beat.last_callback.clone(),
         callbacks: beat.callbacks.clone(),
         age,
-    }
+    };
+    (status, problems)
 }
 
 /// The report on the session whose output directory is `output`, taken
@@ -474,7 +502,11 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
     // session's and unreadable is a parse problem rather than a foreign
     // one — the order a wait takes, for the same reason.
     let beat = match Heartbeat::read(session.heartbeat()) {
-        Ok(beat) => Some(beat_of(&beat, &handshake, now)),
+        Ok(beat) => {
+            let (status, found) = beat_of(&beat, &handshake, now);
+            problems.extend(found);
+            Some(status)
+        }
         // Never armed, so never written: the expected state right after a
         // load, and no problem at all.
         Err(err) if is_missing(&err) => None,
@@ -723,6 +755,141 @@ mod tests {
             report.session.expect("the session reports").process,
             Process::Exited
         );
+    }
+
+    /// `name` respelt in the envelope at `path`, landed again with the
+    /// modification time it had. The time is put back because the age a
+    /// report carries comes from it and a fixture about a stamp is not
+    /// about an age.
+    fn respell(path: &Path, name: &str, value: &str) {
+        let at = fs::metadata(path)
+            .and_then(|meta| meta.modified())
+            .expect("the fixture has a modification time");
+        fs::write(path, with(&slurp(path), name, value)).expect("the fixture lands");
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.set_modified(at))
+            .expect("the modification time goes back");
+    }
+
+    /// A session with a heartbeat published, and that heartbeat's path.
+    fn beating(s: &Standin) -> PathBuf {
+        s.beat(SystemTime::now()).expect("the heartbeat publishes");
+        s.output().join("heartbeat.txt")
+    }
+
+    #[test]
+    fn a_heartbeat_from_another_stamp_is_a_problem_naming_both() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        respell(&beating(&s), "stamp", "1700000000-999");
+        let report = status(s.output());
+        assert!(
+            report.problems.contains(&Problem::ForeignStamp {
+                saw: "1700000000-999".to_owned(),
+                wanted: s.stamp.clone(),
+            }),
+            "both spellings are named: {:?}",
+            report.problems
+        );
+    }
+
+    #[test]
+    fn a_heartbeat_naming_another_host_is_a_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        respell(&beating(&s), "host", "export");
+        let report = status(s.output());
+        assert!(
+            report.problems.contains(&Problem::ForeignHost {
+                saw: "export".to_owned(),
+                wanted: "hook".to_owned(),
+            }),
+            "a heartbeat written by the other host is two installs in one output: {:?}",
+            report.problems
+        );
+    }
+
+    #[test]
+    fn a_heartbeat_naming_another_transport_is_a_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let elsewhere = b.join("somewhere-else");
+        respell(&beating(&s), "transport", &elsewhere.display().to_string());
+        let report = status(s.output());
+        assert!(
+            report.problems.iter().any(|p| matches!(
+                p,
+                Problem::ForeignTransport { saw, .. } if saw == &real(&elsewhere)
+            )),
+            "a heartbeat naming a transport the handshake does not is a problem: {:?}",
+            report.problems
+        );
+    }
+
+    #[test]
+    fn the_same_transport_spelt_in_another_case_is_not_a_foreign_transport() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let beat = beating(&s);
+        // A tail the filesystem has nothing to canonicalise keeps the case
+        // it was spelt with, and that is the only way two files can name
+        // one directory in two spellings: a directory that exists comes
+        // back from the resolver in the case the disk holds, whatever
+        // either file said about it.
+        let named = s.session().join("sub").display().to_string();
+        respell(&s.output().join("executor.txt"), "transport", &named);
+        respell(&beat, "transport", &named.to_uppercase());
+        let report = status(s.output());
+        assert_eq!(
+            report.problems,
+            vec![],
+            "one directory spelt two ways is one directory, not two installs"
+        );
+    }
+
+    #[test]
+    fn a_dormant_heartbeats_age_is_qualified_rather_than_read_as_staleness() {
+        let b = Sandbox::new();
+        let mut s = live(&b);
+        s.armed = false;
+        let now = SystemTime::now();
+        s.beat(now - Duration::from_secs(600))
+            .expect("the heartbeat publishes");
+        let age = status_at(s.output(), now)
+            .session
+            .expect("the session reports")
+            .beat
+            .expect("there is a heartbeat")
+            .age;
+        match age {
+            // A dormant session stops rewriting the file, so this number
+            // is when it went quiet and not how stale a ticking one is.
+            Age::Dormant(d) => assert_eq!(d.as_secs(), 600, "saw {age:?}"),
+            other => panic!("saw {other:?}, wanted Dormant(600s)"),
+        }
+    }
+
+    #[test]
+    fn a_foreign_heartbeat_is_reported_flagged_rather_than_read_as_this_sessions() {
+        let b = Sandbox::new();
+        let mut s = live(&b);
+        s.armed = true;
+        s.phase = "simulation".to_owned();
+        s.tick = 99;
+        respell(&beating(&s), "stamp", "1700000000-999");
+        let beat = status(s.output())
+            .session
+            .expect("the session reports")
+            .beat
+            .expect("the file is real and is carried");
+        assert!(
+            !beat.belongs,
+            "the flag is what stops a printer reading another install's phase and ticks as this session's"
+        );
+        assert_eq!(beat.phase, "simulation");
+        assert_eq!(beat.ticks, 99);
     }
 
     #[test]
