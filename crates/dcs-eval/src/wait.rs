@@ -404,9 +404,19 @@ pub fn decide(
 /// the dormant branch, which consults no age anyway. A heartbeat that is
 /// there and will not parse is a refusal naming the file, because a stamp
 /// that changed is not the same thing as a file that would not read.
+///
+/// The file is read before the stamp is looked at, and that order decides
+/// the case where both hold: a heartbeat that carries another session's
+/// stamp *and* will not read is a refusal, not the dormant branch. It has
+/// to be. A stamp is something only a file this reader understood has, so
+/// forgiving a foreign stamp on a file it did not understand would be
+/// forgiving it on the strength of a header read out of bytes whose shape
+/// was never established.
 fn this_sessions_heartbeat(s: &Session) -> Result<Option<Heartbeat>, WaitError> {
     match Heartbeat::read(&s.heartbeat) {
         Ok(beat) if beat.stamp == s.stamp => Ok(Some(beat)),
+        // Read, understood, and somebody else's: two installs writing into
+        // one output directory, which says nothing about this session.
         Ok(_) => Ok(None),
         Err(ReadError {
             kind: ReadErrorKind::Disk(why),
@@ -859,6 +869,51 @@ mod tests {
             ("unknown", Some(Flag::Stalled)),
             "{got:?}"
         );
+    }
+
+    #[test]
+    fn a_foreign_stamped_heartbeat_that_will_not_read_is_a_refusal() {
+        // Where the two readings meet, the file is read before the stamp
+        // is looked at, and that is what decides it: foreign and readable
+        // is the dormant branch, foreign and unreadable is a refusal
+        // naming the file. The stamp that would have excused it is only
+        // as good as the read that produced it.
+        let b = Sandbox::new();
+        let mut s = standin(&b);
+        s.pid = std::process::id();
+        s.armed = true;
+        s.phase = "menu".to_owned();
+        let mine = s.stamp.clone();
+        s.stamp = format!("{mine}-somebody-else");
+        s.beat(SystemTime::now()).expect("the other install's beat");
+        s.stamp = mine;
+        let session = address(&s);
+        let sent = sent_ago(Duration::from_secs(11));
+
+        let got = verdict(&session, &sent);
+        assert_eq!(
+            pending_of(&got),
+            ("unknown", Some(Flag::Stalled)),
+            "one that read is the dormant branch: {got:?}"
+        );
+
+        // The same file, still the other install's, with the one header
+        // every outcome turns on taken out of it.
+        let beat = String::from_utf8(slurp(session.heartbeat())).expect("the beat is text");
+        let mangled: String = beat
+            .split_inclusive('\n')
+            .filter(|line| !line.starts_with("armed:"))
+            .collect();
+        assert!(
+            mangled.contains("-somebody-else") && !mangled.contains("armed:"),
+            "still foreign, and now short a required header"
+        );
+        std::fs::write(session.heartbeat(), mangled.as_bytes()).expect("the bytes land");
+        let err = decide(&session, &sent, Instant::now(), SystemTime::now())
+            .expect_err("the foreign stamp does not excuse a file that would not read");
+        assert!(matches!(err.kind, WaitErrorKind::Read(_)), "{err}");
+        assert_eq!(err.path, session.heartbeat());
+        assert!(err.to_string().ends_with(": armed: absent"), "{err}");
     }
 
     #[test]
