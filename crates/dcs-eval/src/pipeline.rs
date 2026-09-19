@@ -363,12 +363,21 @@ mod tests {
     use crate::testing::{Sandbox, entries};
     use std::fs;
     use std::path::Path;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::time::{Instant, SystemTime};
 
     /// Long enough that a busy box delays a test rather than turning a
     /// reply into a `pending` and reddening a check about ordering for a
     /// reason that has nothing to do with ordering.
     const UPTO: Duration = Duration::from_secs(5);
+
+    /// How long a census waits for the window to reach the depth it
+    /// expects. It is generous because a census that gave up early would
+    /// redden a check about the window's depth on a box that was merely
+    /// busy; a client that really does hold the wrong number of requests
+    /// makes the wait cost its full length once per reading and then says
+    /// what it saw.
+    const CENSUS: Duration = Duration::from_secs(5);
 
     /// A stand-in that looks alive: this process's id, armed, and a fresh
     /// beat, so the table reads `pending` while a fixture takes its time.
@@ -413,6 +422,14 @@ mod tests {
     /// Poll `dir` until exactly `want` requests are published, or give up.
     /// What it last saw comes back either way, so a timeout is an
     /// assertion about a number rather than a hang.
+    ///
+    /// It is sound only where the client blocks on each head until the
+    /// session answers it, which is what makes the directory's contents
+    /// and the window the same thing. A fixture that leaves a request
+    /// unanswered has to prove its window some other way: the abandoned
+    /// `.req` stays on the disk for ever and the client runs on without
+    /// waiting, so what is counted here would be a number neither side
+    /// agrees about.
     fn census(dir: &Path, want: usize, upto: Duration) -> usize {
         let deadline = Instant::now() + upto;
         loop {
@@ -578,7 +595,7 @@ mod tests {
             let ticker = scope.spawn(|| {
                 let mut readings = Vec::new();
                 for step in 0..9 {
-                    readings.push(census(s.req(), (9 - step).min(3), Duration::from_secs(2)));
+                    readings.push(census(s.req(), (9 - step).min(3), CENSUS));
                     s.tick_with(|listed| listed.truncate(1));
                 }
                 readings
@@ -607,7 +624,7 @@ mod tests {
             let ticker = scope.spawn(|| {
                 let mut most = 0;
                 for step in 0..9 {
-                    census(s.req(), (9 - step).min(3), Duration::from_secs(2));
+                    census(s.req(), (9 - step).min(3), CENSUS);
                     std::thread::sleep(Duration::from_millis(50));
                     most = most.max(in_flight(s.req()));
                     s.tick_with(|listed| listed.truncate(1));
@@ -644,7 +661,7 @@ mod tests {
             let ticker = scope.spawn(|| {
                 let mut readings = Vec::new();
                 for want in [3, 3, 2, 1] {
-                    readings.push(census(s.req(), want, Duration::from_secs(2)));
+                    readings.push(census(s.req(), want, CENSUS));
                     s.tick_with(|listed| listed.truncate(1));
                 }
                 readings
@@ -794,6 +811,87 @@ mod tests {
         assert!(
             matches!(got[2], Ok(Outcome::Superseded { .. })),
             "and the one that never was"
+        );
+    }
+
+    /// Short on purpose, and only where the timeout is the subject: a head
+    /// nothing will ever answer.
+    const SOON: Duration = Duration::from_millis(750);
+
+    #[test]
+    fn a_reply_that_never_comes_yields_pending_in_its_place() {
+        // Nothing ticks, so the one request is still queued when the time
+        // runs out. Running out of time is not a failure and not a death:
+        // the id comes back with the phase, and the caller may collect it
+        // later. The drain is bounded rather than collected, because a
+        // client that held the slot would yield the same `pending` for
+        // ever and a hang is not a red test.
+        let b = Sandbox::new();
+        let (s, h) = ticking(&b);
+        let specs = pings(&s, 1);
+        let minter = Minter::seeded(11);
+        let tag = minter.tag().to_owned();
+        let got: Vec<_> = Pipeline::over_with(&h, minter, specs, 2, SOON)
+            .take(3)
+            .collect();
+        assert_eq!(ids(&got), [format!("0000000001-{tag}")]);
+        let Ok(Outcome::Pending { phase, flag, .. }) = &got[0] else {
+            panic!("pending, not {:?}", ids(&got));
+        };
+        assert_eq!((phase.as_str(), *flag), ("menu", None));
+    }
+
+    #[test]
+    fn the_window_refills_behind_a_pending_reply() {
+        // Two deep over four specs, with the session answering every
+        // request except the first — one request queued behind a spent
+        // tick budget, which is the ordinary reason a head goes quiet.
+        //
+        // The proof here is the yield, not a count on the disk: the
+        // abandoned request's `.req` is still lying there and nothing but
+        // the session will remove it, so a census would be counting the
+        // window plus a ghost. What is asserted instead is that the third
+        // and fourth specs were published and answered at all — a client
+        // that kept the quiet request's slot would publish neither, and
+        // would hand back the same `pending` four times over, which is
+        // why the drain is bounded rather than collected.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let specs = pings(&s, 4);
+        let minter = Minter::seeded(11);
+        let tag = minter.tag().to_owned();
+        let quiet = format!("0000000001-{tag}");
+        let drained = AtomicBool::new(false);
+        let got: Vec<_> = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !drained.load(Ordering::Relaxed) {
+                    s.tick_with(|listed| listed.retain(|id| !id.starts_with("0000000001")));
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            });
+            let got: Vec<_> = Pipeline::over_with(&h, minter, specs, 2, SOON)
+                .take(4)
+                .collect();
+            drained.store(true, Ordering::Relaxed);
+            got
+        });
+        assert_eq!(
+            ids(&got),
+            (1..=4)
+                .map(|n| format!("{n:010}-{tag}"))
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            matches!(got[0], Ok(Outcome::Pending { .. })),
+            "the one nothing answered"
+        );
+        for (at, item) in got.iter().enumerate().skip(1) {
+            assert!(matches!(item, Ok(Outcome::Reply(_))), "{at}: {item:?}");
+        }
+        assert_eq!(
+            entries(s.req()),
+            format!("{quiet}.req"),
+            "and the quiet one is still lying where it was published"
         );
     }
 
