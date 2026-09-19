@@ -2767,7 +2767,10 @@ mod game_state {
         // one is about what the far end actually read.
         let b = Sandbox::new();
         let mut s = ticking(&b, "load");
-        let state = game_state(s.output(), reads::Tiers::default(), UPTO).expect("not refused");
+        // Tier 2 on, so that the only reason a read can be unsent here
+        // is the load itself.
+        let state =
+            game_state(s.output(), reads::Tiers::with_tier_two(), UPTO).expect("not refused");
         assert_eq!(state.activity, Activity::Loading);
         assert_eq!(
             published(s.req()),
@@ -2778,6 +2781,18 @@ mod game_state {
         s.tick();
         assert!(s.seen().is_empty(), "the ledger holds a request");
         assert_eq!(state.pause.value, Pause::NotApplicable);
+        // `track` takes no gate, so it is the one axis that has to carry
+        // the gather's load skip all the way to the rendered reason.
+        // Rendering it as tier 2 off would tell an agent to buy an
+        // answer by flipping a switch that is already on.
+        assert_eq!(
+            state.track,
+            Track::Unknown {
+                why: Why::NotSent {
+                    why: reads::NotSent::Loading
+                }
+            }
+        );
     }
 
     #[test]
