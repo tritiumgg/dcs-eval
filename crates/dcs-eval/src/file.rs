@@ -149,12 +149,20 @@ impl Roots {
 /// reader sends these very bytes, so the envelope it publishes is the one
 /// whose length was counted against the ceiling and there is no second set
 /// of headers to disagree with the measured one.
+///
+/// `chunkname` is that block's own `chunkname` value, lifted out of the
+/// very headers the block was framed from, or `None` where the caller sent
+/// no such header. The reader records the name the far end will compile
+/// under, and it has to read it off what is being sent: a name derived a
+/// second time from the path would be a second answer, and the record would
+/// then be free to name a chunk the wire does not carry.
 #[derive(Clone)]
 pub struct Admitted {
     path: Real,
     size: u64,
     headroom: u64,
     block: Vec<u8>,
+    chunkname: Option<String>,
 }
 
 // The block is bytes nobody wants in a failure message, so it is shown as a
@@ -194,6 +202,13 @@ impl Admitted {
     pub(crate) fn block(&self) -> &[u8] {
         &self.block
     }
+
+    /// The `chunkname` the block carries, or `None` where it carries none.
+    /// Crate-private for the reason `block` is: it is the other half of the
+    /// same hand-off.
+    pub(crate) fn chunkname(&self) -> Option<&str> {
+        self.chunkname.as_deref()
+    }
 }
 
 /// Whether `real` may be read and would fit, deciding both before anything
@@ -232,6 +247,13 @@ pub fn check(
         kind: Refusal::Frame(source),
     })?;
     let header_bytes = block.len() as u64;
+    // Off the same slice the block was framed from, in the same breath, so
+    // the name kept beside the block is the name inside it. `frame` refuses
+    // a repeated name however it is spelt, so there is one line to find.
+    let chunkname = headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("chunkname"))
+        .map(|(_, value)| (*value).to_owned());
     let stat = fs::metadata(real.as_path()).map_err(|source| FileRefusal {
         path: real.clone(),
         kind: Refusal::Stat(source),
@@ -280,6 +302,7 @@ pub fn check(
         size,
         headroom: h.max_request_bytes - total,
         block,
+        chunkname,
     })
 }
 

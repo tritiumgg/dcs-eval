@@ -88,11 +88,18 @@ it rather than the way the documents describe it. Six readings:
    bytes, a byte-order mark and nothing else, or a `#` line with no
    terminator behind it. A remote `bad-request` says none of those.
 
-4. **A chunkname over 200 bytes is refused here too, for the same reason.**
-   §7.3 caps the header at 200 bytes, and this crate's framer enforces no
-   length on any value at all, so nothing would otherwise stop a deeply nested
-   resolved path producing a header the far end rejects. The name is what this
-   half owns; the containment and the ceiling are ADR 0014's.
+4. **A chunkname over 200 bytes is refused here too, for the same reason,
+   and the name refused is the one the request carries.** §7.3 caps the header
+   at 200 bytes, and this crate's framer enforces no length on any value at
+   all, so nothing would otherwise stop a deeply nested resolved path
+   producing a header the far end rejects. The reader therefore reads the
+   name off the block it is about to send rather than deriving it from the
+   path a second time: the cap then falls on the value that is really going
+   out, and the record names the chunk the far end will really compile. A
+   request carrying no `chunkname` at all is not refused — §7.3 makes the
+   header optional — and the record says `=dcs-api-eval`, which is what the
+   far end names it and what a raise from it will print. The name is what
+   this half owns; the containment and the ceiling are ADR 0014's.
 
 5. **What Lua prints of a long name is its last 52 bytes, not its last 60, and
    a compile error abbreviates later than a raise.** Measured on the pinned
@@ -121,7 +128,13 @@ Rejected:
 - **Reframing the headers inside the reader.** The reader would then need the
   caller's headers a second time and could be handed a different set from the
   one the ceiling was measured against. It uses the block `check` already
-  framed instead, so there is no second set to get wrong.
+  framed instead, so there is no second set to get wrong. The `chunkname` is
+  the one field both halves would otherwise have an opinion about, and it is
+  not excepted: `check` lifts the value out of the very slice it framed and
+  keeps it beside the block, and the reader reads that. Deriving it from the
+  path in the reader was tried and is what this bullet rejects — it left the
+  record free to print `@C:\...\probe.lua` for a request whose header said
+  `=something-else`, or said nothing.
 - **One shared `Mark { None, Applied }` for both rules.** The two words that
   are not `none` are different words — `stripped` and `blanked` — and a shared
   enum would have to carry them anyway.

@@ -54,14 +54,28 @@ const RESERVE: usize = 8;
 /// the name as opaque and a user recognises their own spelling.
 pub fn chunkname(real: &Real) -> Result<String, NameTooLong> {
     let name = format!("@{real}");
+    cap(&name)?;
+    Ok(name)
+}
+
+/// The 200-byte cap, in one place: the builder above applies it to the name
+/// it makes, and the reader applies it to the name the request really
+/// carries, which is the one the far end will throw away.
+fn cap(name: &str) -> Result<(), NameTooLong> {
     if name.len() > CHUNKNAME_MAX {
         return Err(NameTooLong {
             bytes: name.len(),
             limit: CHUNKNAME_MAX,
         });
     }
-    Ok(name)
+    Ok(())
 }
+
+/// What the far end compiles a chunk under when the request names no chunk.
+/// A request with no `chunkname` is not refused — the header is optional —
+/// so the record says what the far end will really print, and a raise from
+/// such a chunk reads `dcs-api-eval:<line>:`.
+pub const DEFAULT_CHUNKNAME: &str = "=dcs-api-eval";
 
 /// A resolved path too long to name a chunk with.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -179,8 +193,9 @@ impl Source {
         &self.path
     }
 
-    /// The name the chunk is compiled under, whole. What a message shows of
-    /// it is [`chunkid`] of this.
+    /// The name the chunk is compiled under, whole: the request's own
+    /// `chunkname`, or [`DEFAULT_CHUNKNAME`] where it carries none. What a
+    /// message shows of it is [`chunkid`] of this.
     pub fn chunkname(&self) -> &str {
         &self.chunkname
     }
@@ -238,6 +253,12 @@ impl fmt::Debug for Source {
 /// absence of the parameter is what makes that impossible rather than merely
 /// checked.
 ///
+/// The name is read off that block for the same reason, and not derived
+/// from the path a second time: the record has to name the chunk the
+/// request really carries, and a request naming none is compiled under the
+/// far end's own [`DEFAULT_CHUNKNAME`]. The 200-byte cap therefore falls on
+/// the value that is going out rather than on one computed beside it.
+///
 /// The order is open, read, size, mark, shebang, empty, hash. The size is
 /// compared against the raw bytes, before either rule shortens them, because
 /// the question is what the file turned out to be. The mark comes off before
@@ -250,7 +271,13 @@ pub fn read(admitted: &Admitted) -> Result<Source, FileRefusal> {
     };
     // The name first, because it is a refusal this file's bytes cannot
     // change and there is no reason to read them to reach it.
-    let chunkname = chunkname(admitted.path()).map_err(|source| refusal(Refusal::Name(source)))?;
+    let chunkname = match admitted.chunkname() {
+        Some(name) => {
+            cap(name).map_err(|source| refusal(Refusal::Name(source)))?;
+            name.to_owned()
+        }
+        None => DEFAULT_CHUNKNAME.to_owned(),
+    };
     let mut file = open(admitted)?;
     let mut bytes = Vec::with_capacity(admitted.size() as usize);
     file.read_to_end(&mut bytes)
@@ -620,6 +647,19 @@ end
             check(&self.roots(), &self.h, &refs, &real).expect("the file is admitted")
         }
 
+        /// The same, with the headers spelt by the caller rather than by
+        /// `headers` — which is how a request that names no chunk, or names
+        /// one the path does not, is put in front of the reader.
+        fn admit_framed(
+            &self,
+            name: &str,
+            bytes: &[u8],
+            headers: &[(&str, &str)],
+        ) -> crate::file::Admitted {
+            let path = self.write(name, bytes);
+            check(&self.roots(), &self.h, headers, &real(&path)).expect("the file is admitted")
+        }
+
         fn headers(&self, real: &Real) -> Vec<(String, String)> {
             vec![
                 ("op".to_owned(), "eval".to_owned()),
@@ -798,6 +838,76 @@ end
             .collect();
         assert_eq!(sent, headers, "the headers are the ones check was given");
         assert_eq!(envelope.body, b"return 1\n", "and the body is the chunk");
+    }
+
+    #[test]
+    fn a_request_naming_no_chunk_records_the_name_the_far_end_will_use() {
+        // The header is optional, so this is not a refusal; what it must
+        // not be is the path, which nothing on the wire would carry.
+        let s = scene();
+        let admitted = s.admit_framed(
+            "nameless.lua",
+            b"return 1\n",
+            &[("op", "eval"), ("state", "hook")],
+        );
+        let source = read(&admitted).expect("the file reads");
+        assert_eq!(source.chunkname(), DEFAULT_CHUNKNAME);
+        assert_eq!(
+            protocol::parse(source.request())
+                .expect("the request parses")
+                .headers
+                .get("chunkname"),
+            None,
+            "the record names what is sent, and nothing was"
+        );
+        // And what a raise would print of it is the far end's own word.
+        assert_eq!(chunkid(source.chunkname(), RUNTIME_IDSIZE), "dcs-api-eval");
+    }
+
+    #[test]
+    fn the_record_names_the_chunk_the_request_carries_and_not_the_path() {
+        let s = scene();
+        let admitted = s.admit_framed(
+            "renamed.lua",
+            b"return 1\n",
+            &[("op", "eval"), ("chunkname", "=something-else")],
+        );
+        let source = read(&admitted).expect("the file reads");
+        assert_eq!(source.chunkname(), "=something-else");
+        assert_eq!(
+            protocol::parse(source.request())
+                .expect("the request parses")
+                .headers
+                .get("chunkname"),
+            Some("=something-else"),
+            "one name, on both sides of the split"
+        );
+        assert!(
+            !source.chunkname().contains("renamed.lua"),
+            "the path is not the name: {}",
+            source.chunkname()
+        );
+    }
+
+    #[test]
+    fn a_chunkname_header_past_two_hundred_bytes_is_refused_by_the_reader() {
+        // The cap has to fall on the value going out: the framer enforces
+        // no length, so this header would otherwise reach a far end that
+        // throws it away.
+        let s = scene();
+        let long = format!("@{}", "d".repeat(CHUNKNAME_MAX));
+        let admitted = s.admit_framed(
+            "long-name.lua",
+            b"return 1\n",
+            &[("op", "eval"), ("chunkname", &long)],
+        );
+        let err = read(&admitted).expect_err("the name is past the cap");
+        assert!(matches!(err.kind, Refusal::Name(_)), "{err:?}");
+        assert!(err.to_string().contains("200"), "{err}");
+        assert!(
+            err.to_string().contains(&long.len().to_string()),
+            "and says how long it was: {err}"
+        );
     }
 
     #[test]
