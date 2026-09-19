@@ -15,6 +15,11 @@ pub mod protocol;
 pub mod publish;
 pub mod readers;
 
+// Which `DCS.*` calls this client will ever send, and how each one is
+// wrapped. The list is a constant because the client authors these chunks
+// and the executor runs whatever it is given.
+pub mod reads;
+
 // The hash the provenance record carries. Written here because the crate
 // takes no crates.io dependency; decision record 0011.
 pub mod sha256;
