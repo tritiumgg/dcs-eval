@@ -21,6 +21,7 @@ use std::fmt;
 use std::time::Duration;
 
 use crate::pipeline::{PipeError, Pipeline, Spec};
+use crate::protocol::Envelope;
 use crate::readers::Handshake;
 use crate::wait::Outcome;
 
@@ -396,13 +397,35 @@ impl fmt::Display for Refused {
 
 impl std::error::Error for Refused {}
 
-/// What one gather came to: an answer per listed read, in list order.
+/// What one gather came to: an answer per listed read, in list order,
+/// and the two other things that rode the same window.
+///
+/// The ping and the probe are here because they cost the same wake as the
+/// reads — a window is one quiet period whatever is in it — and a caller
+/// that took them separately would pay for two. What either one *means*
+/// is not decided here: the ping comes back as the envelope it was, and
+/// the probe as an answer, for whoever maps them onto an axis.
 #[derive(Debug)]
 pub struct Readings {
     entries: Vec<(&'static Read, Answer)>,
+    ping: Option<Envelope>,
+    probe: Option<Answer>,
 }
 
 impl Readings {
+    /// The ping's reply, where one came back. It carries the fresh
+    /// `phase`, `tick` and callback headers.
+    #[must_use]
+    pub fn ping(&self) -> Option<&Envelope> {
+        self.ping.as_ref()
+    }
+
+    /// What the reachability probe came to, where one was sent.
+    #[must_use]
+    pub fn probe(&self) -> Option<&Answer> {
+        self.probe.as_ref()
+    }
+
     /// Every read and its answer, in the order the table lists them.
     #[must_use]
     pub fn entries(&self) -> &[(&'static Read, Answer)] {
@@ -487,7 +510,14 @@ pub(crate) fn vet(specs: &[Spec]) -> Result<(), Refused> {
         if op != Some("eval") {
             continue;
         }
-        let callee = callee_of(&spec.body).unwrap_or_default();
+        // The allowlist falls on anything shaped like a read: a chunk
+        // that protects a call. The window carries other evals — a
+        // reachability probe that calls nothing — and they are held to
+        // the never rule above like everything else, but they are not
+        // reads and have no callee to look up.
+        let Some(callee) = callee_of(&spec.body) else {
+            continue;
+        };
         if !READS.iter().any(|r| r.callee() == callee) {
             return Err(Refused::Unlisted { name: callee });
         }
@@ -501,21 +531,27 @@ fn chunkname(callee: &str) -> String {
     format!("=dcs-eval read {callee}")
 }
 
-/// Publish `specs` over one window and answer each one.
+/// The chunk the reachability probe evaluates: it calls nothing and
+/// names nothing, so what it answers is about whether the state can be
+/// reached at all.
+const PROBE: &[u8] = b"return 'ok'";
+
+/// Publish `specs` over one window and hand back what each came to, in
+/// the order they were given.
 ///
 /// This is the only route from this module to the disk, and it is a seam
 /// of its own so that what is about to be published can be checked as
-/// bytes rather than as the table they came from.
+/// bytes rather than as the table they came from. It yields the window's
+/// own items rather than answers, because not everything that rides the
+/// window is a read: what each item means is the caller's to decide.
 pub(crate) fn publish_reads(
     h: &Handshake,
     specs: Vec<Spec>,
     depth: usize,
     upto: Duration,
-) -> Result<Vec<Answer>, Refused> {
+) -> Result<Vec<Result<Outcome, PipeError>>, Refused> {
     vet(&specs)?;
-    Ok(Pipeline::over(h, specs, depth, upto)
-        .map(answer_of)
-        .collect())
+    Ok(Pipeline::over(h, specs, depth, upto).collect())
 }
 
 /// Every listed read this session will answer, in list order.
@@ -556,32 +592,62 @@ pub fn gather(
             ));
         }
         entries.sort_by_key(|(r, _)| order_of(r));
-        return Ok(Readings { entries });
+        return Ok(Readings {
+            entries,
+            ping: None,
+            probe: None,
+        });
     }
-    let specs: Vec<Spec> = reads
-        .iter()
-        .map(|r| {
-            // `for` is written here because a window adds nothing on the
-            // way out, the session stamp included.
-            let name = chunkname(r.callee());
-            Spec::new(
-                &[
-                    ("op", "eval"),
-                    ("for", h.stamp.as_str()),
-                    ("state", "hook"),
-                    ("chunkname", name.as_str()),
-                ],
-                &chunk(r.callee()),
-            )
-        })
-        .collect();
+    // The ping first, then the reads, then the probe: one window, one
+    // wake, one quiet period for all three.
+    let mut specs: Vec<Spec> = vec![Spec::new(&[("op", "ping"), ("for", h.stamp.as_str())], b"")];
+    specs.extend(reads.iter().map(|r| {
+        // `for` is written here because a window adds nothing on the
+        // way out, the session stamp included.
+        let name = chunkname(r.callee());
+        Spec::new(
+            &[
+                ("op", "eval"),
+                ("for", h.stamp.as_str()),
+                ("state", "hook"),
+                ("chunkname", name.as_str()),
+            ],
+            &chunk(r.callee()),
+        )
+    }));
+    specs.push(Spec::new(
+        &[
+            ("op", "eval"),
+            ("for", h.stamp.as_str()),
+            ("state", "gui"),
+            ("chunkname", "=dcs-eval probe"),
+        ],
+        PROBE,
+    ));
     let depth = specs.len().max(1);
-    let answers = publish_reads(h, specs, depth, upto)?;
-    for (r, answer) in reads.iter().zip(answers) {
+    let mut items = publish_reads(h, specs, depth, upto)?.into_iter();
+    let ping = match items.next() {
+        Some(Ok(Outcome::Reply(envelope))) if envelope.headers.get("status") == Some("ok") => {
+            Some(envelope)
+        }
+        _ => None,
+    };
+    for r in &reads {
+        let answer = items.next().map_or(
+            Answer::Unanswered {
+                why: "the window ended before this read was yielded".to_owned(),
+            },
+            answer_of,
+        );
         entries.push((r, answer));
     }
+    let probe = items.next().map(answer_of);
     entries.sort_by_key(|(r, _)| order_of(r));
-    Ok(Readings { entries })
+    Ok(Readings {
+        entries,
+        ping,
+        probe,
+    })
 }
 
 /// Where a read sits in the table, so the entries come back in list order
@@ -596,7 +662,7 @@ fn order_of(read: &Read) -> usize {
 #[cfg(test)]
 mod game_reads {
     use super::*;
-    use crate::protocol::{Envelope, frame, parse};
+    use crate::protocol::{frame, parse};
     use crate::standin::Standin;
     use crate::testing::Sandbox;
     use std::fs;
@@ -1034,7 +1100,7 @@ mod game_reads {
     fn each_read_is_its_own_request() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        gathered(&mut s, &h, "menu", Tiers::default(), 7);
         for callee in tier_one() {
             assert_eq!(
                 carrying(&s, &chunkname(callee)),
@@ -1042,10 +1108,18 @@ mod game_reads {
                 "the ledger does not hold exactly one eval naming {callee}"
             );
         }
+        // The window's size is this test's subject, so it counts a total:
+        // five reads, the ping and the probe.
+        assert_eq!(
+            carrying(&s, "=dcs-eval read "),
+            5,
+            "the ledger holds {} eval requests naming a read and should hold 5, one per read",
+            carrying(&s, "=dcs-eval read ")
+        );
         assert_eq!(
             s.seen().len(),
-            5,
-            "the ledger holds {} requests and should hold 5, one per read",
+            7,
+            "the ledger holds {} requests and should hold 7: five reads, a ping and a probe",
             s.seen().len()
         );
     }
@@ -1058,7 +1132,7 @@ mod game_reads {
         // never let it past the wait.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        gathered(&mut s, &h, "menu", Tiers::default(), 7);
         assert_eq!(s.tick, 1, "the session answered over {} ticks", s.tick);
     }
 
@@ -1066,18 +1140,26 @@ mod game_reads {
     fn every_read_is_sent_to_the_hook_state() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        gathered(&mut s, &h, "menu", Tiers::default(), 7);
         assert_eq!(carrying(&s, "state: hook"), 5);
-        assert_eq!(carrying(&s, "op: eval"), 5);
+        assert_eq!(carrying(&s, "=dcs-eval read "), 5);
+        // The probe is the one eval that goes elsewhere, and the ping
+        // names no state at all.
+        assert_eq!(carrying(&s, "state: gui"), 1);
     }
 
     #[test]
     fn every_published_body_holds_exactly_one_pcall() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let mut reads = 0;
         for (n, seen) in s.seen().iter().enumerate() {
             let text = String::from_utf8_lossy(&seen.bytes);
+            if !text.contains("=dcs-eval read ") {
+                continue;
+            }
+            reads += 1;
             let calls = text.matches("pcall(").count();
             assert_eq!(
                 calls,
@@ -1086,13 +1168,14 @@ mod game_reads {
                 n + 1
             );
         }
+        assert_eq!(reads, 5, "the control: {reads} read bodies were looked at");
     }
 
     #[test]
     fn the_readings_come_back_in_the_list_order() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
         let keys: Vec<&str> = readings.entries().iter().map(|(r, _)| r.key()).collect();
         assert_eq!(
             keys,
@@ -1140,7 +1223,7 @@ mod game_reads {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
         s.script("DCS.getPause", "ok", "string", b"boolean\ttrue");
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
         assert_eq!(
             readings.of("pause"),
             Some(&Answer::Value {
@@ -1165,7 +1248,7 @@ mod game_reads {
         // four, so the absence cannot be true vacuously.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        gathered(&mut s, &h, "menu", Tiers::default(), 7);
         for callee in tier_one() {
             assert_eq!(
                 carrying(&s, callee),
@@ -1194,7 +1277,7 @@ mod game_reads {
     fn a_tier_two_read_with_the_switch_off_is_not_sent_rather_than_unanswered() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
         for key in ["multiplayer", "server", "track", "player_id"] {
             assert_eq!(
                 readings.of(key),
@@ -1233,7 +1316,7 @@ mod game_reads {
     fn the_switch_exists_and_sends_nine_when_it_is_asked_for() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::with_tier_two(), 9);
+        gathered(&mut s, &h, "menu", Tiers::with_tier_two(), 11);
         for r in listed(Tiers::with_tier_two()) {
             assert_eq!(
                 carrying(&s, &chunkname(r.callee())),
@@ -1242,7 +1325,12 @@ mod game_reads {
                 r.callee()
             );
         }
-        assert_eq!(s.seen().len(), 9);
+        assert_eq!(
+            s.seen().len(),
+            11,
+            "nine reads, the ping and the probe: {} requests",
+            s.seen().len()
+        );
     }
 
     #[test]
@@ -1356,7 +1444,7 @@ mod game_reads {
         // predicate, so a gather that published nothing fails here first.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::with_tier_two(), 9);
+        gathered(&mut s, &h, "menu", Tiers::with_tier_two(), 11);
         for r in listed(Tiers::with_tier_two()) {
             assert_eq!(
                 carrying(&s, &chunkname(r.callee())),
@@ -1376,6 +1464,66 @@ mod game_reads {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_ping_and_the_probe_share_the_reads_tick() {
+        // A window is one wake whatever is in it, so the ping and the
+        // probe cost nothing beyond the reads. The ticker waits for all
+        // seven before it answers anything.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        assert_eq!(s.tick, 1, "the session answered over {} ticks", s.tick);
+        let ping = readings.ping().expect("the ping answered");
+        assert_eq!(ping.body, b"pong");
+        assert!(readings.probe().is_some(), "the probe answered");
+    }
+
+    #[test]
+    fn the_probe_is_the_one_request_that_does_not_go_to_hook() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        assert_eq!(carrying(&s, "state: gui"), 1);
+        assert_eq!(carrying(&s, "state: hook"), 5);
+        assert_eq!(carrying(&s, "op: ping"), 1);
+    }
+
+    #[test]
+    fn the_probe_body_carries_no_dcs_name() {
+        // The probe asks whether the state can be reached at all, so it
+        // calls nothing: what it answers is about the carrier and never
+        // about the game.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let probe = s
+            .seen()
+            .iter()
+            .map(|seen| String::from_utf8_lossy(&seen.bytes).into_owned())
+            .find(|text| text.contains("=dcs-eval probe"))
+            .expect("the probe is in the ledger");
+        assert!(probe.ends_with("return 'ok'"), "{probe}");
+        assert!(!probe.contains("DCS."), "{probe}");
+        assert!(!probe.contains("pcall"), "{probe}");
+    }
+
+    #[test]
+    fn a_loading_phase_sends_no_ping_and_no_probe_either() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let readings = gather(&h, "load", Tiers::default(), UPTO).expect("not refused");
+        assert_eq!(
+            published(s.req()),
+            0,
+            "the request directory holds {} files and nothing answers during a load",
+            published(s.req())
+        );
+        s.tick();
+        assert_eq!(s.seen().len(), 0, "the ledger holds a request");
+        assert!(readings.ping().is_none());
+        assert!(readings.probe().is_none());
     }
 
     #[test]
