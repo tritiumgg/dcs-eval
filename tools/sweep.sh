@@ -199,9 +199,11 @@ note_breadcrumb() {
         printf 'copies: %s\n' "$work/orig"
         printf 'pid: %s\n' "$$"
         printf 'control: %s\n' "${1:-<none yet>}"
+        # Not `cp -p`, for the reason put_back gives below: the restored
+        # file's timestamp has to say it just changed, because it just did.
         printf '\nrestore each with:\n'
         while IFS="$US" read -r path copy; do
-            printf '  cp -p "%s" "%s"\n' "$copy" "$root/$path"
+            printf '  cp "%s" "%s"\n' "$copy" "$root/$path"
         done < "$work/manifest"
     } > "$breadcrumb"
 }
@@ -253,7 +255,8 @@ restore_all() {
         done
         if ! cmp -s "$copy" "$root/$path"; then
             printf 'NOT-RESTORED  %s differs from its copy\n' "$path" >&2
-            printf '              cp -p "%s" "%s"\n' "$copy" "$root/$path" >&2
+            printf '              cp "%s" "%s"  # not -p: the timestamp has to say it just changed\n' \
+                "$copy" "$root/$path" >&2
             bad=1
         fi
     done < "$work/manifest"
