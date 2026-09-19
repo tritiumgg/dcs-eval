@@ -166,6 +166,37 @@ pub fn listed(t: Tiers) -> Vec<&'static Read> {
         .collect()
 }
 
+/// The chunk that makes one read, for the call expression `callee`.
+///
+/// It is the frozen document's own five lines with the callee
+/// substituted, and it is substituted bare: `pcall(<callee>)` hands
+/// `pcall` the function value, so the call happens inside the protection
+/// and a raise comes back as `ok == false` rather than as an error of the
+/// request.
+///
+/// Two consequences worth naming, because the next stage reads answers
+/// off this grammar. `tostring` is applied to a scalar only — a table,
+/// function, userdata or thread is reported by its type and never
+/// stringified, since nothing on this side walks one — so the answer is
+/// `<type>\t` with nothing after the tab. And indexing the callee happens
+/// *outside* the `pcall`: on a host where the table it sits under is nil
+/// the chunk raises before `pcall` is entered, and the executor answers
+/// that as an error of the request, not as a read that threw. A read that
+/// threw and a host that has no such table are different findings and
+/// nothing here folds them together.
+#[must_use]
+pub fn chunk(callee: &str) -> Vec<u8> {
+    format!(
+        "local ok, v = pcall({callee})\n\
+         if not ok then return 'error\\t' .. tostring(v) end\n\
+         local t = type(v)\n\
+         if t == 'table' or t == 'function' or t == 'userdata' or t == 'thread' \
+         then return t .. '\\t' end\n\
+         return t .. '\\t' .. tostring(v)\n"
+    )
+    .into_bytes()
+}
+
 #[cfg(test)]
 mod game_reads {
     use super::*;
@@ -176,6 +207,131 @@ mod game_reads {
             .iter()
             .map(|r| r.callee())
             .collect()
+    }
+
+    /// The chunk as a string, which is how every assertion about it reads
+    /// better than a byte slice does.
+    fn text(callee: &str) -> String {
+        String::from_utf8(chunk(callee)).expect("the chunk is ASCII")
+    }
+
+    #[test]
+    fn the_chunk_for_getpause_is_the_one_the_document_gives() {
+        // The five lines as the frozen text prints them, written out here
+        // rather than composed, so the composition has something to be
+        // wrong against.
+        let wanted = concat!(
+            "local ok, v = pcall(DCS.getPause)\n",
+            "if not ok then return 'error\\t' .. tostring(v) end\n",
+            "local t = type(v)\n",
+            "if t == 'table' or t == 'function' or t == 'userdata' or t == 'thread' ",
+            "then return t .. '\\t' end\n",
+            "return t .. '\\t' .. tostring(v)\n",
+        );
+        let got = text("DCS.getPause");
+        assert_eq!(
+            got, wanted,
+            "the chunk does not match the one the document gives"
+        );
+    }
+
+    #[test]
+    fn every_listed_read_has_exactly_one_pcall() {
+        for r in listed(Tiers::with_tier_two()) {
+            assert_eq!(
+                text(r.callee()).matches("pcall(").count(),
+                1,
+                "the chunk for {} does not hold exactly one pcall",
+                r.callee()
+            );
+        }
+    }
+
+    #[test]
+    fn a_chunk_names_its_own_callee_and_no_other_dcs_name() {
+        for r in listed(Tiers::with_tier_two()) {
+            let body = text(r.callee());
+            for other in listed(Tiers::with_tier_two()) {
+                if other.callee() == r.callee() {
+                    continue;
+                }
+                assert!(
+                    !body.contains(other.callee()),
+                    "the chunk for {} also names {}",
+                    r.callee(),
+                    other.callee()
+                );
+            }
+        }
+    }
+
+    /// What the chunk prints when the reference interpreter runs it over
+    /// a stub called `stub`, whose definition is `def`.
+    ///
+    /// The chunk is loaded from a long bracket rather than a file so that
+    /// what runs is the bytes this module built, with nothing in between
+    /// that could normalise them. The interpreter is the pinned 5.1.5, the
+    /// one every Lua task in this tree depends on; a missing one fails
+    /// rather than skips, because a suite that skipped its only
+    /// end-to-end check would say nothing and say it in green.
+    #[cfg(windows)]
+    fn over_a_stub(def: &str, callee: &str) -> String {
+        use std::process::Command;
+        let b = crate::testing::Sandbox::new();
+        let driver = b.join("driver.lua");
+        let mut script = def.to_owned();
+        script.push_str("\nlocal f = assert(loadstring([==[\n");
+        script.push_str(&text(callee));
+        script.push_str("]==]))\nio.write(f())\n");
+        std::fs::write(&driver, script).expect("the driver is written");
+        let out = match Command::new("lua5.1.exe").arg(&driver).output() {
+            Ok(out) => out,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => panic!(
+                "no lua5.1.exe on PATH: build it with `mise run lua-build`, then run cargo \
+                 under mise, `mise exec -- cargo test -p dcs-eval game_reads`"
+            ),
+            Err(e) => panic!("lua5.1.exe did not start: {e}"),
+        };
+        assert!(
+            out.status.success(),
+            "the chunk did not run to the end ({}):\n{}",
+            out.status,
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_chunk_over_a_stub_returning_true_prints_boolean_true() {
+        assert_eq!(
+            over_a_stub("stub = function() return true end", "stub"),
+            "boolean\ttrue"
+        );
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_chunk_over_a_stub_that_raises_prints_error_and_the_message() {
+        // The message is the interpreter's, position prefix and all, and
+        // it is passed through verbatim: what is pinned here is the tag
+        // and that the raise did not escape the chunk.
+        let got = over_a_stub("stub = function() error('boom') end", "stub");
+        let (tag, rest) = got.split_once('\t').expect("the answer carries a tab");
+        assert_eq!(tag, "error");
+        assert!(rest.ends_with("boom"), "the message was {rest}");
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_chunk_over_a_stub_returning_a_table_prints_the_type_and_nothing_else() {
+        // A table is reported by type and never stringified, so there is
+        // nothing after the tab — not an address, which would differ on
+        // every run and say nothing about the game.
+        assert_eq!(
+            over_a_stub("stub = function() return {} end", "stub"),
+            "table\t"
+        );
     }
 
     #[test]
