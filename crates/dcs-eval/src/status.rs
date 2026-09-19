@@ -1315,6 +1315,44 @@ mod tests {
                 .expect("the file has a modification time");
             (slurp(path), at)
         };
+        // The same four directories by their own modification times, which
+        // is the trace a file that appeared and vanished leaves behind:
+        // adding a name to a directory moves its time, and taking one away
+        // moves it again.
+        let touched = |s: &Idle| {
+            [s.req(), s.res(), s.session(), s.output()].map(|dir| {
+                fs::metadata(dir)
+                    .and_then(|meta| meta.modified())
+                    .expect("the directory has a modification time")
+            })
+        };
+        // The clock those stamps come from advances in steps rather than
+        // continuously, so a create and a remove inside one step could
+        // leave a directory's time exactly where it already was. Stamping
+        // a file outside the watched tree until it reads later than every
+        // recorded directory puts the whole call after that step, and any
+        // create during it is then stamped later still.
+        let clock = b.join("clock");
+        fs::create_dir_all(&clock).expect("the scratch directory is made");
+        let past_the_clock = |dirs: &[SystemTime; 4]| {
+            let latest = *dirs.iter().max().expect("four stamps");
+            for i in 0..500u32 {
+                // A fresh name each time: Windows can hand back a
+                // rewritten file's earlier stamp, and a marker that never
+                // appears to move would hang this loop rather than read
+                // the clock.
+                let marker = clock.join(format!("tick-{i}"));
+                fs::write(&marker, b"").expect("the marker lands");
+                let at = fs::metadata(&marker)
+                    .and_then(|meta| meta.modified())
+                    .expect("the marker has a modification time");
+                if at > latest {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            panic!("the filesystem's clock never moved past the directory stamps");
+        };
 
         let before = listing(&s);
         assert_eq!(before[0], "", "nothing is published before the call");
@@ -1324,6 +1362,8 @@ mod tests {
             "the session directory holds its two directories and nothing else"
         );
         let files_before = (stamped(&handshake), stamped(&heartbeat));
+        let dirs_before = touched(&s);
+        past_the_clock(&dirs_before);
 
         let report = status(s.output());
         let session = report.session.expect("the session reports");
@@ -1333,6 +1373,28 @@ mod tests {
             before,
             "nothing appeared and nothing vanished: no request, no arm file, no half-written file \
              beside either of the two"
+        );
+        // What the listing above cannot see, and why this line is here.
+        // A `status` that published a request and took it straight back —
+        // or made an arm file and deleted it — leaves the listing exactly
+        // as it was and passes. The executor wakes on a name appearing and
+        // does not care that it later went, so that is the failure this
+        // whole function exists to catch, and the listing is blind to it.
+        // These stamps are not: the create moves the directory's time and
+        // the remove moves it again, the clock has been proved past every
+        // recorded stamp, and neither move can be taken back.
+        //
+        // What is still unseen is the event rather than its trace: a
+        // create in some directory none of these four is, a filesystem
+        // that does not stamp its directories, and the order things
+        // happened in within the call. Watching a create as it happens
+        // needs the directory watch that is a later task's, and this test
+        // has no watch.
+        assert_eq!(
+            touched(&s),
+            dirs_before,
+            "no directory's modification time moved, so nothing was created and removed inside \
+             the call either"
         );
         assert_eq!(
             (stamped(&handshake), stamped(&heartbeat)),
@@ -1356,6 +1418,8 @@ mod tests {
         // nor refreshed, and the field is read off the disk.
         fs::write(s.arm(), b"").expect("the arm file lands");
         let armed = stamped(s.arm());
+        let dirs_armed = touched(&s);
+        past_the_clock(&dirs_armed);
         let report = status(s.output());
         assert_eq!(
             report.session.expect("the session reports").arm_file,
@@ -1363,5 +1427,10 @@ mod tests {
             "the field is wired to the disk"
         );
         assert_eq!(stamped(s.arm()), armed, "and nothing here touched the file");
+        assert_eq!(
+            touched(&s),
+            dirs_armed,
+            "and the armed branch created and removed nothing either"
+        );
     }
 }
