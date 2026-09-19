@@ -1195,6 +1195,196 @@ fn split_callbacks(value: &str) -> Vec<String> {
         .collect()
 }
 
+/// Everything the axes read, gathered once.
+///
+/// It holds what the axes actually consult and not the gather's own
+/// `Readings`, so that a test can build one by hand: a derivation that can
+/// only be exercised through the disk is a derivation whose table is
+/// checked by fixtures rather than by cases.
+#[derive(Debug)]
+pub struct Evidence {
+    pub handshake: Found,
+    /// The one verdict on the heartbeat, taken before any axis.
+    pub beat: Option<Beat>,
+    pub process: Option<crate::status::Process>,
+    pub ping: Option<Result<crate::protocol::Envelope, crate::reads::Unanswered>>,
+    pub probe: Option<crate::reads::Probe>,
+    pub answers: Vec<(&'static crate::reads::Read, crate::reads::Answer)>,
+    pub tiers: crate::reads::Tiers,
+}
+
+impl Evidence {
+    /// Nothing read at all: no handshake, no heartbeat, no window. The
+    /// shape a test starts from and fills in.
+    #[must_use]
+    pub fn nothing() -> Self {
+        Self {
+            handshake: Found::Missing,
+            beat: None,
+            process: None,
+            ping: None,
+            probe: None,
+            answers: Vec::new(),
+            tiers: crate::reads::Tiers::default(),
+        }
+    }
+
+    /// The answer for one fact, by its key.
+    #[must_use]
+    pub fn of(&self, key: &str) -> Option<&crate::reads::Answer> {
+        self.answers
+            .iter()
+            .find(|(read, _)| read.key() == key)
+            .map(|(_, answer)| answer)
+    }
+}
+
+/// The reads that map to no axis, and are carried anyway.
+///
+/// `sim_mode` is recorded verbatim and maps to nothing until a table of
+/// observed values exists, and no such table exists: mapping it here would
+/// be inventing one. `mission_file`, `model_time` and `player_id` are
+/// gathered on the same window and no row of the vocabulary reads them. A
+/// reader that wants them should not have to go back to the wire for them,
+/// so they are carried as inert data.
+const UNMAPPED_READS: [&str; 4] = ["sim_mode", "mission_file", "model_time", "player_id"];
+
+/// What the game is doing, on every axis at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GameState {
+    pub process: ProcessAxis,
+    pub bridge: BridgeAxis,
+    pub activity: Activity,
+    pub pause: PauseAxis,
+    pub session: SessionAxis,
+    pub track: Track,
+    /// Evidence, never a state.
+    pub ui: Ui,
+    pub app_version: Option<String>,
+    /// The reads no axis is made of, kept verbatim. Nothing reads this
+    /// field; it is here so a reader does not lose what was gathered.
+    pub recorded: Vec<(&'static crate::reads::Read, crate::reads::Answer)>,
+}
+
+/// The axes, from the evidence.
+///
+/// Pure: every axis is a function of what it was handed, so the whole
+/// table is exercised by building evidence rather than by staging files.
+/// Each axis is decided by its own evidence and by the gates the
+/// vocabulary names, and by nothing else.
+#[must_use]
+pub fn derive(e: &Evidence) -> GameState {
+    let activity = activity_of(e.beat.as_ref(), e.of("mission_name"));
+    let pause = pause_of(&activity, e.beat.as_ref(), e.of("pause"));
+    let session = session_of(
+        &activity,
+        e.probe.as_ref(),
+        e.tiers,
+        e.of("multiplayer"),
+        e.of("server"),
+    );
+    let app_version = match &e.handshake {
+        Found::Read(h) => h.app_version.clone(),
+        Found::Missing | Found::Unreadable { .. } => None,
+    };
+    GameState {
+        process: process_of(&e.handshake, e.process.as_ref()),
+        bridge: bridge_of(e.ping.as_ref(), e.beat.as_ref()),
+        activity,
+        pause,
+        session,
+        track: track_of(e.of("track")),
+        ui: ui_of(e.ping.as_ref(), e.beat.as_ref()),
+        app_version,
+        recorded: e
+            .answers
+            .iter()
+            .filter(|(read, _)| UNMAPPED_READS.contains(&read.key()))
+            .map(|(read, answer)| (*read, answer.clone()))
+            .collect(),
+    }
+}
+
+/// The evidence, read off the disk, and the state derived from it.
+///
+/// The one impure entry in this module. It reads the handshake and the
+/// heartbeat, takes the one heartbeat verdict, probes the process id and
+/// opens a window for the ping, the reads and the reachability probe —
+/// unless the phase says a load, in which case the gather publishes
+/// nothing at all.
+///
+/// **The phase handed to the gather is the heartbeat's own word, and an
+/// unusable heartbeat gives the unknown one.** The window is closed by a
+/// load and by nothing else: "we could not read the heartbeat" is not a
+/// load, and skipping the window on it would report five unanswered reads
+/// as if the session had been busy loading.
+pub fn game_state(
+    output: &std::path::Path,
+    tiers: crate::reads::Tiers,
+    upto: std::time::Duration,
+) -> Result<GameState, crate::reads::Refused> {
+    let path = output.join("executor.txt");
+    let handshake = match crate::readers::Handshake::read(&path) {
+        Ok(h) => Found::Read(Box::new(h)),
+        Err(err) if missing(&err) => Found::Missing,
+        Err(err) => Found::Unreadable {
+            path: err.path.clone(),
+            detail: err.kind.to_string(),
+        },
+    };
+    let Found::Read(h) = &handshake else {
+        return Ok(derive(&Evidence {
+            handshake,
+            tiers,
+            ..Evidence::nothing()
+        }));
+    };
+    let host = Host::named(&h.host);
+    let (beat, word) = match crate::readers::Heartbeat::read(&output.join("heartbeat.txt")) {
+        Ok(hb) => {
+            let verdict = Beat::verdict(&hb, &h.stamp, &host);
+            let word = match &verdict {
+                Beat::Ours { .. } => hb.phase.clone(),
+                Beat::Foreign { .. } | Beat::WrongHost { .. } | Beat::Unreadable { .. } => {
+                    crate::wait::PHASE_UNKNOWN.to_owned()
+                }
+            };
+            (Some(verdict), word)
+        }
+        Err(err) if missing(&err) => (None, crate::wait::PHASE_UNKNOWN.to_owned()),
+        Err(err) => (
+            Some(Beat::Unreadable {
+                detail: err.kind.to_string(),
+            }),
+            crate::wait::PHASE_UNKNOWN.to_owned(),
+        ),
+    };
+    let process = crate::status::process_of(h.pid, crate::sys::liveness(h.pid)).0;
+    let readings = crate::reads::gather(h, &word, tiers, upto)?;
+    let evidence = Evidence {
+        handshake: handshake.clone(),
+        beat,
+        process: Some(process),
+        ping: readings
+            .ping()
+            .map(|r| r.cloned().map_err(Clone::clone)),
+        probe: readings.probe().cloned(),
+        answers: readings.entries().to_vec(),
+        tiers,
+    };
+    Ok(derive(&evidence))
+}
+
+/// Whether a read failed because the file was not there, as against
+/// failing over what was in it. The same discrimination `status` and a
+/// wait make, for the same reason.
+fn missing(err: &crate::readers::ReadError) -> bool {
+    matches!(
+        &err.kind,
+        crate::readers::ReadErrorKind::Disk(why) if why.kind() == std::io::ErrorKind::NotFound
+    )
+}
+
 /// The facts, one after another, for a line that prints all of them.
 fn joined(facts: &[Fact]) -> String {
     facts
@@ -2338,6 +2528,455 @@ mod game_state {
             Option<&Result<crate::protocol::Envelope, reads::Unanswered>>,
             Option<&Beat>,
         ) -> BridgeAxis = bridge_of;
+    }
+
+    // ---- the whole derivation ---------------------------------------
+
+    use crate::standin::Standin;
+    use crate::testing::Sandbox;
+    use std::time::{Duration, Instant, SystemTime};
+
+    /// Long enough that a busy box delays a test rather than turning a
+    /// reply into a pending and reddening a check about the axes.
+    const UPTO: Duration = Duration::from_secs(20);
+
+    /// Poll `dir` until at least `want` `.req` files are there, naming
+    /// what it saw: every caller is gating a tick on it, and a gate that
+    /// quietly opened proves nothing.
+    fn until(dir: &std::path::Path, want: usize, upto: Duration) {
+        let deadline = Instant::now() + upto;
+        loop {
+            let saw = published(dir);
+            if saw >= want {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "waited for {want} .req files in {} and saw {saw}",
+                dir.display()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// How many requests are published in `dir`.
+    fn published(dir: &std::path::Path) -> usize {
+        std::fs::read_dir(dir)
+            .expect("the request directory lists")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".req"))
+            .count()
+    }
+
+    /// A stand-in whose handshake is published, whose process id is this
+    /// one, and which has beaten once in `phase`.
+    fn ticking(b: &Sandbox, phase: &str) -> Standin {
+        let mut s = Standin::open(&b.join("dcs"), "hook").expect("the stand-in opens");
+        s.pid = std::process::id();
+        s.armed = true;
+        s.phase = phase.to_owned();
+        s.handshake().expect("the handshake publishes");
+        s.beat(SystemTime::now()).expect("a fresh beat");
+        s
+    }
+
+    /// One derivation against a stand-in that answers the whole window in
+    /// one tick.
+    fn derived(s: &mut Standin, tiers: reads::Tiers, want: usize) -> GameState {
+        let output = s.output().to_owned();
+        let req = s.req().to_owned();
+        std::thread::scope(|scope| {
+            let ticker = scope.spawn(|| {
+                until(&req, want, UPTO);
+                s.tick();
+            });
+            let state = game_state(&output, tiers, UPTO);
+            ticker.join().expect("the ticker finishes");
+            state
+        })
+        .expect("the gather is not refused")
+    }
+
+    #[test]
+    fn a_loading_session_derives_with_no_round_trip() {
+        // Two assertions, because one is about what reached the disk and
+        // one is about what the far end actually read.
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "load");
+        let state = game_state(s.output(), reads::Tiers::default(), UPTO).expect("not refused");
+        assert_eq!(state.activity, Activity::Loading);
+        assert_eq!(
+            published(s.req()),
+            0,
+            "the request directory holds {} files and nothing answers during a load",
+            published(s.req())
+        );
+        s.tick();
+        assert!(s.seen().is_empty(), "the ledger holds a request");
+        assert_eq!(state.pause.value, Pause::NotApplicable);
+    }
+
+    #[test]
+    fn no_heartbeat_still_opens_the_window() {
+        // A load closes the window and nothing else does. "We could not
+        // read the heartbeat" is not a load, and skipping the window on
+        // it would report five unanswered reads as a busy session.
+        let b = Sandbox::new();
+        let mut s = Standin::open(&b.join("dcs"), "hook").expect("the stand-in opens");
+        s.pid = std::process::id();
+        s.handshake().expect("the handshake publishes");
+        let state = derived(&mut s, reads::Tiers::default(), 7);
+        assert_eq!(
+            state.activity,
+            Activity::Unknown {
+                why: Why::NoHeartbeat
+            }
+        );
+        assert!(
+            !s.seen().is_empty(),
+            "no window opened although nothing said this was a load"
+        );
+        assert_ne!(
+            state.pause.value,
+            Pause::Unknown {
+                why: Why::NotSent {
+                    why: reads::NotSent::Loading
+                }
+            },
+            "the reads were skipped as if the session were loading"
+        );
+    }
+
+    #[test]
+    fn a_refused_probe_and_a_mission_phase_derive_session_client() {
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "sim");
+        s.script(
+            "DCS.getMissionName",
+            "ok",
+            "string",
+            b"string\tCaucasus TvT",
+        );
+        s.script(
+            "return 'ok'",
+            "refused",
+            "",
+            b"net.dostring_in returned nil",
+        );
+        let state = derived(&mut s, reads::Tiers::default(), 7);
+        assert_eq!(
+            state.activity,
+            Activity::Mission {
+                name: "Caucasus TvT".to_owned()
+            }
+        );
+        assert_eq!(state.session, SessionAxis::Client);
+    }
+
+    #[test]
+    fn tier_two_off_leaves_track_unknown_tier_2_off() {
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "sim");
+        let state = derived(&mut s, reads::Tiers::default(), 7);
+        assert_eq!(
+            state.track,
+            Track::Unknown {
+                why: Why::NotSent {
+                    why: reads::NotSent::TierTwoOff
+                }
+            }
+        );
+        assert_eq!(state.track.to_string(), "unknown (tier 2 off)");
+    }
+
+    #[test]
+    fn a_paused_read_against_a_sim_phase_derives_paused_read_with_the_phase_noted() {
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "sim");
+        s.script(
+            "DCS.getMissionName",
+            "ok",
+            "string",
+            b"string\tCaucasus TvT",
+        );
+        s.script("DCS.getPause", "ok", "string", b"boolean\ttrue");
+        let state = derived(&mut s, reads::Tiers::default(), 7);
+        assert_eq!(state.pause.value, Pause::Paused, "the read did not win");
+        assert_eq!(state.pause.phase_callback, Some(Phase::Sim));
+        assert!(
+            state.pause.note.is_some(),
+            "the disagreeing phase was not noted"
+        );
+    }
+
+    #[test]
+    fn no_axis_is_filled_from_the_phase_when_its_own_read_errored() {
+        // The narrow one: the phase says paused and the read raised.
+        // `pause` is unknown naming the error, and the axes the phase
+        // really does decide are untouched.
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "paused");
+        s.script(
+            "DCS.getMissionName",
+            "ok",
+            "string",
+            b"string\tCaucasus TvT",
+        );
+        s.script(
+            "DCS.getPause",
+            "ok",
+            "string",
+            b"error\tattempt to call a nil value",
+        );
+        s.script("return 'ok'", "ok", "string", b"ok");
+        let state = derived(&mut s, reads::Tiers::default(), 7);
+        assert_eq!(
+            state.pause.value,
+            Pause::Unknown {
+                why: Why::Errored {
+                    message: "attempt to call a nil value".to_owned()
+                }
+            },
+            "the getPause read raised, so pause is unknown and the phase is not an answer"
+        );
+        assert_eq!(
+            state.activity,
+            Activity::Mission {
+                name: "Caucasus TvT".to_owned()
+            }
+        );
+        assert_eq!(state.session, SessionAxis::SingleOrHost);
+    }
+
+    #[test]
+    fn sim_mode_is_recorded_verbatim_and_maps_to_no_axis() {
+        // No table of observed values exists, so mapping it would be
+        // inventing one. It is carried as inert data instead.
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "sim");
+        s.script(
+            "DCS.getMissionName",
+            "ok",
+            "string",
+            b"string\tCaucasus TvT",
+        );
+        s.script("DCS.getSimulatorMode", "ok", "string", b"number\t2");
+        let state = derived(&mut s, reads::Tiers::default(), 7);
+        let recorded = state
+            .recorded
+            .iter()
+            .find(|(read, _)| read.key() == "sim_mode")
+            .map(|(_, answer)| answer)
+            .expect("sim_mode is recorded");
+        assert_eq!(
+            recorded,
+            &reads::Answer::Value {
+                lua_type: "number".to_owned(),
+                value: Some("2".to_owned()),
+            }
+        );
+
+        // And it decides nothing: a different value leaves every axis
+        // where it was.
+        let b2 = Sandbox::new();
+        let mut s2 = ticking(&b2, "sim");
+        s2.script(
+            "DCS.getMissionName",
+            "ok",
+            "string",
+            b"string\tCaucasus TvT",
+        );
+        s2.script("DCS.getSimulatorMode", "ok", "string", b"number\t7");
+        let other = derived(&mut s2, reads::Tiers::default(), 7);
+        assert_eq!(
+            axes(&state),
+            axes(&other),
+            "a different sim_mode moved an axis"
+        );
+    }
+
+    /// The six axes, named, for a comparison that says which one moved.
+    fn axes(s: &GameState) -> Vec<(&'static str, String)> {
+        vec![
+            ("process", format!("{:?}", s.process)),
+            ("bridge", format!("{:?}", s.bridge)),
+            ("activity", format!("{:?}", s.activity)),
+            ("pause", format!("{:?}", s.pause)),
+            ("session", format!("{:?}", s.session)),
+            ("track", format!("{:?}", s.track)),
+        ]
+    }
+
+    /// Every read paired with the answer `pairs` gives it, in table
+    /// order. A read `pairs` does not name is left out.
+    fn answers(pairs: &[(&str, reads::Answer)]) -> Vec<(&'static reads::Read, reads::Answer)> {
+        reads::listed(reads::Tiers::with_tier_two())
+            .into_iter()
+            .filter_map(|read| {
+                pairs
+                    .iter()
+                    .find(|(key, _)| *key == read.key())
+                    .map(|(_, answer)| (read, answer.clone()))
+            })
+            .collect()
+    }
+
+    /// Evidence in which every axis's own evidence is as indicative as it
+    /// can be, so that withholding one axis's has something to be
+    /// measured against.
+    fn maximal(s: &Standin) -> Evidence {
+        Evidence {
+            handshake: found(s),
+            beat: Some(ours(Host::Hook, "sim", true)),
+            process: Some(crate::status::Process::Running),
+            ping: Some(answered_ping()),
+            probe: Some(reads::Probe::Reachable),
+            answers: answers(&[
+                ("mission_name", said("Caucasus TvT")),
+                ("pause", told(false)),
+                ("multiplayer", told(false)),
+                ("server", told(false)),
+                ("track", told(false)),
+                ("sim_mode", said("2")),
+            ]),
+            tiers: reads::Tiers::with_tier_two(),
+        }
+    }
+
+    #[test]
+    fn every_axis_is_decided_by_its_own_evidence() {
+        // The no-default-arm sweep. For each axis: withhold or spoil its
+        // own evidence and assert it goes unknown for the right reason,
+        // while every other axis either stays exactly where it was or
+        // goes unknown *naming this axis as its gate* — which is the only
+        // thing one axis may do to another.
+        let b = Sandbox::new();
+        let s = Standin::open(&b.join("dcs"), "hook").expect("the stand-in opens");
+        s.handshake().expect("the handshake publishes");
+
+        // The positive control, in the same test: with every axis's
+        // evidence in place, every axis is definite. Without it,
+        // "maximally indicative" could silently not be and a borrowing
+        // derivation would pass.
+        let whole = derive(&maximal(&s));
+        assert_eq!(whole.process, ProcessAxis::Running);
+        assert_eq!(whole.bridge, BridgeAxis::Armed);
+        assert_eq!(
+            whole.activity,
+            Activity::Mission {
+                name: "Caucasus TvT".to_owned()
+            }
+        );
+        assert_eq!(whole.pause.value, Pause::Running);
+        assert_eq!(whole.session, SessionAxis::Single);
+        assert_eq!(whole.track, Track::Live);
+
+        type Spoil = fn(&mut Evidence);
+        let rows: Vec<(&str, Spoil, Why)> = vec![
+            (
+                "process",
+                (|e: &mut Evidence| e.process = None) as Spoil,
+                Why::NotProbed,
+            ),
+            (
+                "bridge",
+                |e: &mut Evidence| {
+                    e.ping = Some(Err(reads::Unanswered::Window {
+                        detail: "no window".to_owned(),
+                    }));
+                },
+                Why::Unanswered {
+                    why: reads::Unanswered::Window {
+                        detail: "no window".to_owned(),
+                    },
+                },
+            ),
+            (
+                "activity",
+                |e: &mut Evidence| {
+                    for (read, answer) in &mut e.answers {
+                        if read.key() == "mission_name" {
+                            *answer = reads::Answer::Raised {
+                                message: "attempt to call a nil value".to_owned(),
+                            };
+                        }
+                    }
+                },
+                Why::Errored {
+                    message: "attempt to call a nil value".to_owned(),
+                },
+            ),
+            (
+                "pause",
+                |e: &mut Evidence| {
+                    for (read, answer) in &mut e.answers {
+                        if read.key() == "pause" {
+                            *answer = reads::Answer::Raised {
+                                message: "attempt to call a nil value".to_owned(),
+                            };
+                        }
+                    }
+                },
+                Why::Errored {
+                    message: "attempt to call a nil value".to_owned(),
+                },
+            ),
+            (
+                "session",
+                |e: &mut Evidence| {
+                    e.probe = Some(reads::Probe::Malformed {
+                        body: b"not the probe's word".to_vec(),
+                    });
+                },
+                Why::Malformed {
+                    body: b"not the probe's word".to_vec(),
+                },
+            ),
+            (
+                "track",
+                |e: &mut Evidence| {
+                    for (read, answer) in &mut e.answers {
+                        if read.key() == "track" {
+                            *answer = reads::Answer::Raised {
+                                message: "attempt to call a nil value".to_owned(),
+                            };
+                        }
+                    }
+                },
+                Why::Errored {
+                    message: "attempt to call a nil value".to_owned(),
+                },
+            ),
+        ];
+
+        for (name, spoil, wanted) in rows {
+            let mut evidence = maximal(&s);
+            spoil(&mut evidence);
+            let got = derive(&evidence);
+            let unknown = wanted.to_string();
+            let said = axes(&got);
+            let was = axes(&whole);
+            for ((axis, now), (_, before)) in said.iter().zip(was.iter()) {
+                if *axis == name {
+                    assert!(
+                        now.contains("Unknown"),
+                        "{name} was filled from another axis's evidence: its own read \
+                         was withheld and the value is {now}"
+                    );
+                    assert!(
+                        now.contains(&format!("{wanted:?}")),
+                        "{name} is unknown for the wrong reason: wanted {unknown}, got {now}"
+                    );
+                } else {
+                    let gated = now.contains("GateUnknown") && now.contains(name);
+                    assert!(
+                        now == before || gated,
+                        "withholding {name}'s evidence moved {axis}: it was {before} \
+                         and is now {now}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]

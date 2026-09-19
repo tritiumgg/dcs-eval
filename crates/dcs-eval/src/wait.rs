@@ -197,7 +197,7 @@ pub const WAKE_DEADLINE: Duration = Duration::from_secs(10);
 /// The phase carried where nothing on the disk says what it is: a session
 /// that has never armed has written no heartbeat, and a heartbeat from
 /// another session is not evidence about this one.
-const PHASE_UNKNOWN: &str = "unknown";
+pub(crate) const PHASE_UNKNOWN: &str = "unknown";
 
 /// The phase a mission load takes, during which nothing fires at all.
 pub(crate) const PHASE_LOAD: &str = "load";
