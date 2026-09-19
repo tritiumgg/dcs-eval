@@ -1680,7 +1680,7 @@ function OPS.eval(req)
   end
   local row = state_row(E.host, state)
   if not row then
-    return reply(req.id, "unsupported", nil, state .. " is not a state this host serves")
+    return reply(req.id, "unsupported", nil, excerpt(state) .. " is not a state this host serves")
   elseif row[2] == "local" then
     return eval_local(req, chunkname, count)
   elseif row[2] == "dostring_in" then

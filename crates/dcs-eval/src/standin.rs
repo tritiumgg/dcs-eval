@@ -616,7 +616,7 @@ impl Standin {
         match carrier {
             None => Answer::refusal(
                 "unsupported",
-                format!("{state} is not a state this host serves"),
+                format!("{} is not a state this host serves", excerpt(state)),
             ),
             Some("local") => Answer {
                 status: "ok",
@@ -1592,7 +1592,8 @@ mod tests {
         let long = "@".to_owned() + &"x".repeat(200);
         let digits = "-".to_owned() + &"1".repeat(100);
         let wide = "9".to_owned() + &"x".repeat(99);
-        let cases: [(&str, &[(&str, &str)]); 14] = [
+        let far = "z".repeat(100);
+        let cases: [(&str, &[(&str, &str)]); 15] = [
             ("0000000001-abcd", &[("state", "hook")]),
             (
                 "0000000002-abcd",
@@ -1631,13 +1632,14 @@ mod tests {
                 &[("state", "hook"), ("max_instructions", &digits)],
             ),
             ("0000000014-abcd", &[("state", &wide)]),
+            ("0000000015-abcd", &[("state", &far)]),
         ];
         for (id, extra) in cases {
             let mut headers = vec![("op", "eval"), ("for", stamp.as_str())];
             headers.extend_from_slice(extra);
             sent(&s, id, &headers, b"return 1");
         }
-        assert_eq!(s.tick().len(), 14, "every one is answered");
+        assert_eq!(s.tick().len(), 15, "every one is answered");
         for (id, name, budget) in [
             ("0000000001-abcd", "=dcs-eval", "instructions=1000000"),
             ("0000000002-abcd", "@x.lua", "instructions=1000000"),
@@ -1691,6 +1693,12 @@ mod tests {
             "0000000005-abcd",
             "unsupported",
             "nope is not a state this host serves",
+        );
+        refused(
+            &s,
+            "0000000015-abcd",
+            "unsupported",
+            &format!("{}... is not a state this host serves", "z".repeat(80)),
         );
         refused(
             &s,
