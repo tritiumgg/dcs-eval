@@ -29,6 +29,11 @@ provenance the run record carries.
 >   `<path>:<line>:`. Lua abbreviates a name over 60 bytes to `...` and its
 >   tail in messages (`bridge.md` §7.3); the reply's `chunkname` header
 >   carries the whole path, and the tool prints both.
+> - The server prepends nothing and appends nothing. The wrapper that
+>   compiles the body inside a state is the bridge's (`bridge.md` §7.3), and
+>   it compiles the body as its own chunk, so line 47 of the file is line 47
+>   of every error from every state, including through the `missionscripting`
+>   door. §7 holds the control.
 
 §4.6 says what the record holds, and its example line is:
 
