@@ -28,7 +28,7 @@ use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// A Win32 `HANDLE`.
 type Handle = *mut core::ffi::c_void;
@@ -507,6 +507,16 @@ impl Changes {
             self.armed = true;
             return Ok(());
         }
+        // Any other failure means the request was refused rather than
+        // queued, so the kernel holds no pointer into the allocation and
+        // leaving `armed` false is what says so. It is the one premise in
+        // this file that rests on Windows' contract alone rather than on
+        // something checked here, and it is written out because the
+        // alternative is worse in both directions: treating a refusal as
+        // possibly-armed would send the drain to wait out its whole bound
+        // for a completion nobody will post, on every refused arm, while
+        // treating a real queued read as unarmed is the corruption this
+        // whole type exists to prevent.
         Err(why)
     }
 
@@ -516,6 +526,12 @@ impl Changes {
     /// asked to be infinite: a deadline this side computed is always
     /// finite, and an `INFINITE` arrived at by a rounding slip is a hang
     /// rather than a late answer.
+    ///
+    /// One path returns late. A wait that fails outright drains the read
+    /// before it returns, and the drain is bounded rather than instant,
+    /// so this call may take up to that bound past `nap`. What the drain
+    /// spends comes out of the nap and not on top of it, which is as
+    /// close to the deadline as a buffer the kernel still holds allows.
     pub(crate) fn woke(&mut self, nap: Duration) -> Woke {
         if !self.armed {
             std::thread::sleep(nap);
@@ -534,8 +550,16 @@ impl Changes {
             WAIT_TIMEOUT => Woke::Timeout,
             WAIT_OBJECT_0 => self.collected(),
             _ => {
+                // The drain runs first, because the buffer is the
+                // kernel's until it returns, and what it spends is spent
+                // out of the nap rather than added to it. A drain that
+                // ran to its bound leaves nothing to sleep, which is
+                // right: the caller is already late, and this watch is
+                // over — a `Deaf` ends it — so there is no loop left here
+                // to spin.
+                let started = Instant::now();
                 self.quiesce();
-                std::thread::sleep(nap);
+                std::thread::sleep(nap.saturating_sub(started.elapsed()));
                 Woke::Deaf
             }
         }

@@ -313,6 +313,12 @@ mod tests {
         );
         assert!(matches!(got, Outcome::Reply(_)), "{got:?}");
         assert!(
+            tally.events >= 1,
+            "events: {}, wanted at least 1 — a ceiling alone is met by a watch that never \
+             fired at all, which is the other thing this test is named for",
+            tally.events
+        );
+        assert!(
             tally.events <= 8,
             "events: {}, wanted at most 8 — the event stayed signalled and the loop spun on it",
             tally.events
@@ -579,19 +585,25 @@ mod tests {
         // reply that follows is only ever seen by a wait that armed a
         // second read; with the poll an hour away there is nothing else
         // that could have found it.
+        //
+        // One stand-in publishes both, with its stamp moved between them.
+        // A second `Standin::open` would mint its own `<seconds>-<pid>`
+        // and cache a `res` under it, so the two opens straddling a
+        // second boundary would put every reply in a directory this wait
+        // is not watching — a rare failure that would read as the watch
+        // having missed them.
         let b = Sandbox::new();
-        let (s, session) = ticking(&b);
+        let (mut s, session) = ticking(&b);
         let mine = s.stamp.clone();
         let sent = just_sent();
         let mut tally = Tally::default();
         let got = std::thread::scope(|scope| {
-            scope.spawn(|| {
-                let mut s = standin(&b);
+            scope.spawn(move || {
                 s.stamp = format!("{mine}-restarted");
                 std::thread::sleep(Duration::from_millis(150));
                 s.reply(ID, "ok", &[], b"not yours")
                     .expect("the foreign reply publishes");
-                s.stamp = mine.clone();
+                s.stamp = mine;
                 std::thread::sleep(Duration::from_millis(250));
                 s.reply(ID, "ok", &[], b"pong").expect("and then mine");
             });
