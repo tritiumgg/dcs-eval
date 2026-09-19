@@ -203,6 +203,40 @@ pub(crate) fn past_ascii(bytes: &[u8], name: &str) -> Vec<u8> {
     out
 }
 
+/// An existing file this process cannot read, and the handle that makes it
+/// so. The hold shares nothing, and a hold that shares nothing denies this
+/// process's own reads too, which is the property a control about refusing
+/// *before* reading needs: a guard that read first would fail on the read
+/// rather than quietly passing.
+///
+/// Opened for reading rather than writing, because it needs no write
+/// permission and denies reads just the same.
+///
+/// It asserts inside itself that a second open really refuses, so a host
+/// whose sharing does not bite panics rather than letting a control pass
+/// having proved nothing.
+///
+/// **Declare the `Sandbox` before taking a hold**, so the hold is dropped
+/// first: `Sandbox::drop` ignores the error from a `remove_dir_all` an open
+/// handle defeated, and `Sandbox::new` clears the directory anyway, so a
+/// slip leaks a temp directory quietly rather than failing loudly — which
+/// is exactly why it is worth saying.
+#[cfg(windows)]
+pub(crate) fn held(path: &Path) -> fs::File {
+    use std::os::windows::fs::OpenOptionsExt;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+        .unwrap_or_else(|why| panic!("the hold on {}: {why}", path.display()));
+    assert!(
+        fs::File::open(path).is_err(),
+        "{} is held but still opens, so nothing here is proved",
+        path.display()
+    );
+    file
+}
+
 /// A fixture path is what the filesystem says it is, never the spelling
 /// that made it: the sandbox sits under a temp directory this host
 /// spells short, and a `Real` compares bytes.
