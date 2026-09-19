@@ -31,6 +31,8 @@ jobs:
       # sandbox of fixture files and fake commands.
       - name: Prove the mutation sweep still fails honestly
         run: sh tools/sweep-test.sh
+      - name: Hold the mutation inventory to the rows the plan claims
+        run: sh tools/sweep-cover.sh
       - name: Test every hook against its payload
         run: sh tools/hooktest.sh
       - name: Every shell script parses as sh

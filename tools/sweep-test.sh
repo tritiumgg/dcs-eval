@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=24
+CASES=27
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -559,6 +559,52 @@ out=$(run_ --only fixture/applies) && got=0 || got=$?
 tree_intact || got=98
 check 'a filtered run cannot be read as a whole one' \
     0 "$got" "1 of 2 in-scope controls performed" "$out"
+
+# --- the gate that stops the inventory judging its own coverage -------------
+#
+# A control the plan names and nobody wrote into the inventory moves neither
+# side of the sweep's coverage line, so the sweep would report full coverage of
+# a set it had quietly shrunk. These prove the gate that catches that.
+#
+# The two fixture IDs are assembled rather than written: tools/nospecrefs.sh
+# refuses a plan task ID anywhere outside docs/, and a fixture plan has to
+# carry IDs shaped exactly like the real ones or the gate would not read them.
+one=$(printf 'T%s' 91)
+two=$(printf 'T%s' 92)
+
+cover="$sandbox/cover"
+mkdir -p "$cover/docs" "$cover/tools"
+cp tools/sweep-cover.sh "$cover/tools/sweep-cover.sh"
+
+# A two-row fixture plan. The stage heading is what the gate reads the stage
+# off, and the second row names no mutation, so it is owed no entry.
+cat > "$cover/docs/PLAN.md" <<EOF
+## Stage 4 — a fixture stage
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $one | a fixture | it holds; mutation: break it and it does not | — | developer-only |
+| $two | another | it holds | — | developer-only |
+EOF
+
+covered() {
+    printf '### fixture/one\n\n- task: %s\n- reddens: held\n' "$1" \
+        > "$cover/docs/mutations.md"
+}
+
+covered "$one"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'a plan row and an entry for it is the case that passes' \
+    0 "$got" "1 plan rows name a mutation" "$out"
+
+covered "$two"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'a plan row nobody wrote an entry for is named' \
+    1 "$got" "the plan names a mutation for $one and the inventory has no entry" "$out"
+
+check 'an entry filed under a row that names no mutation is named too' \
+    1 "$got" "files a control under $two" "$out"
+
 
 # --- the tally --------------------------------------------------------------
 

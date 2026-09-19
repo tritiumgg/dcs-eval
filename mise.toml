@@ -100,6 +100,9 @@ run = [
   # it edits files — but a runner that stopped failing honestly would make
   # every later sweep worthless, and these cases need no toolchain either.
   "sh tools/sweep-test.sh",
+  # And the gate that stops the inventory being its own judge: a control the
+  # plan names and nobody wrote down moves neither side of the coverage line.
+  "sh tools/sweep-cover.sh",
   "sh tools/check-lua.sh",
   "mise exec -- lua-language-server --check . --checklevel=Warning",
   # The harness runner, driven against suites that must fail: proof that it
