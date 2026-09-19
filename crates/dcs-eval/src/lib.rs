@@ -12,6 +12,12 @@ pub mod protocol;
 pub mod publish;
 pub mod readers;
 
+// The crate carries `unsafe`, which it did not before, and all of it is in
+// this one module: the Win32 calls it makes, each declared beside a safe
+// wrapper. Decision record 0011 is why they are declared here rather than
+// taken from a crate.
+pub mod sys;
+
 // The stand-in is a test double: the crate's own tests always have it, and
 // another crate's tests get it through the `standin` feature. A user's
 // binary never links it.

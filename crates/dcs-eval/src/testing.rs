@@ -35,6 +35,32 @@ impl Drop for Sandbox {
     }
 }
 
+/// A process id that has certainly exited, with the `Child` that owns it.
+/// The handle comes back so its lifetime is visible at the call site: a
+/// caller that binds it as `_` drops it at once, the id is free to be
+/// recycled, and a test that should have gone red goes flaky instead.
+/// Bind it as `_child` and keep it across the probe.
+///
+/// The exit code is 259, which is `STILL_ACTIVE`, so a probe that reads
+/// an exit code rather than the process object gets this one wrong. It is
+/// asserted here, because a child that exited some other way would prove
+/// the easier case.
+#[cfg(windows)]
+pub(crate) fn a_pid_that_has_exited() -> (std::process::Child, u32) {
+    let mut child = std::process::Command::new("cmd")
+        .args(["/C", "exit", "259"])
+        .spawn()
+        .expect("the child spawns");
+    let pid = child.id();
+    let status = child.wait().expect("the child is reaped");
+    assert_eq!(
+        status.code(),
+        Some(259),
+        "the child exited with the code the probe must not read as alive"
+    );
+    (child, pid)
+}
+
 /// The names in `dir`, sorted, joined with a space; empty when empty.
 pub(crate) fn entries(dir: &Path) -> String {
     let mut names: Vec<String> = fs::read_dir(dir)
