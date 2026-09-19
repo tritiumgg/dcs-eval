@@ -37,11 +37,13 @@
 //! against a request it sent, and this report has no request in hand.
 
 use std::fmt;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
-use crate::paths::Real;
+use crate::paths::{self, Real};
+use crate::readers::{Diagnostic, Handshake, Heartbeat, ReadError, ReadErrorKind};
 use crate::sys;
+use crate::wait::Session;
 
 /// The build the embedded executor was last measured on.
 ///
@@ -376,10 +378,363 @@ pub fn process_of(pid: u32, saw: sys::Liveness) -> (Process, Option<Problem>) {
     }
 }
 
+/// Whether two resolved paths are the same directory.
+///
+/// Mutual containment rather than `==`. A `Real`'s equality is byte-exact
+/// by design, and only `contains` folds case, so `==` would call a
+/// differently-cased spelling of one directory two directories — a false
+/// finding in the first line of a report a user reads.
+fn same_place(a: &Real, b: &Real) -> bool {
+    a.contains(b) && b.contains(a)
+}
+
+/// The executor's temp directory against this client's. A report and not
+/// an accusation: where either side will not resolve the field carries the
+/// resolver's own words instead of naming a culprit.
+fn tempdir_of(named: &Diagnostic) -> Agreement {
+    let executor = match named {
+        Diagnostic::Absent => return Agreement::Absent,
+        // The spelling itself is the finding, and there is nothing here to
+        // compare it with.
+        Diagnostic::Unresolved { why, .. } => return Agreement::Undecided { why: why.clone() },
+        Diagnostic::Real(path) => path.clone(),
+    };
+    let client = match paths::resolve(&std::env::temp_dir()) {
+        Ok(client) => client,
+        // A fact about this host, which says nothing about the executor.
+        Err(why) => {
+            return Agreement::Undecided {
+                why: why.to_string(),
+            };
+        }
+    };
+    if same_place(&executor, &client) {
+        Agreement::Agree(executor)
+    } else {
+        Agreement::Differ { executor, client }
+    }
+}
+
+/// The heartbeat as this report carries it.
+///
+/// `armed` decides what the age is before the age is taken, and the arm is
+/// read off this file's own header even where the file is another
+/// session's, because the age is a fact about the file in hand.
+fn beat_of(beat: &Heartbeat, h: &Handshake, now: SystemTime) -> BeatStatus {
+    let elapsed = beat.age(now);
+    let age = if beat.armed {
+        Age::Ticking(elapsed)
+    } else {
+        Age::Dormant(elapsed)
+    };
+    BeatStatus {
+        belongs: beat.stamp == h.stamp,
+        host: beat.host.clone(),
+        transport: beat.transport.clone(),
+        phase: beat.phase.clone(),
+        armed: beat.armed,
+        since: beat.since.clone(),
+        ticks: beat.ticks,
+        last_callback: beat.last_callback.clone(),
+        callbacks: beat.callbacks.clone(),
+        age,
+    }
+}
+
+/// The report on the session whose output directory is `output`, taken
+/// against the system clock.
+pub fn status(output: &Path) -> Status {
+    status_at(output, SystemTime::now())
+}
+
+/// The report, with the clock the heartbeat's age is taken against handed
+/// in — once, so every age in one report is against one reading of it and
+/// a test can fix what it is.
+pub fn status_at(output: &Path, now: SystemTime) -> Status {
+    let mut problems = Vec::new();
+    let handshake = match Handshake::read(&output.join("executor.txt")) {
+        Ok(handshake) => handshake,
+        Err(err) => {
+            problems.push(not_read(err));
+            return Status {
+                output: output.to_owned(),
+                session: None,
+                problems,
+            };
+        }
+    };
+    // Through the session, so that this report and a wait take the
+    // heartbeat's path from one place and cannot drift about where it is.
+    let session = Session::addressed(&handshake);
+    let (process, gone) = process_of(session.pid(), sys::liveness(session.pid()));
+    problems.extend(gone);
+
+    // The file is read before its stamp is looked at. A stamp is something
+    // only a file this reader understood has, so one that is both another
+    // session's and unreadable is a parse problem rather than a foreign
+    // one — the order a wait takes, for the same reason.
+    let beat = match Heartbeat::read(session.heartbeat()) {
+        Ok(beat) => Some(beat_of(&beat, &handshake, now)),
+        // Never armed, so never written: the expected state right after a
+        // load, and no problem at all.
+        Err(err) if is_missing(&err) => None,
+        Err(err) => {
+            problems.push(Problem::HeartbeatUnreadable {
+                path: err.path.clone(),
+                why: err.kind.to_string(),
+            });
+            None
+        }
+    };
+
+    Status {
+        output: output.to_owned(),
+        session: Some(SessionStatus {
+            host: handshake.host.clone(),
+            stamp: handshake.stamp.clone(),
+            pid: handshake.pid,
+            started: handshake.started.clone(),
+            process,
+            transport: handshake.transport.clone(),
+            eval: handshake.eval,
+            // A stat, which costs the executor nothing and is the only way
+            // to answer whether the file is there. Nothing here makes one
+            // and nothing here removes one.
+            arm_file: handshake.arm.as_path().exists(),
+            app_version: measured_against(handshake.app_version.as_deref(), MEASURED_ON),
+            tempdir: tempdir_of(&handshake.lfs_tempdir),
+            beat,
+        }),
+        problems,
+    }
+}
+
+/// Whether a read failed because the file was not there, as against
+/// failing over what was in it. The same discrimination a wait makes, for
+/// the same reason: an absent file and an unreadable one are different
+/// findings.
+fn is_missing(err: &ReadError) -> bool {
+    matches!(&err.kind, ReadErrorKind::Disk(why) if why.kind() == std::io::ErrorKind::NotFound)
+}
+
+/// What a handshake that would not read is worth saying: that nothing has
+/// loaded, or that what did would not parse.
+fn not_read(err: ReadError) -> Problem {
+    if is_missing(&err) {
+        Problem::NotInstalled { path: err.path }
+    } else {
+        Problem::HandshakeUnreadable {
+            why: err.kind.to_string(),
+            path: err.path,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use std::io::{self, ErrorKind};
+
+    use crate::standin::Standin;
+    use crate::testing::{Sandbox, a_pid_that_has_exited, real, slurp, with};
+
+    /// A stand-in session with its handshake published, naming `pid` as
+    /// its process and this host's temp directory as the one its `lfs`
+    /// read gave it.
+    ///
+    /// The stand-in names a temp directory of its own under the output,
+    /// which no real executor would: `lfs.tempdir()` inside DCS gives the
+    /// host's. The fixture says the host's, so a report of a healthy
+    /// session carries nothing a test did not ask for and a disagreement
+    /// has to be published on purpose to appear.
+    fn published(b: &Sandbox, pid: u32) -> Standin {
+        let mut s = Standin::open(&b.join("out"), "hook").expect("the session opens");
+        s.pid = pid;
+        s.handshake().expect("the handshake publishes");
+        let path = s.output().join("executor.txt");
+        let temp = std::env::temp_dir().display().to_string();
+        fs::write(&path, with(&slurp(&path), "lfs_tempdir", &temp)).expect("the fixture lands");
+        s
+    }
+
+    /// The same, naming a process a probe will find running: this one.
+    fn live(b: &Sandbox) -> Standin {
+        published(b, std::process::id())
+    }
+
+    /// Where the executor's own files are, as the filesystem spells them.
+    /// The sandbox sits under a temp directory this host may spell short,
+    /// and every path a report carries has been through the resolver.
+    fn beside(s: &Standin, name: &str) -> PathBuf {
+        real(s.output()).as_path().join(name)
+    }
+
+    #[test]
+    fn an_output_with_nothing_in_it_is_reported_as_not_installed() {
+        let b = Sandbox::new();
+        let report = status(&b.path);
+        assert!(
+            report.session.is_none(),
+            "there is no session to report: {:?}",
+            report.session
+        );
+        assert_eq!(
+            report.problems,
+            vec![Problem::NotInstalled {
+                path: b.join("executor.txt")
+            }],
+            "an output directory with nothing in it is a problem reported, not an error raised"
+        );
+    }
+
+    #[test]
+    fn status_reports_the_session_the_handshake_names() {
+        let b = Sandbox::new();
+        let mut s = live(&b);
+        s.armed = true;
+        s.phase = "simulation".to_owned();
+        s.tick = 7;
+        s.beat(SystemTime::now()).expect("the heartbeat publishes");
+
+        let report = status(s.output());
+        assert_eq!(report.problems, vec![], "a healthy session reports nothing");
+        let session = report.session.expect("the handshake named a session");
+        assert_eq!(session.host, "hook");
+        assert_eq!(session.stamp, s.stamp);
+        assert_eq!(session.pid, std::process::id());
+        assert_eq!(session.started, s.since);
+        assert_eq!(session.process, Process::Running);
+        assert_eq!(session.transport, real(s.session()));
+        assert!(session.eval, "the stand-in publishes eval: allowed");
+        let beat = session.beat.expect("the session has armed");
+        assert!(beat.belongs, "the heartbeat is this session's");
+        assert_eq!(beat.phase, "simulation");
+        assert_eq!(beat.ticks, 7);
+        assert!(beat.armed);
+        assert_eq!(beat.since, s.since);
+    }
+
+    #[test]
+    fn a_handshake_that_will_not_parse_is_a_problem_and_not_an_error() {
+        let b = Sandbox::new();
+        fs::write(b.join("executor.txt"), b"this is not an envelope").expect("the fixture lands");
+        let report = status(&b.path);
+        assert!(report.session.is_none());
+        match &report.problems[..] {
+            [Problem::HandshakeUnreadable { path, why }] => {
+                assert_eq!(path, &b.join("executor.txt"));
+                assert!(!why.is_empty(), "the reader's own words are carried");
+            }
+            other => panic!("saw {other:?}, wanted one HandshakeUnreadable"),
+        }
+    }
+
+    #[test]
+    fn a_session_that_never_armed_has_no_heartbeat_and_that_is_not_a_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let report = status(s.output());
+        assert_eq!(
+            report.problems,
+            vec![],
+            "a session that has not armed has written no heartbeat, which is the expected state"
+        );
+        let session = report.session.expect("the handshake named a session");
+        assert_eq!(session.beat, None);
+    }
+
+    #[test]
+    fn a_heartbeat_that_will_not_parse_is_a_problem_naming_the_file() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        fs::write(s.output().join("heartbeat.txt"), b"rubbish").expect("the fixture lands");
+        let report = status(s.output());
+        let session = report.session.as_ref().expect("the session still reports");
+        assert_eq!(
+            session.beat, None,
+            "a heartbeat that would not read leaves nothing to carry"
+        );
+        match &report.problems[..] {
+            [Problem::HeartbeatUnreadable { path, .. }] => {
+                assert_eq!(path, &beside(&s, "heartbeat.txt"));
+            }
+            other => panic!("saw {other:?}, wanted one HeartbeatUnreadable"),
+        }
+    }
+
+    #[test]
+    fn an_armed_heartbeats_age_is_staleness() {
+        let b = Sandbox::new();
+        let mut s = live(&b);
+        s.armed = true;
+        let now = SystemTime::now();
+        s.beat(now - Duration::from_secs(30))
+            .expect("the heartbeat publishes");
+        let report = status_at(s.output(), now);
+        let age = report
+            .session
+            .expect("the session reports")
+            .beat
+            .expect("the session has armed")
+            .age;
+        match age {
+            Age::Ticking(d) => assert_eq!(d.as_secs(), 30, "saw {age:?}"),
+            other => panic!("saw {other:?}, wanted Ticking(30s)"),
+        }
+    }
+
+    #[test]
+    fn a_process_that_has_exited_is_reported_gone() {
+        let b = Sandbox::new();
+        // The `Child` is held across the probe, so the id cannot be
+        // recycled under the test and a failure stays a failure.
+        let (_child, pid) = a_pid_that_has_exited();
+        let s = published(&b, pid);
+        let report = status(s.output());
+        assert!(
+            report.problems.contains(&Problem::ProcessGone { pid }),
+            "saw {:?}, wanted a ProcessGone",
+            report.problems
+        );
+        assert_eq!(
+            report.session.expect("the session reports").process,
+            Process::Exited
+        );
+    }
+
+    #[test]
+    fn a_live_probe_that_would_not_open_is_never_read_as_death() {
+        let b = Sandbox::new();
+        // Pid 4 is the System process: unelevated the handle is refused,
+        // elevated it may open and read running. Either is right; what
+        // must never happen is a report that it has gone.
+        let s = published(&b, 4);
+        let report = status(s.output());
+        assert!(
+            !report
+                .problems
+                .iter()
+                .any(|p| matches!(p, Problem::ProcessGone { .. })),
+            "a handle that would not open is not evidence of an exit: {:?}",
+            report.problems
+        );
+        assert_ne!(
+            report.session.expect("the session reports").process,
+            Process::Exited
+        );
+    }
+
+    #[test]
+    fn status_says_whether_the_arm_file_exists() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let before = status(s.output()).session.expect("the session reports");
+        assert!(!before.arm_file, "nothing has armed this session");
+        fs::write(s.arm(), b"").expect("the arm file lands");
+        let after = status(s.output()).session.expect("the session reports");
+        assert!(after.arm_file, "the field is wired to the disk");
+    }
 
     #[test]
     fn a_measured_build_is_a_difference_and_never_a_refusal() {
