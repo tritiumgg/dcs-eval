@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T31 landed; T54 has not started.
+Nothing. T54 landed; T32 has not started.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,24 +25,24 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T54** — the client's `collect`, `wait` and the outcome table: `cargo test -p dcs-eval wait` prints 30 (27 in `wait`, 3 in `sys`), and the crate 154. `collect` checks the id before it becomes a path, reads only the exact `<id>.res` and never the `.tmp` beside it, and discards a reply on another stamp as `foreign` naming both spellings, leaving the file where it is; a reply with no stamp at all is a refusal. `decide` is the §4.4 table as an ordered list over two file reads and one probe, with no sleeping in it: the stamp beats any heartbeat, `armed` is read before the age, and all eight rows are proved — `superseded` over an armed hour-old beat and a gone pid, `pending` fresh and armed (also with a gone pid, which proves the probe is not consulted while fresh), `waking`, `stalled`, `load` at any age both sides of `armed`, and `dead` both ways. Liveness is `OpenProcess`/`WaitForSingleObject(0)`/`CloseHandle` in `sys.rs`, the crate's only `unsafe`, declared per ADR 0011 and driven against real handles: this process, a reaped `cmd /C exit 259` held across the probe, and pid 4. ADR 0012 argues the four readings past the frozen table — `dead` while dormant, `Unknown` never terminal, an absent or foreign heartbeat as the dormant branch, and a `Sent` this process did not mint never `waking`. `wait` is the 25 ms poll §3.2 keeps as the fallback, all its sleeping behind one function taking the reply directory it does not yet use; the watch is T56's and is not here. All four mutations were seen red — a dormant beat's age read as staleness reddens the `armed: no` rule (`saw Some(Stalled), wanted Some(Waking)`); `WAIT_OBJECT_0` read as running reddens the 259 child and both `dead` rows; the stamp comparison dropped reddens the foreign discard, the wait that goes on past one, and the no-stamp refusal; an unknown send time read as "just now" reddens `never_waking` and its `publish` twin. An agent verified every claim itself on this machine under `mise exec -- cargo test`, restoring each mutation from a saved copy and `cmp`ing it back. It did not see DCS: the pid probe is proved against processes this test started, not against a game that crashed, and no reply here came from the executor — the round trip's `superseded` half is still unclaimed.
 - **T31** — the handshake and heartbeat readers: `readers: 24 checks`. Typed views over `protocol`, not a second parser: the handshake's 27 headers in the writer's order (`app_version` between `quiet_s` and the byte limits), the heartbeat's ten from ADR 0010. Every header is required, `ABSENT` is a value the header must still carry, and a header this version does not know is stepped over. The paths divide, and the module says why: `transport`, `req`, `res`, `arm` and `output` are resolved through `paths::resolve` and one that will not resolve refuses the file, because the client publishes into them; `lfs_tempdir` and `install_guard` are reported and never used, so one that will not resolve is kept as what the file spelt and why, which is the finding `status` exists to carry rather than a fault in the file. `armed` and `eval` are the two spellings the executor writes, case unfolded, or a refusal naming the field; there is no default. A heartbeat's age comes from the mtime taken off the same handle the bytes came from, and `since` and `started` are display only, never parsed. The stand-in now publishes both files: the session moved under `<output>\rpc\<stamp>`, which is the executor's own fallback, and `beat(at)` sets the mtime a test gives it. The interop control reads its own capture of the shipped executor's handshake through the typed reader, so a value the Lua respells reddens where the envelope check stays green — seen, with `eval: allowed` spelt `yes`. All three mutations were seen red — an absent `armed` defaulted to `no` reddens the absent-header loop at `armed` and the armed-spelling test, the mtime taken from `SystemTime::now()` reddens the age (`wanted at least 30s, saw 0ns`), and a relative path anchored under `C:\` rather than refused reddens the path refusal. An agent verified every claim itself on this machine under `mise exec -- cargo test`, restoring each mutation from a saved copy and `cmp`ing it back. No real heartbeat is read anywhere, and none is claimed: the interop run publishes replies on one frame and never writes `heartbeat.txt`, so that reader's fixtures are still the stand-in's bytes and hand-framed envelopes.
 - **T30** — client path containment: `paths: 15 checks`. `resolve` refuses anything not absolute — `C:x` and `\x` included, because the drive they land on is an accident of where the client was started — then collapses `.` and `..` without letting `..` climb past the drive, canonicalizes the nearest existing ancestor, drops the `\\?\`, and reattaches the tail that does not exist yet. Only a `Real` has `contains`, which folds ASCII case over the encoded bytes and matches at a segment boundary. Proved: a short spelling and a junction each resolving to what they name, a laundering junction inside a permitted root not laundering anything, a short-spelled root still holding what sneaks in under it, `LogsX` not under `Logs`, a drive root holding everything on it, and a path no part of which resolves refused. Both mutations were seen red — resolution left textual reddens six, the boundary dropped reddens the sibling. An agent verified every claim itself on this machine under `mise exec -- cargo test`; the sandbox's short-name and junction helpers panic rather than skip where the volume cannot make one. It did not see, and does not claim, that a junction DCS would put in the way behaves as the one the test makes.
-- **T29** — the heartbeat writer: `heartbeat: 300 checks`. `<output>\heartbeat.txt` is one envelope carrying `protocol`, `host`, `stamp`, `transport`, `phase`, `armed`, `since`, `ticks`, `last_callback` and `callbacks` (ADR 0010 names the four of the specification's table this session does not keep, and why). It is written at every arm, at every disarm, on every phase change and every 2 s while armed, off the one `os.time` an armed frame now reads for both the beat and the quiet window (ADR 0009, which narrows ADR 0008's cost sentence and leaves its decision standing; `executor/arming`'s "reads no wall clock" check became "reads it exactly once"). A dormant frame writes nothing at all, and every phase change also appends `phase|<stamp>|<from>|<to>|<tick>` to `events.log`, whose first field is neither `B` nor `O`. Proved for both hosts: zero writes across 160 dormant frames spanning 160 intervals, one per transition, one per change and none for a callback repeating its phase, one per interval idle and busy alike, a transition and a due beat on one frame writing one file, and a hand-armed session's first armed frame answering without a raise. The mutation was seen red — a dormant path that keeps beating writes 160 where the suite wants zero. An agent verified every claim itself under the pinned lua5.1.5: the suite drives the frame, fakes the wall clock through a wrapper on `env.os.time` and counts the writes through one on `env.io.open` rather than trusting a counter the executor keeps about itself. It did not see, and does not claim, what one `os.time` per armed frame costs at DCS's frame rate, whether DCS's `os.time` and `os.date` behave in every state as they do here, or how often a beat lands on a loading screen; all Stage 9's.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T54** — client `collect`/`wait`: a reply on the stamp addressed or
-discarded as `foreign`, and the outcome table, over the 25 ms poll. Done when
-`cargo test -p dcs-eval wait` shows `superseded` on a stamp change, `dead` on a
-gone PID, `pending`+`waking` for a dormant executor under 10 s, `stalled` past
-it, `pending` at any age while the phase is `load`, and a reply carrying
-another session's `stamp` discarded rather than returned; mutation: treating a
-dormant heartbeat's age as staleness reddens the `armed: no` rule. Needs T31
-and T14, both landed.
+**Task T32** — client `status()`: the two files, the PID probe, the problems
+found, and the running `app_version` against the build the embedded executor
+was last measured on — a difference, never a refusal, and `unmeasured` until
+Stage 9 records one. Done when `cargo test -p dcs-eval status` shows a
+foreign-stamp and a foreign-transport heartbeat each reported as a problem and
+zero round trips; mutation: a round trip issued by `status` reddens the "costs
+the executor nothing" check. Needs T31, landed. `wait.rs` already carries the
+session, the probe and the readers it wants.
 
-**An agent verifies** it: `cargo test` under mise on this machine.
+**An agent verifies** it: `mise exec -- cargo test` on this machine.
 
 ## After that
 
@@ -50,7 +50,7 @@ and T14, both landed.
   DCS, the stand-in, the interop and round-trip controls. T17 closed it.
 - **Stage 3 is closed:** eval across the carriers with `<file>:47` true in
   every state, and the `a_do_script` shift reproduced.
-- **Stage 4's path is closed and Stage 5 has opened:** `tick-budget: 524`, `instr-budget: 2209`, `fence: 583`, `events: 114`, `dormant: 40`, `arming: 95`, `heartbeat: 300`. Stage 6 has opened on the client side: `paths: 15`, `readers: 24` under `cargo test`.
+- **Stage 4's path is closed and Stage 5 has opened:** `tick-budget: 524`, `instr-budget: 2209`, `fence: 583`, `events: 114`, `dormant: 40`, `arming: 95`, `heartbeat: 300`. Stage 6 has opened on the client side: `paths: 15`, `readers: 24`, `wait: 30` under `cargo test`, the crate at 154.
   Milestone B needs T53, the rest of Stages 5 and 6, the mutation sweep.
 - **Stage 9** is the critical path and cannot be shortened by parallel effort.
   Everything provable off DCS is proved before it.
@@ -92,7 +92,6 @@ entries at most: an eleventh means something here is finished, or belongs in
   built (T29); the sweep on that same disarm is unclaimed.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is proved
   with a file the suite keeps open; the client's own handle is T56's, unheld at T41.
-- **The client's half of the fence waits on T54,** whose row now names it: the
-  executor fences a foreign `for` since T25, and discarding a reply with
-  another session's `stamp`, with the round-trip's `superseded`, needs `collect`.
-  Both now have a heartbeat to read (ADR 0010), absent until the first arm.
+- **The round trip's `superseded` half is unblocked and unclaimed.** T17's row
+  parks it on T54, which landed the client's fence against the stand-in but
+  does not ask for it; no row claims it against the shipped Lua.
