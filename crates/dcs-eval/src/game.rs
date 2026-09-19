@@ -224,6 +224,10 @@ pub enum Why {
     /// The axis this one is gated on is itself unknown. The gate selects
     /// among this axis's own values; it never supplies one.
     GateUnknown { gate: &'static str },
+    /// The process id was never probed, so nothing was established about
+    /// it. Kept apart from a probe that could not decide, which is a
+    /// probe that ran.
+    NotProbed,
 }
 
 impl fmt::Display for Why {
@@ -281,6 +285,7 @@ impl fmt::Display for Why {
                 "unknown: no read is possible on the {host} host, where DCS is nil"
             ),
             Self::GateUnknown { gate } => write!(f, "unknown: {gate} is itself unknown"),
+            Self::NotProbed => f.write_str("unknown: the process id was never probed"),
         }
     }
 }
@@ -921,6 +926,185 @@ pub fn track_of(track: Option<&crate::reads::Answer>) -> Track {
         None => Track::Unknown {
             why: Why::Unanswered {
                 why: crate::reads::Unanswered::Unyielded,
+            },
+        },
+    }
+}
+
+/// The handshake, as it was found.
+///
+/// Three answers and not two, because an absent handshake and one that
+/// would not parse are different findings: the first says nothing has ever
+/// loaded here, and the second says something did and this build could not
+/// read what it wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    Read(Box<crate::readers::Handshake>),
+    /// Not there, which the filesystem said in those words.
+    Missing,
+    /// There and would not parse.
+    Unreadable {
+        path: std::path::PathBuf,
+        detail: String,
+    },
+}
+
+/// Whether the process the handshake named is there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessAxis {
+    Running,
+    Gone,
+    /// No handshake at all: nothing has ever loaded here.
+    NeverRan,
+    Unknown {
+        why: Why,
+    },
+}
+
+impl fmt::Display for ProcessAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Running => f.write_str("running"),
+            Self::Gone => f.write_str("gone"),
+            Self::NeverRan => f.write_str("never ran"),
+            Self::Unknown { why } => write!(f, "{why}"),
+        }
+    }
+}
+
+/// Whether the process is there, from the handshake and the process
+/// probe.
+///
+/// `never-ran` is the handshake **missing** and nothing else. One that is
+/// there and would not parse is unknown naming the file: something loaded
+/// and wrote it, which is the opposite of never having run.
+///
+/// A probe that could not decide is unknown and never `gone`. A handle
+/// that would not open says nothing about whether the process is there,
+/// and `gone` is a claim that the session will never answer again. That is
+/// the reading `status` takes and decision record 0012 argues.
+///
+/// The ambiguity the vocabulary names under this row — two output
+/// directories under two `Saved Games` trees, reported with both and never
+/// picked between — is not decided here. This is handed one already-chosen
+/// output directory; the ambiguity belongs where the directory is chosen.
+#[must_use]
+pub fn process_of(found: &Found, probe: Option<&crate::status::Process>) -> ProcessAxis {
+    match found {
+        Found::Missing => ProcessAxis::NeverRan,
+        Found::Unreadable { path, detail } => ProcessAxis::Unknown {
+            why: Why::Unreadable {
+                path: path.clone(),
+                detail: detail.clone(),
+            },
+        },
+        Found::Read(_) => match probe {
+            Some(crate::status::Process::Running) => ProcessAxis::Running,
+            Some(crate::status::Process::Exited) => ProcessAxis::Gone,
+            Some(crate::status::Process::Undecided { why }) => ProcessAxis::Unknown {
+                why: Why::Unreadable {
+                    path: std::path::PathBuf::from("the process id"),
+                    detail: why.clone(),
+                },
+            },
+            None => ProcessAxis::Unknown {
+                why: Why::NotProbed,
+            },
+        },
+    }
+}
+
+/// Whether the executor is answering.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BridgeAxis {
+    Dormant,
+    Armed,
+    Waking,
+    Stalled,
+    Superseded,
+    Unknown { why: Why },
+}
+
+impl fmt::Display for BridgeAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Dormant => f.write_str("dormant"),
+            Self::Armed => f.write_str("armed"),
+            Self::Waking => f.write_str("waking"),
+            Self::Stalled => f.write_str("stalled"),
+            Self::Superseded => f.write_str("superseded"),
+            Self::Unknown { why } => write!(f, "{why}"),
+        }
+    }
+}
+
+/// Whether the executor is answering, from the ping the reads window
+/// carried and, where no window opened, the heartbeat's own word.
+///
+/// **This is not the wait's table re-implemented.** That table decides
+/// about a request that was sent, and the ping is that request: its
+/// outcome already carries the verdict, run once by the wait, and it is
+/// read off the arm here rather than derived again. On a load no window
+/// opens and there is no request at all, so the axis falls back to the
+/// heartbeat's `armed` word alone. Saying that plainly is more use than
+/// claiming the table was implemented.
+///
+/// A pending with no flag is unknown, not armed. The wait leaves the flag
+/// off on three branches — armed and fresh, and either branch while
+/// loading — so a flagless pending is three readings at once and proves
+/// none of them.
+///
+/// A dormant heartbeat's age is never read as staleness. A dormant
+/// session stops rewriting the file by design, so the age says when it
+/// went quiet and nothing about whether it lives; the verdict this reads
+/// carries no age at all, which is where that rule sits.
+#[must_use]
+pub fn bridge_of(
+    ping: Option<&Result<crate::protocol::Envelope, crate::reads::Unanswered>>,
+    beat: Option<&Beat>,
+) -> BridgeAxis {
+    use crate::reads::Unanswered;
+    use crate::wait::Flag;
+    match ping {
+        // The reply came back and said `ok`, which is what makes it a
+        // reply at all here: the session answered this tick.
+        Some(Ok(_)) => BridgeAxis::Armed,
+        Some(Err(Unanswered::Superseded { .. })) => BridgeAxis::Superseded,
+        Some(Err(Unanswered::Pending {
+            flag: Some(Flag::Waking),
+            ..
+        })) => BridgeAxis::Waking,
+        Some(Err(Unanswered::Pending {
+            flag: Some(Flag::Stalled),
+            ..
+        })) => BridgeAxis::Stalled,
+        Some(Err(why)) => BridgeAxis::Unknown {
+            why: Why::Unanswered { why: why.clone() },
+        },
+        // No window opened, so nothing was asked and the file is all
+        // there is.
+        None => match beat {
+            Some(Beat::Ours { armed: true, .. }) => BridgeAxis::Armed,
+            Some(Beat::Ours { armed: false, .. }) => BridgeAxis::Dormant,
+            Some(Beat::Foreign { saw, wanted }) => BridgeAxis::Unknown {
+                why: Why::ForeignHeartbeat {
+                    saw: saw.clone(),
+                    wanted: wanted.clone(),
+                },
+            },
+            Some(Beat::WrongHost { saw, wanted }) => BridgeAxis::Unknown {
+                why: Why::WrongHost {
+                    saw: saw.clone(),
+                    wanted: wanted.clone(),
+                },
+            },
+            Some(Beat::Unreadable { detail }) => BridgeAxis::Unknown {
+                why: Why::HeartbeatUnreadable {
+                    detail: detail.clone(),
+                },
+            },
+            None => BridgeAxis::Unknown {
+                why: Why::NoHeartbeat,
             },
         },
     }
@@ -1757,6 +1941,232 @@ mod game_state {
         assert_eq!(track_of(Some(&answer)), Track::Replay);
     }
 
+    /// A handshake read off a stand-in's own output directory.
+    fn found(s: &crate::standin::Standin) -> Found {
+        let h = crate::readers::Handshake::read(&s.output().join("executor.txt"))
+            .expect("the handshake reads");
+        Found::Read(Box::new(h))
+    }
+
+    /// A ping that came back and said `ok`.
+    fn answered_ping() -> Result<crate::protocol::Envelope, reads::Unanswered> {
+        Ok(crate::protocol::parse(b"status: ok\n\n").expect("the reply parses"))
+    }
+
+    /// A ping still pending, with the wait's flag.
+    fn pending_ping(
+        flag: Option<crate::wait::Flag>,
+    ) -> Result<crate::protocol::Envelope, reads::Unanswered> {
+        Err(reads::Unanswered::Pending {
+            id: "0000000001-ab".to_owned(),
+            phase: "sim".to_owned(),
+            flag,
+        })
+    }
+
+    #[test]
+    fn a_missing_handshake_is_never_ran() {
+        assert_eq!(process_of(&Found::Missing, None), ProcessAxis::NeverRan);
+    }
+
+    #[test]
+    fn an_unreadable_handshake_is_unknown_and_not_never_ran() {
+        // Something loaded and wrote it, which is the opposite of never
+        // having run.
+        let got = process_of(
+            &Found::Unreadable {
+                path: std::path::PathBuf::from("executor.txt"),
+                detail: "no blank line before the bytes ran out".to_owned(),
+            },
+            None,
+        );
+        assert_ne!(got, ProcessAxis::NeverRan);
+        assert!(got.to_string().contains("executor.txt"), "{got}");
+    }
+
+    #[test]
+    fn an_undecided_pid_probe_is_unknown_and_never_gone() {
+        let b = crate::testing::Sandbox::new();
+        let s = crate::standin::Standin::open(&b.join("dcs"), "hook").expect("it opens");
+        s.handshake().expect("the handshake publishes");
+        let probe = crate::status::Process::Undecided {
+            why: "Access is denied.".to_owned(),
+        };
+        let got = process_of(&found(&s), Some(&probe));
+        assert_ne!(got, ProcessAxis::Gone, "a refused handle was read as gone");
+        assert!(got.to_string().contains("Access is denied."), "{got}");
+    }
+
+    #[test]
+    fn a_running_pid_is_running() {
+        let b = crate::testing::Sandbox::new();
+        let s = crate::standin::Standin::open(&b.join("dcs"), "hook").expect("it opens");
+        s.handshake().expect("the handshake publishes");
+        assert_eq!(
+            process_of(&found(&s), Some(&crate::status::Process::Running)),
+            ProcessAxis::Running
+        );
+    }
+
+    #[test]
+    fn a_dormant_heartbeat_is_dormant() {
+        // No window opened, so nothing was asked and the file is all
+        // there is.
+        assert_eq!(
+            bridge_of(None, Some(&ours(Host::Hook, "menu", false))),
+            BridgeAxis::Dormant
+        );
+        assert_eq!(
+            bridge_of(None, Some(&ours(Host::Hook, "menu", true))),
+            BridgeAxis::Armed
+        );
+    }
+
+    #[test]
+    fn a_dormant_heartbeats_age_is_not_read_as_staleness() {
+        // A dormant session stops rewriting the file by design, so the
+        // age says when it went quiet and nothing about whether it
+        // lives. The verdict this axis reads carries no age at all,
+        // which is where that rule sits rather than in a rule to
+        // remember.
+        let b = crate::testing::Sandbox::new();
+        let mut s = crate::standin::Standin::open(&b.join("dcs"), "hook").expect("it opens");
+        s.armed = false;
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(36_000);
+        s.beat(long_ago).expect("a beat lands");
+        let hb = crate::readers::Heartbeat::read(&s.output().join("heartbeat.txt"))
+            .expect("the heartbeat reads");
+        let beat = Beat::verdict(&hb, &s.stamp, &Host::Hook);
+        assert_eq!(
+            bridge_of(None, Some(&beat)),
+            BridgeAxis::Dormant,
+            "a ten-hour-old dormant beat was read as stale rather than dormant"
+        );
+    }
+
+    #[test]
+    fn a_superseded_ping_is_superseded() {
+        let ping = Err(reads::Unanswered::Superseded {
+            id: "0000000001-ab".to_owned(),
+        });
+        assert_eq!(bridge_of(Some(&ping), None), BridgeAxis::Superseded);
+    }
+
+    #[test]
+    fn a_waking_pending_is_waking() {
+        assert_eq!(
+            bridge_of(Some(&pending_ping(Some(crate::wait::Flag::Waking))), None),
+            BridgeAxis::Waking
+        );
+    }
+
+    #[test]
+    fn a_stalled_pending_is_stalled() {
+        assert_eq!(
+            bridge_of(Some(&pending_ping(Some(crate::wait::Flag::Stalled))), None),
+            BridgeAxis::Stalled
+        );
+    }
+
+    #[test]
+    fn a_flagless_pending_is_unknown_and_not_armed() {
+        // The wait leaves the flag off on three branches — armed and
+        // fresh, and either branch while loading — so a flagless pending
+        // is three readings at once and is proof of none of them.
+        let got = bridge_of(
+            Some(&pending_ping(None)),
+            Some(&ours(Host::Hook, "sim", true)),
+        );
+        assert_ne!(
+            got,
+            BridgeAxis::Armed,
+            "a flagless pending was read as armed"
+        );
+        assert!(matches!(got, BridgeAxis::Unknown { .. }), "{got:?}");
+    }
+
+    #[test]
+    fn a_ping_that_answered_is_armed() {
+        let ping = answered_ping();
+        assert_eq!(bridge_of(Some(&ping), None), BridgeAxis::Armed);
+    }
+
+    #[test]
+    fn the_derivation_and_status_read_one_set_of_files_alike() {
+        // The obligation is that these two do not disagree about what the
+        // same files mean. A process id nobody on this host holds is the
+        // case where a disagreement would bite.
+        let b = crate::testing::Sandbox::new();
+        let s = crate::standin::Standin::open(&b.join("dcs"), "hook").expect("it opens");
+        s.handshake().expect("the handshake publishes");
+        let report = crate::status::status(s.output());
+        let session = report.session.as_ref().expect("a session is reported");
+        let got = process_of(&found(&s), Some(&session.process));
+        let wanted = match &session.process {
+            crate::status::Process::Running => ProcessAxis::Running,
+            crate::status::Process::Exited => ProcessAxis::Gone,
+            crate::status::Process::Undecided { .. } => {
+                assert!(matches!(got, ProcessAxis::Unknown { .. }), "{got:?}");
+                return;
+            }
+        };
+        assert_eq!(
+            got, wanted,
+            "status said {} and the axis said {got}",
+            session.process
+        );
+    }
+
+    #[test]
+    fn the_derivation_and_status_agree_a_foreign_heartbeat_is_not_ours() {
+        // Where the obligation actually bites: `status` flags a foreign
+        // stamp and the derivation must not read the phase off it anyway.
+        let b = crate::testing::Sandbox::new();
+        let mut s = crate::standin::Standin::open(&b.join("dcs"), "hook").expect("it opens");
+        s.handshake().expect("the handshake publishes");
+        let mine = s.stamp.clone();
+        s.stamp = "1757160001-9999".to_owned();
+        s.armed = true;
+        s.phase = "sim".to_owned();
+        s.beat(std::time::SystemTime::now()).expect("a beat lands");
+
+        let report = crate::status::status(s.output());
+        let beat_status = report
+            .session
+            .as_ref()
+            .and_then(|session| session.beat.as_ref())
+            .expect("a heartbeat is reported");
+        assert!(
+            !beat_status.belongs,
+            "status did not flag the foreign stamp"
+        );
+
+        let hb = crate::readers::Heartbeat::read(&s.output().join("heartbeat.txt"))
+            .expect("the heartbeat reads");
+        let verdict = Beat::verdict(&hb, &mine, &Host::Hook);
+        let got = activity_of(Some(&verdict), Some(&said("Caucasus TvT")));
+        assert_eq!(
+            got,
+            Activity::Unknown {
+                why: Why::ForeignHeartbeat {
+                    saw: "1757160001-9999".to_owned(),
+                    wanted: mine.clone(),
+                }
+            },
+            "status says belongs: false and the derivation read the phase anyway"
+        );
+        assert_eq!(
+            bridge_of(None, Some(&verdict)),
+            BridgeAxis::Unknown {
+                why: Why::ForeignHeartbeat {
+                    saw: "1757160001-9999".to_owned(),
+                    wanted: mine,
+                }
+            },
+            "another session's armed word was read as this session's"
+        );
+    }
+
     #[test]
     fn a_raised_read_renders_as_unknown_naming_the_error_verbatim() {
         // Verbatim and alone: the message as the interpreter wrote it,
@@ -1889,6 +2299,7 @@ mod game_state {
             },
             Why::NoReadPossible { host: Host::Export },
             Why::GateUnknown { gate: "activity" },
+            Why::NotProbed,
         ]
     }
 
