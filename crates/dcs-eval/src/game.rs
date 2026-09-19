@@ -3054,14 +3054,19 @@ mod game_state {
     /// `lua_type` is the type this axis is made of. An answer carrying
     /// that type with no value is the arm where the read answered what
     /// was asked and this side could not read it; an answer of another
-    /// type is a different arm, and both are here.
+    /// type is a different arm, and both are here. So is the third: the
+    /// right type carrying a word that type's vocabulary does not hold,
+    /// which only a `boolean` axis has — `boolean` has exactly two
+    /// values and a third is that arm, while a string axis takes any
+    /// non-empty value it is handed and its one refused value, the
+    /// empty string, is a disagreement row of its own below.
     fn spoiled(key: &'static str, lua_type: &'static str) -> Vec<(Spoil, Why)> {
         let raised = "attempt to call a nil value";
         let body = b"not the read grammar".to_vec();
         let window = reads::Unanswered::Window {
             detail: "no window".to_owned(),
         };
-        vec![
+        let mut rows: Vec<(Spoil, Why)> = vec![
             (
                 setting(
                     key,
@@ -3140,7 +3145,23 @@ mod game_state {
                     why: reads::Unanswered::Unyielded,
                 },
             ),
-        ]
+        ];
+        if lua_type == "boolean" {
+            rows.push((
+                setting(
+                    key,
+                    reads::Answer::Value {
+                        lua_type: lua_type.to_owned(),
+                        value: Some("yes".to_owned()),
+                    },
+                ),
+                Why::WrongType {
+                    lua_type: lua_type.to_owned(),
+                    value: Some("yes".to_owned()),
+                },
+            ));
+        }
+        rows
     }
 
     /// The whole sweep: every axis paired with every way its own
