@@ -684,6 +684,119 @@ mod tests {
         );
     }
 
+    /// A session restarted under the window: the thread waits for the
+    /// whole window to be published, answers whatever `pick` keeps, and
+    /// then publishes a handshake on a new stamp. The `.req` files it
+    /// leaves are the ones the new session will never list.
+    fn restart_under(s: &mut Standin, pick: impl FnOnce(&mut Vec<String>), answered: usize) {
+        until(s.req(), ".req", 3, UPTO);
+        s.tick_with(pick);
+        if answered > 0 {
+            until(s.res(), ".res", answered, UPTO);
+        }
+        s.stamp = format!("{}-restarted", s.stamp);
+        s.handshake().expect("the new session's handshake");
+    }
+
+    #[test]
+    fn a_stamp_change_mid_window_supersedes_every_request_in_flight() {
+        // Pipelined requests share a frame, so a request that takes DCS
+        // down takes its neighbours' replies with it. Nothing is ticked
+        // here: the window is published, the stamp changes, and all three
+        // ids come back with the one word, in id order like any other
+        // yield.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let specs = pings(&s, 6);
+        let minter = Minter::seeded(11);
+        let tag = minter.tag().to_owned();
+        let req = s.req().to_owned();
+        let mut p = Pipeline::over_with(&h, minter, specs, 3, UPTO);
+        let got: Vec<_> = std::thread::scope(|scope| {
+            scope.spawn(|| restart_under(&mut s, |listed| listed.clear(), 0));
+            p.by_ref().collect()
+        });
+        assert_eq!(
+            ids(&got),
+            (1..=3)
+                .map(|n| format!("{n:010}-{tag}"))
+                .collect::<Vec<_>>()
+        );
+        for item in &got {
+            assert!(
+                matches!(item, Ok(Outcome::Superseded { .. })),
+                "{:?}",
+                ids(&got)
+            );
+        }
+        assert_eq!(
+            entries(&req),
+            (1..=3)
+                .map(|n| format!("{n:010}-{tag}.req"))
+                .collect::<Vec<_>>()
+                .join(" "),
+            "the three lie where the new session will never list them"
+        );
+        assert_eq!(p.unsent(), 3, "and the other three were never published");
+        assert_eq!(p.into_unsent().len(), 3, "and come back to be retried");
+    }
+
+    #[test]
+    fn nothing_more_is_published_once_the_session_is_gone() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let specs = pings(&s, 6);
+        let req = s.req().to_owned();
+        let got = std::thread::scope(|scope| {
+            scope.spawn(|| restart_under(&mut s, |listed| listed.clear(), 0));
+            Pipeline::over_with(&h, Minter::seeded(11), specs, 3, UPTO).count()
+        });
+        assert_eq!(got, 3, "three items, one per request in flight");
+        assert_eq!(
+            in_flight(&req),
+            3,
+            "three requests were published into that session and no more"
+        );
+    }
+
+    #[test]
+    fn a_reply_that_landed_before_the_kill_is_still_yielded() {
+        // A reply that reached the disk before the restart is a real
+        // answer to a real request. Each id still in flight is collected
+        // once before it is reported dead, which is the only reason this
+        // comes back as a reply rather than a third `superseded`.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let specs = pings(&s, 3);
+        let minter = Minter::seeded(11);
+        let tag = minter.tag().to_owned();
+        let got: Vec<_> = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                restart_under(
+                    &mut s,
+                    |listed| listed.retain(|id| id.starts_with("0000000002")),
+                    1,
+                );
+            });
+            Pipeline::over_with(&h, minter, specs, 3, UPTO).collect()
+        });
+        assert_eq!(
+            ids(&got),
+            (1..=3)
+                .map(|n| format!("{n:010}-{tag}"))
+                .collect::<Vec<_>>()
+        );
+        assert!(matches!(got[0], Ok(Outcome::Superseded { .. })), "the head");
+        assert!(
+            matches!(got[1], Ok(Outcome::Reply(_))),
+            "the one that was answered first"
+        );
+        assert!(
+            matches!(got[2], Ok(Outcome::Superseded { .. })),
+            "and the one that never was"
+        );
+    }
+
     #[test]
     fn an_empty_spec_list_publishes_nothing_and_yields_nothing() {
         let b = Sandbox::new();
