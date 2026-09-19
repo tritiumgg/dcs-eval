@@ -68,9 +68,10 @@ pub enum PipeError {
     /// The counter has run past ten digits and there is no id left to
     /// mint. Nothing was published and nothing was consumed.
     Exhausted,
-    /// A spec that did not reach the disk, in `send`'s own words. The
-    /// window refills behind it: a spec the disk refused was never one of
-    /// the W published.
+    /// A spec that did not reach the disk, in `send`'s own words. It is
+    /// yielded in that spec's own place and the window is not short a
+    /// request for it: a spec that never reached the disk was never one
+    /// of the W published.
     Send(SendError),
     /// The session could not be read. It ends the drain: the same
     /// unreadable file would fail the same way for ever.
@@ -124,6 +125,27 @@ impl Gone {
     }
 }
 
+/// What one spec became on its way out: a request on the disk, or a
+/// refusal that never reached it.
+///
+/// A refusal sits in the queue rather than being yielded the moment it
+/// happens, and that is the whole of what keeps the drain in order.
+/// Publication runs ahead of consumption — by W, that being the point —
+/// so a spec refused while the window was being refilled is refused long
+/// before the replies in front of it are yielded; announcing it there and
+/// then would put it ahead of requests that were published first. Held
+/// here it comes out where the caller put it.
+///
+/// A refusal is not one of the W published requests either, so it does
+/// not count towards the window's depth. A run of specs the framer
+/// refuses would otherwise serialise the drain behind requests that were
+/// never sent.
+#[derive(Debug)]
+enum Slot {
+    Sent(Sent),
+    Refused(SendError),
+}
+
 /// A window of requests over one session, drained by iterating it.
 ///
 /// Each `next()` publishes up to the window's depth, waits on the lowest
@@ -140,11 +162,10 @@ pub struct Pipeline {
     upto: Duration,
     /// The specs not yet published, in the order they were given.
     specs: VecDeque<Spec>,
-    /// The ids published and not yet taken off the front, lowest first.
-    flight: VecDeque<Sent>,
-    /// A refusal met while refilling before a yield, held until the yield
-    /// is out of the way.
-    refusal: Option<PipeError>,
+    /// What each spec taken off `specs` became, in the order they were
+    /// taken: an id published and not yet yielded, or a refusal waiting
+    /// its turn.
+    flight: VecDeque<Slot>,
     /// Set once the head came back terminal: publication stops and every
     /// id still in flight is collected once and then reported in this
     /// word.
@@ -188,7 +209,6 @@ impl Pipeline {
             upto,
             specs: specs.into(),
             flight: VecDeque::new(),
-            refusal: None,
             gone: None,
             done: false,
         }
@@ -211,27 +231,43 @@ impl Pipeline {
         self.specs.into()
     }
 
+    /// How many requests are on the disk right now. A refused slot is not
+    /// one of them, which is what keeps a refusal from costing the window
+    /// a place.
+    fn published(&self) -> usize {
+        self.flight
+            .iter()
+            .filter(|slot| matches!(slot, Slot::Sent(_)))
+            .count()
+    }
+
     /// Publish until the window is full or there is nothing left to
-    /// publish. A refusal stops this call and leaves the rest where they
-    /// are; the next one carries on, so a refused spec costs its own slot
-    /// and not the window's depth.
+    /// publish. A spec that refuses takes its place in the queue as a
+    /// refusal and the filling goes on, so the window is W deep whatever
+    /// any one spec did.
     fn fill(&mut self) -> Result<(), PipeError> {
-        while self.gone.is_none() && self.flight.len() < self.depth {
-            let Some(spec) = self.specs.pop_front() else {
+        while self.gone.is_none() && self.published() < self.depth {
+            if self.specs.is_empty() {
                 return Ok(());
-            };
+            }
+            // The id is minted before the spec is taken, so a minter with
+            // nothing left leaves the spec where it was: `unsent` still
+            // counts it, and a caller can retry it under a fresh minter.
             let Some(id) = self.minter.mint() else {
                 return Err(PipeError::Exhausted);
             };
+            let spec = self.specs.pop_front().expect("the queue was just read");
             let headers: Vec<(&str, &str)> = spec
                 .headers
                 .iter()
                 .map(|(n, v)| (n.as_str(), v.as_str()))
                 .collect();
-            match send(&self.req, &self.arm, &id, &headers, &spec.body) {
-                Ok(sent) => self.flight.push_back(sent),
-                Err(err) => return Err(PipeError::Send(err)),
-            }
+            self.flight.push_back(
+                match send(&self.req, &self.arm, &id, &headers, &spec.body) {
+                    Ok(sent) => Slot::Sent(sent),
+                    Err(err) => Slot::Refused(err),
+                },
+            );
         }
         Ok(())
     }
@@ -242,7 +278,10 @@ impl Pipeline {
     /// would throw it away. What has not answered carries the head's own
     /// word.
     fn next_neighbour(&mut self, gone: Gone) -> Option<Result<Outcome, PipeError>> {
-        let sent = self.flight.pop_front()?;
+        let sent = match self.flight.pop_front()? {
+            Slot::Sent(sent) => sent,
+            Slot::Refused(err) => return Some(Err(PipeError::Send(err))),
+        };
         match collect(&self.session, sent.id()) {
             Ok(Collected::Reply(envelope)) => Some(Ok(Outcome::Reply(envelope))),
             Ok(_) => Some(Ok(gone.about(sent.id()))),
@@ -261,12 +300,6 @@ impl Iterator for Pipeline {
         if self.done {
             return None;
         }
-        // A refusal met while refilling behind the last yield comes out
-        // before anything else is published, so refusals are yielded in
-        // the order they happened.
-        if let Some(err) = self.refusal.take() {
-            return Some(Err(err));
-        }
         if let Err(err) = self.fill() {
             return Some(Err(err));
         }
@@ -277,9 +310,21 @@ impl Iterator for Pipeline {
             }
             return neighbour;
         }
-        let Some(head) = self.flight.front().cloned() else {
-            self.done = true;
-            return None;
+        let head = match self.flight.front() {
+            Some(Slot::Sent(sent)) => sent.clone(),
+            // A refusal in its own place: yielded where the caller put
+            // the spec, and the window behind it was never short a
+            // request, so there is nothing to refill.
+            Some(Slot::Refused(_)) => {
+                let Some(Slot::Refused(err)) = self.flight.pop_front() else {
+                    unreachable!("the front was just read as a refusal")
+                };
+                return Some(Err(PipeError::Send(err)));
+            }
+            None => {
+                self.done = true;
+                return None;
+            }
         };
         let outcome = match wait(&self.session, &head, self.upto) {
             Ok(outcome) => outcome,
@@ -303,9 +348,10 @@ impl Iterator for Pipeline {
         // reply for — and a window refilled on the way back in would be W
         // deep only while nothing was being done with the replies, which
         // is the one moment it does not matter.
-        if let Err(err) = self.fill() {
-            self.refusal = Some(err);
-        }
+        // The one thing `fill` can refuse is a minter with no ten-digit
+        // seq left, and that leaves its spec where it was, so the next
+        // call refuses again in the same words with nothing lost.
+        let _ = self.fill();
         Some(Ok(outcome))
     }
 }
@@ -573,6 +619,69 @@ mod tests {
             ticker.join().expect("the ticker finishes")
         });
         assert!(most <= 3, "saw {most} requests in req/, wanted at most 3");
+    }
+
+    #[test]
+    fn a_refused_spec_does_not_shrink_the_window() {
+        // The refusal is the framer's, met before the disk is touched: a
+        // header value with a byte past ASCII is one the executor's own
+        // parser would not take, so this side will not write it. Five
+        // specs, the second of them unframeable, three deep. What is
+        // proved is that the refusal comes out second — where the caller
+        // put it, not when the client happened to meet it — and that the
+        // window was three published requests deep all the same, which it
+        // would not be if a spec that never reached the disk held a place
+        // in it.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let mut specs = pings(&s, 5);
+        specs[1]
+            .headers
+            .push(("note".to_owned(), "a\u{e9}".to_owned()));
+        let minter = Minter::seeded(11);
+        let tag = minter.tag().to_owned();
+        let (got, census) = std::thread::scope(|scope| {
+            let ticker = scope.spawn(|| {
+                let mut readings = Vec::new();
+                for want in [3, 3, 2, 1] {
+                    readings.push(census(s.req(), want, Duration::from_secs(2)));
+                    s.tick_with(|listed| listed.truncate(1));
+                }
+                readings
+            });
+            let drained: Vec<_> = Pipeline::over_with(&h, minter, specs, 3, UPTO).collect();
+            (drained, ticker.join().expect("the ticker finishes"))
+        });
+        assert_eq!(got.len(), 5, "one item per spec");
+        assert!(
+            matches!(got[1], Err(PipeError::Send(SendError::Frame(_)))),
+            "the second is the refusal: {:?}",
+            ids(&got)
+        );
+        for (at, item) in got.iter().enumerate() {
+            if at != 1 {
+                assert!(
+                    matches!(item, Ok(Outcome::Reply(_))),
+                    "{at}: {:?}",
+                    ids(&got)
+                );
+            }
+        }
+        assert_eq!(
+            ids(&got)
+                .into_iter()
+                .enumerate()
+                .filter(|(at, _)| *at != 1)
+                .map(|(_, id)| id)
+                .collect::<Vec<_>>(),
+            [1, 3, 4, 5].map(|n| format!("{n:010}-{tag}")).to_vec(),
+            "the refused spec spent id 2 and the rest kept their order"
+        );
+        assert_eq!(
+            census,
+            vec![3, 3, 2, 1],
+            "three deep across the refusal, and only then draining out"
+        );
     }
 
     #[test]
