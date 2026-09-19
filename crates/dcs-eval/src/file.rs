@@ -121,10 +121,17 @@ impl Roots {
 /// it.
 ///
 /// `size` is what the stat said and nothing more: the file may have grown
-/// since, and whoever reads the bytes owns that gap. `headroom` is
-/// `max_request_bytes` less the header block less `size` — the bytes a
-/// reader still has in hand once this file's bytes are in the envelope —
-/// defined here once so nobody has to derive it a second time.
+/// since, and whoever reads the bytes owns that gap. There is a second gap
+/// of the same kind in front of it: the path was resolved before it was
+/// judged, and a leaf that did not exist then had nothing of its own to
+/// follow, so a junction or a symlink put there afterwards is one this
+/// judgement never saw. Whoever opens the path owns that gap too, and the
+/// reader closes it by judging the handle it opened rather than the path it
+/// was given.
+///
+/// `headroom` is `max_request_bytes` less the header block less `size` —
+/// the bytes a reader still has in hand once this file's bytes are in the
+/// envelope — defined here once so nobody has to derive it a second time.
 ///
 /// The fields are private for the reason [`Real`]'s is: [`check`] is then
 /// the only thing that can make one, so a reader taking an `Admitted` has
