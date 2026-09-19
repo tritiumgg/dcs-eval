@@ -212,6 +212,10 @@ pub struct Standin {
     /// Whether the session is armed, `false` at `open` as the executor
     /// loads dormant; a test moves it between beats.
     pub armed: bool,
+    /// The process id the handshake names. A fixed 4242 at `open`, which
+    /// on this host is nobody; a test whose client probes a real process,
+    /// running or gone, sets it before the handshake is written.
+    pub pid: u32,
     /// The wall-clock time of the last arm or disarm, display only and so
     /// a fixed spelling here: this side formats no clock and reads none.
     pub since: String,
@@ -257,6 +261,7 @@ impl Standin {
             stamp,
             tick: 0,
             armed: false,
+            pid: 4242,
             since: "2026-09-19 11:03:07".to_owned(),
             last_callback: String::new(),
             callbacks: Vec::new(),
@@ -552,12 +557,13 @@ impl Standin {
         let tempdir = path(&self.output.join("tmp"));
         let guard = path(&self.output.join("install_guard.txt"));
         let states = self.states();
+        let pid = self.pid.to_string();
         let headers = [
             ("executor", "dcs-eval"),
             ("protocol", PROTOCOL),
             ("host", self.host.as_str()),
             ("stamp", self.stamp.as_str()),
-            ("pid", "4242"),
+            ("pid", pid.as_str()),
             ("started", "2026-09-19 11:03:07"),
             ("transport", transport.as_str()),
             ("req", req.as_str()),
@@ -1039,6 +1045,26 @@ mod tests {
             opened(&Sandbox::new(), "export").states(),
             EXPORT_STATES,
             "and the other host's states"
+        );
+    }
+
+    #[test]
+    fn the_handshake_names_the_pid_the_session_was_given() {
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        assert_eq!(s.pid, 4242, "the default, which is nobody on this host");
+        s.handshake().expect("the default publishes");
+        let read = |s: &Standin| {
+            let (headers, _) = decoded(&slurp(&s.output().join("executor.txt")));
+            header(&headers, "pid").expect("pid").to_owned()
+        };
+        assert_eq!(read(&s), "4242");
+        s.pid = std::process::id();
+        s.handshake().expect("the second handshake publishes");
+        assert_eq!(
+            read(&s),
+            std::process::id().to_string(),
+            "a session may name a process a client can really probe"
         );
     }
 
