@@ -431,6 +431,70 @@ impl Readings {
     }
 }
 
+/// The call expression a read chunk hands to `pcall`, where the body is
+/// one of this module's chunks.
+fn callee_of(body: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(body).ok()?;
+    let rest = text.split_once("pcall(")?.1;
+    let (callee, _) = rest.split_once(')')?;
+    Some(callee.to_owned())
+}
+
+/// Refuse to publish anything carrying a name that is never sent, or an
+/// `eval` whose callee the constant list does not hold.
+///
+/// Both layers are here on purpose. `Read`'s fields are private and the
+/// table is the only value of that type, so production cannot assemble an
+/// unlisted read — but it is the specs that reach the disk, and a guard
+/// nothing can drive proves nothing, so the check sits on the bytes at the
+/// publication seam where a test can hand it a spec the table could not
+/// have produced. Its cost is a substring scan of a few short strings once
+/// per window.
+///
+/// The two refusals are independent, and that is the point of having two.
+/// The list is an allowlist because it is not known whether the batching
+/// was the hazard or the particular reads were; the three never-names are
+/// checked separately so that one promoted *into* the table is still
+/// refused, which an allowlist alone would wave through.
+///
+/// The never scan is a substring match and not a parse, which is sound
+/// only while no name the table holds contains one of the three. That is
+/// what the collision test above keeps true.
+pub(crate) fn vet(specs: &[Spec]) -> Result<(), Refused> {
+    for spec in specs {
+        for never in NEVER {
+            let folded = never.to_ascii_lowercase();
+            let in_headers = spec
+                .headers
+                .iter()
+                .any(|(_, v)| v.to_ascii_lowercase().contains(&folded));
+            let in_body = String::from_utf8_lossy(&spec.body)
+                .to_ascii_lowercase()
+                .contains(&folded);
+            if in_headers || in_body {
+                return Err(Refused::NeverSent {
+                    name: never.to_owned(),
+                });
+            }
+        }
+    }
+    for spec in specs {
+        let op = spec
+            .headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case("op"))
+            .map(|(_, v)| v.as_str());
+        if op != Some("eval") {
+            continue;
+        }
+        let callee = callee_of(&spec.body).unwrap_or_default();
+        if !READS.iter().any(|r| r.callee() == callee) {
+            return Err(Refused::Unlisted { name: callee });
+        }
+    }
+    Ok(())
+}
+
 /// The chunkname a read is compiled under, which names the call so that a
 /// crash, a raise and a log line all say which read it was.
 fn chunkname(callee: &str) -> String {
@@ -448,6 +512,7 @@ pub(crate) fn publish_reads(
     depth: usize,
     upto: Duration,
 ) -> Result<Vec<Answer>, Refused> {
+    vet(&specs)?;
     Ok(Pipeline::over(h, specs, depth, upto)
         .map(answer_of)
         .collect())
@@ -1184,6 +1249,133 @@ mod game_reads {
     fn the_default_tiers_value_is_tier_one_alone() {
         assert!(!Tiers::default().tier_two());
         assert!(Tiers::with_tier_two().tier_two());
+    }
+
+    /// A read spec as `gather` builds one, for any callee at all — which
+    /// is how a test reaches the seam with something the table could not
+    /// have produced. It goes through `publish_reads`, the production
+    /// path, and there is no test-only constructor anywhere.
+    fn spec_for(h: &Handshake, callee: &str) -> Spec {
+        let name = chunkname(callee);
+        Spec::new(
+            &[
+                ("op", "eval"),
+                ("for", h.stamp.as_str()),
+                ("state", "hook"),
+                ("chunkname", name.as_str()),
+            ],
+            &chunk(callee),
+        )
+    }
+
+    #[test]
+    fn a_forbidden_name_is_refused_before_anything_reaches_the_disk() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let got = publish_reads(&h, vec![spec_for(&h, "DCS.getMissionLoaded")], 1, UPTO);
+        assert_eq!(
+            got.expect_err("wanted Refused, got Ok(..)"),
+            Refused::NeverSent {
+                name: "getMissionLoaded".to_owned()
+            }
+        );
+        assert_eq!(
+            published(s.req()),
+            0,
+            "the request directory holds {} files and should hold none",
+            published(s.req())
+        );
+        s.tick();
+        assert_eq!(s.seen().len(), 0, "the ledger holds a request");
+    }
+
+    #[test]
+    fn a_name_that_is_merely_unlisted_is_refused_too_because_the_rule_is_a_list_and_not_a_blocklist()
+     {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let got = publish_reads(&h, vec![spec_for(&h, "DCS.getUnitType")], 1, UPTO);
+        assert_eq!(
+            got.expect_err("wanted Refused, got Ok(..)"),
+            Refused::Unlisted {
+                name: "DCS.getUnitType".to_owned()
+            }
+        );
+        assert_eq!(published(s.req()), 0);
+        s.tick();
+        assert_eq!(s.seen().len(), 0, "the ledger holds a request");
+    }
+
+    #[test]
+    fn a_forbidden_name_in_a_chunkname_is_refused_as_one_in_a_body_is() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let spec = Spec::new(
+            &[
+                ("op", "eval"),
+                ("for", h.stamp.as_str()),
+                ("state", "hook"),
+                ("chunkname", "=dcs-eval read DCS.getMissionTheatre"),
+            ],
+            &chunk("DCS.getPause"),
+        );
+        assert_eq!(
+            publish_reads(&h, vec![spec], 1, UPTO).expect_err("wanted Refused, got Ok(..)"),
+            Refused::NeverSent {
+                name: "getMissionTheatre".to_owned()
+            }
+        );
+        assert_eq!(published(s.req()), 0);
+        s.tick();
+        assert_eq!(s.seen().len(), 0, "the ledger holds a request");
+    }
+
+    #[test]
+    fn a_forbidden_name_is_refused_even_when_it_is_in_the_read_table() {
+        // The never gate is independent of the list: a name promoted into
+        // the table would pass an allowlist, and this is the check that
+        // would still refuse it. The spec here is byte for byte what a
+        // tenth table entry would produce.
+        let b = Sandbox::new();
+        let (_s, h) = ticking(&b);
+        let got = publish_reads(&h, vec![spec_for(&h, "DCS.getMissionLoaded")], 1, UPTO);
+        assert_eq!(
+            got.expect_err("wanted Refused::NeverSent, got Ok(())"),
+            Refused::NeverSent {
+                name: "getMissionLoaded".to_owned()
+            },
+            "the refusal must be the never gate's and not the list's"
+        );
+    }
+
+    #[test]
+    fn no_request_of_a_full_gather_carries_a_never_sent_name() {
+        // The sweep: what actually reached the disk, headers included,
+        // with tier 2 on so every read the client can ever send is in it.
+        // The positive control is in the same test and counted by
+        // predicate, so a gather that published nothing fails here first.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::with_tier_two(), 9);
+        for r in listed(Tiers::with_tier_two()) {
+            assert_eq!(
+                carrying(&s, &chunkname(r.callee())),
+                1,
+                "the control: no request names {}",
+                r.callee()
+            );
+        }
+        for (n, seen) in s.seen().iter().enumerate() {
+            let text = String::from_utf8_lossy(&seen.bytes).to_ascii_lowercase();
+            for never in NEVER {
+                assert!(
+                    !text.contains(&never.to_ascii_lowercase()),
+                    "request {} of the ledger carries a name that is never sent: {never}\n{}",
+                    n + 1,
+                    String::from_utf8_lossy(&seen.bytes)
+                );
+            }
+        }
     }
 
     #[test]
