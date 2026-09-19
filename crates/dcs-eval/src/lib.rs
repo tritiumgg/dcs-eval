@@ -18,6 +18,10 @@ pub mod readers;
 // The hash the provenance record carries. Written here because the crate
 // takes no crates.io dependency; decision record 0011.
 pub mod sha256;
+
+// The other half of evaluating a file: the bytes, once `file` has judged
+// the path they come from.
+pub mod source;
 pub mod status;
 
 // The crate carries `unsafe`, which it did not before, and all of it is in
