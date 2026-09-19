@@ -189,6 +189,22 @@ const INVALID_HANDLE_VALUE: Handle = usize::MAX as Handle;
 const ERROR_IO_PENDING: i32 = 997;
 /// The completion is not ready yet, which is an answer and not a failure.
 const ERROR_IO_INCOMPLETE: i32 = 996;
+/// What `CancelIoEx` says when it found nothing to cancel. It is the one
+/// failure of that call the drain can carry on from: the completion is
+/// already posted, which is what the cancellation was for.
+const ERROR_NOT_FOUND: i32 = 1168;
+
+/// The longest the drain waits for a cancelled read to come back. An
+/// accepted cancellation completes in microseconds, so this is not a
+/// duration anything is expected to spend — it is the bound that keeps a
+/// `Drop` from becoming a process that stops.
+const DRAIN_MS: u32 = 5_000;
+
+/// What the drain records where the completion simply never arrived. It
+/// is negative so that it cannot be read as a Windows error code, because
+/// no call failed: the kernel still has the buffer and said nothing about
+/// why.
+const DRAIN_UNFINISHED: i32 = -1;
 /// What a cancelled read completes with, and the thing the drain
 /// records. Named for the checks that assert on it, which are the only
 /// place the number is compared against anything: the drain itself
@@ -333,9 +349,12 @@ pub(crate) struct Changes {
     state: NonNull<Pending>,
     /// Exactly one completion is outstanding, or posted and unconsumed.
     /// Set only by a successful arm; cleared only where a completion has
-    /// been consumed or drained. The drain's `GetOverlappedResult` waits,
-    /// and this is what keeps that wait finite.
+    /// been consumed, drained or given up on.
     armed: bool,
+    /// Whether the drain gave up before it could establish that the
+    /// kernel had let go of the buffer. Sticky once set, and the one
+    /// thing that stops `Drop` freeing the allocation.
+    stranded: bool,
     /// What the drain answered. It is shared rather than returned because
     /// the cancellation runs in `Drop`, which has no caller to return to,
     /// and a drain that ran is the only evidence this design can produce:
@@ -396,6 +415,7 @@ impl Changes {
             event,
             state,
             armed: false,
+            stranded: false,
             drained: Rc::new(Cell::new(None)),
         })
     }
@@ -435,6 +455,15 @@ impl Changes {
     pub(crate) fn arm(&mut self) -> io::Result<()> {
         if self.armed {
             return Ok(());
+        }
+        if self.stranded {
+            // A drain that gave up cleared `armed` without establishing
+            // that the kernel had finished with the `OVERLAPPED`. Arming
+            // again would hand the same structure to a second read while
+            // the first may still be writing its status into it, so this
+            // watch is over; the caller reads the refusal as a deaf
+            // filesystem and goes back to polling.
+            return Err(io::Error::other("the previous read was never drained"));
         }
         // A re-arm starts from a zeroed request. The previous one's
         // status is still sitting in these fields, and the kernel is
@@ -542,31 +571,72 @@ impl Changes {
     /// finished with the buffer.
     ///
     /// It allocates nothing, formats nothing and asserts nothing, because
-    /// it runs from `Drop` and may run while a panic is unwinding.
+    /// it runs from `Drop` and may run while a panic is unwinding. It is
+    /// also bounded on every path out, and that is not decoration: a
+    /// `Drop` waiting for a completion nobody will post is a process that
+    /// stops, with no timeout, no diagnostic and nothing to kill but the
+    /// whole of it. Where the drain cannot finish it says so in the sink
+    /// and marks the allocation stranded, which costs four kilobytes and
+    /// leaves the kernel writing into memory that is still this process's
+    /// — the one outcome here that is neither a hang nor a freed buffer.
     fn quiesce(&mut self) {
         if !self.armed {
             return;
         }
-        // The return is ignored on purpose: the one interesting failure
-        // is `ERROR_NOT_FOUND`, which means the completion was already
-        // posted, and that is as good as a cancellation for the only
-        // question being asked.
-        //
         // SAFETY: the handle is open and the `OVERLAPPED` is the one
         // armed against it.
-        unsafe { CancelIoEx(self.dir.0, self.overlapped()) };
+        let asked = unsafe { CancelIoEx(self.dir.0, self.overlapped()) };
+        if asked == 0 {
+            let why = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            if why != ERROR_NOT_FOUND {
+                // Nothing was cancelled and the read is still the
+                // kernel's, so there is no completion on its way and
+                // waiting for one would never end. `ERROR_NOT_FOUND` is
+                // the good failure and the only one: it says there was
+                // nothing to cancel because the completion is already
+                // posted, and the collection below takes it.
+                self.strand(why);
+                return;
+            }
+        }
+        // SAFETY: the event is open. The wait is bounded rather than
+        // infinite for the reason in the doc comment; a cancellation that
+        // has been accepted completes in microseconds, so spending this
+        // long at all means something is wrong that waiting will not fix.
+        let saw = unsafe { WaitForSingleObject(self.event.0, DRAIN_MS) };
+        if saw != WAIT_OBJECT_0 {
+            self.strand(DRAIN_UNFINISHED);
+            return;
+        }
         let mut got = 0u32;
-        // SAFETY: as above, and `bWait` is true here because the question
-        // is whether the kernel has genuinely let go of the buffer.
-        // `armed` is the invariant that keeps it finite: a completion is
-        // outstanding or posted, so one is coming.
-        let ok = unsafe { GetOverlappedResult(self.dir.0, self.overlapped(), &mut got, 1) };
-        self.drained.set(Some(if ok != 0 {
-            0
+        // SAFETY: as above. `bWait` is false because the completion's own
+        // event has just been waited on, so there is nothing left for it
+        // to wait for and no second unbounded wait to enter.
+        let ok = unsafe { GetOverlappedResult(self.dir.0, self.overlapped(), &mut got, 0) };
+        if ok == 0 {
+            let why = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            if why == ERROR_IO_INCOMPLETE {
+                // The event said the read was done and the read says it
+                // is not. Nothing here can tell which to believe, so the
+                // buffer stays the kernel's.
+                self.strand(why);
+                return;
+            }
+            self.drained.set(Some(why));
         } else {
-            io::Error::last_os_error().raw_os_error().unwrap_or(0)
-        }));
+            self.drained.set(Some(0));
+        }
         self.armed = false;
+    }
+
+    /// Give up on the read, recording why, and leave the allocation to be
+    /// leaked rather than freed under a kernel that may still write to
+    /// it. Sticky, because `Drop` may run after a `woke` that already
+    /// gave up and must not then free what that call decided not to.
+    fn strand(&mut self, why: i32) {
+        self.drained.set(Some(why));
+        self.armed = false;
+        self.stranded = true;
     }
 }
 
@@ -579,10 +649,19 @@ impl Drop for Changes {
         // a `?` or a panic. The two handles the compiler closes after
         // this body returns.
         self.quiesce();
+        if self.stranded {
+            // The drain could not establish that the kernel has let go,
+            // so the allocation is leaked on purpose. Closing the handle
+            // below is still right — it is what cancels the read the
+            // kernel is holding — but the memory it may write into stays
+            // this process's and is never handed to anything else.
+            return;
+        }
         // SAFETY: the pointer came from `Box::into_raw` in `open`, no
         // other owner of it was ever made, the drain above has returned
-        // so no read is outstanding against the allocation, and nothing
-        // reads `self.state` after this.
+        // and said the kernel is finished, so no read is outstanding
+        // against the allocation, and nothing reads `self.state` after
+        // this.
         drop(unsafe { Box::from_raw(self.state.as_ptr()) });
     }
 }
