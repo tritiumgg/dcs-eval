@@ -1261,9 +1261,73 @@ pub struct GameState {
     /// Evidence, never a state.
     pub ui: Ui,
     pub app_version: Option<String>,
+    /// The session the handshake named, where there was one to read. The
+    /// headline names it where the process is gone, so a reader can tell
+    /// which session ended.
+    pub stamp: Option<String>,
     /// The reads no axis is made of, kept verbatim. Nothing reads this
     /// field; it is here so a reader does not lose what was gathered.
     pub recorded: Vec<(&'static crate::reads::Read, crate::reads::Answer)>,
+}
+
+/// The one line an agent reads first, naming the basis of every definite
+/// value in the same line.
+///
+/// Composed from the axes, so a value and the basis it rests on cannot
+/// come apart: `paused (read)` says which of the two disagreeing sources
+/// decided it, `single player or host (tier 2 off)` says what would
+/// separate the two, and an unknown carries its reason rather than a bare
+/// word.
+///
+/// Two things are deliberately not here. The word this build uses is
+/// `executor`, so no headline says the other one, whatever the frozen
+/// examples print. And nothing here claims the install was verified,
+/// because nothing in this derivation runs a verification — a headline
+/// that asserted it would be the very thing this table exists to avoid,
+/// moved out of an axis and into the summary.
+impl fmt::Display for GameState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let version = match &self.app_version {
+            Some(version) => format!("DCS {version}"),
+            // Said rather than dropped: a line that simply omits it
+            // reads as a line whose author forgot, and a reader cannot
+            // tell that from a handshake that carried none.
+            None => "the DCS version is absent from the handshake".to_owned(),
+        };
+        let session = match &self.stamp {
+            Some(stamp) => format!("executor session {stamp}"),
+            None => "no executor session".to_owned(),
+        };
+        match &self.process {
+            ProcessAxis::NeverRan => {
+                return write!(f, "DCS has never run here: no executor handshake");
+            }
+            ProcessAxis::Gone => return write!(f, "DCS is not running ({session} ended)"),
+            ProcessAxis::Unknown { why } => {
+                return write!(f, "whether DCS is running is {why}");
+            }
+            ProcessAxis::Running => {}
+        }
+        let mut parts: Vec<String> = Vec::new();
+        match &self.activity {
+            Activity::Loading => parts.push(
+                "loading — nothing answers until the load ends; collect the id later".to_owned(),
+            ),
+            Activity::Mission { .. } | Activity::MenuOrEditor | Activity::Unknown { .. } => {
+                parts.push(self.activity.to_string());
+            }
+        }
+        // Outside a mission the question does not arise, and a line
+        // saying so says nothing.
+        if !matches!(self.pause.value, Pause::NotApplicable) {
+            parts.push(self.pause.to_string());
+        }
+        parts.push(self.session.to_string());
+        parts.push(self.track.to_string());
+        parts.push(format!("the executor is {}", self.bridge));
+        parts.push(version);
+        f.write_str(&parts.join(", "))
+    }
 }
 
 /// The axes, from the evidence.
@@ -1283,9 +1347,9 @@ pub fn derive(e: &Evidence) -> GameState {
         e.of("multiplayer"),
         e.of("server"),
     );
-    let app_version = match &e.handshake {
-        Found::Read(h) => h.app_version.clone(),
-        Found::Missing | Found::Unreadable { .. } => None,
+    let (app_version, stamp) = match &e.handshake {
+        Found::Read(h) => (h.app_version.clone(), Some(h.stamp.clone())),
+        Found::Missing | Found::Unreadable { .. } => (None, None),
     };
     GameState {
         process: process_of(&e.handshake, e.process.as_ref()),
@@ -1296,6 +1360,7 @@ pub fn derive(e: &Evidence) -> GameState {
         track: track_of(e.of("track")),
         ui: ui_of(e.ping.as_ref(), e.beat.as_ref()),
         app_version,
+        stamp,
         recorded: e
             .answers
             .iter()
@@ -1365,9 +1430,7 @@ pub fn game_state(
         handshake: handshake.clone(),
         beat,
         process: Some(process),
-        ping: readings
-            .ping()
-            .map(|r| r.cloned().map_err(Clone::clone)),
+        ping: readings.ping().map(|r| r.cloned().map_err(Clone::clone)),
         probe: readings.probe().cloned(),
         answers: readings.entries().to_vec(),
         tiers,
@@ -2976,6 +3039,162 @@ mod game_state {
                     );
                 }
             }
+        }
+    }
+
+    // ---- the headline -----------------------------------------------
+
+    /// The state derived from `spoil` applied to maximal evidence, for a
+    /// headline test that wants one axis moved.
+    fn headline(s: &Standin, spoil: impl FnOnce(&mut Evidence)) -> String {
+        let mut evidence = maximal(s);
+        spoil(&mut evidence);
+        derive(&evidence).to_string()
+    }
+
+    /// A stand-in whose handshake is on the disk, for the headline tests.
+    fn handshaken(b: &Sandbox) -> Standin {
+        let s = Standin::open(&b.join("dcs"), "hook").expect("the stand-in opens");
+        s.handshake().expect("the handshake publishes");
+        s
+    }
+
+    #[test]
+    fn the_headline_for_a_paused_mission_names_the_read_and_the_tier() {
+        // The basis, not the wording: the examples in the frozen
+        // document are examples, and one of them names a DCS version
+        // this build has never seen.
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        let line = headline(&s, |e| {
+            e.tiers = reads::Tiers::default();
+            e.answers
+                .retain(|(read, _)| read.tier() == reads::Tier::One);
+            for (read, answer) in &mut e.answers {
+                if read.key() == "pause" {
+                    *answer = reads::Answer::Value {
+                        lua_type: "boolean".to_owned(),
+                        value: Some("true".to_owned()),
+                    };
+                }
+            }
+        });
+        assert!(line.contains("in a mission"), "{line}");
+        assert!(line.contains("paused (read)"), "{line}");
+        assert!(line.contains("(tier 2 off)"), "{line}");
+    }
+
+    #[test]
+    fn the_headline_for_a_load_says_nothing_answers_yet() {
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        let line = headline(&s, |e| {
+            e.beat = Some(ours(Host::Hook, "load", true));
+        });
+        assert!(line.contains("loading"), "{line}");
+        assert!(line.contains("nothing answers"), "{line}");
+        assert!(
+            !line.contains("n/a"),
+            "the pause line says nothing here: {line}"
+        );
+    }
+
+    #[test]
+    fn the_headline_for_the_menu_says_the_editor_is_not_distinguished() {
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        let line = headline(&s, |e| {
+            e.beat = Some(ours(Host::Hook, "menu", true));
+        });
+        assert!(
+            line.contains("not distinguished on this build"),
+            "the value's own name holds the indeterminacy: {line}"
+        );
+    }
+
+    #[test]
+    fn the_headline_for_a_gone_process_names_the_ended_session() {
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        let line = headline(&s, |e| {
+            e.process = Some(crate::status::Process::Exited);
+        });
+        assert!(line.contains("not running"), "{line}");
+        assert!(line.contains(&s.stamp), "the session is not named: {line}");
+        assert!(
+            !line.contains("verified"),
+            "nothing here runs a verification: {line}"
+        );
+    }
+
+    #[test]
+    fn a_disagreement_puts_the_facts_disagree_in_the_headline() {
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        let line = headline(&s, |e| {
+            for (read, answer) in &mut e.answers {
+                if read.key() == "mission_name" {
+                    *answer = reads::Answer::Value {
+                        lua_type: "string".to_owned(),
+                        value: Some(String::new()),
+                    };
+                }
+            }
+        });
+        assert!(line.contains("the facts disagree"), "{line}");
+    }
+
+    #[test]
+    fn no_headline_says_bridge() {
+        // The word this build uses is `executor`, whatever the frozen
+        // examples print. Nothing greps for the bare word, so this does.
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        let lines = [
+            headline(&s, |_| {}),
+            headline(&s, |e| e.beat = Some(ours(Host::Hook, "load", true))),
+            headline(&s, |e| e.beat = Some(ours(Host::Hook, "menu", true))),
+            headline(&s, |e| e.process = Some(crate::status::Process::Exited)),
+            headline(&s, |e| e.handshake = Found::Missing),
+            headline(&s, |e| e.process = None),
+        ];
+        for line in lines {
+            assert!(
+                !line.to_ascii_lowercase().contains("bridge"),
+                "a headline says it: {line}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_absent_app_version_says_so_rather_than_vanishing() {
+        // A line that simply drops it reads as one whose author forgot,
+        // and a reader cannot tell that from a handshake carrying none.
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        let line = headline(&s, |e| {
+            if let Found::Read(h) = &mut e.handshake {
+                h.app_version = None;
+            }
+        });
+        assert!(line.contains("absent from the handshake"), "{line}");
+    }
+
+    #[test]
+    fn every_headline_names_the_basis_of_every_definite_value() {
+        // Every definite value carries its own basis in its rendering,
+        // and the headline is composed of those renderings, so the basis
+        // and the value cannot come apart.
+        let b = Sandbox::new();
+        let s = handshaken(&b);
+        let whole = derive(&maximal(&s));
+        let line = whole.to_string();
+        assert!(line.contains(&whole.activity.to_string()), "{line}");
+        assert!(line.contains(&whole.pause.value.to_string()), "{line}");
+        assert!(line.contains(&whole.session.to_string()), "{line}");
+        assert!(line.contains(&whole.track.to_string()), "{line}");
+        for basis in ["(read)", "(tier 2)"] {
+            assert!(line.contains(basis), "{basis} is missing from {line}");
         }
     }
 
