@@ -144,9 +144,7 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ```sweep-edit executor/DcsEvalExecutor.lua
 -   local answered = dostring_in(state, chunk)
--   if answered == nil then
 +   local answered = dostring_in(state, chunk) or ""
-+   if false then
 ```
 
 ### a_do_script/payload-not-string-admitted
@@ -193,7 +191,7 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ```sweep-edit executor/DcsEvalExecutor.lua
 -     if type(n) ~= "number" or not (n >= 1 and n <= MAX_HOOK_COUNT) or n % 1 ~= 0 then
-+     if false then
++     if type(n) ~= "number" or not (n >= 0 and n <= MAX_HOOK_COUNT) or n % 1 ~= 0 then
 ```
 
 ### fence/foreign-for-runs-anyway
@@ -201,6 +199,10 @@ not cover is printed by the sweep itself rather than left to be assumed.
 - task: T25
 - command: `mise exec -- lua5.1 tools/harness.lua executor/fence`
 - reddens: `on a tick: no chunk was compiled`
+- note: the mutation takes the whole arm out, which is what "running the chunk
+  anyway" costs here: a foreign `for` is no longer answered `stale-session`
+  either. So a green run vouches for the arm being watched at all, not for
+  each half being watched separately.
 
 ```sweep-edit executor/DcsEvalExecutor.lua
 -     elseif headers["for"] ~= E.stamp then
