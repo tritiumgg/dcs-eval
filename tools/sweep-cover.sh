@@ -53,9 +53,11 @@ claimed=$(awk -v id="$ID" '
     }
 ' "$plan" | sort -u)
 
-# Every task the inventory names. The runner itself is excluded: its own row is
-# the one row whose control cannot be swept by the runner it describes, and the
-# inventory says so as an out-of-scope entry rather than as a task bullet.
+# Every task the inventory names, in-scope entry and out-of-scope entry alike:
+# a `task:` bullet is read the same way wherever it sits. The runner's own row
+# is the one whose control cannot be swept by the runner it describes, so its
+# entry is out-of-scope and carries the bullet anyway — which is what keeps it
+# out of the missing list, since the plan row names a mutation like any other.
 written=$(awk -v id="$ID" '
     $0 ~ ("^- task:[ \t]+" id "[ \t]*$") { t = $3; print t }
 ' "$inventory" | sort -u)
