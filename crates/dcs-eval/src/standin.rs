@@ -30,8 +30,7 @@
 //! Not modelled, because no client control needs it: the held set for a
 //! request that could not be removed, the count of replies that could not
 //! be published and the `dcs.log` line for one, the dormant probe on the
-//! arm file, which the executor does not have yet either, and the
-//! handshake and heartbeat files, which arrive with the readers for them.
+//! arm file, which the executor does not have yet either.
 //! Nor is the tick budget: the stand-in answers every request it lists in
 //! one tick, and measures nothing, so every reply's `cpu_ms` is `0.000`.
 //! A request name that is not UTF-16 is read lossily where the executor
@@ -210,6 +209,17 @@ pub struct Standin {
     /// Ticks so far. Incremented as a tick begins, so the first reply of a
     /// session says `tick: 1`.
     pub tick: u64,
+    /// Whether the session is armed, `false` at `open` as the executor
+    /// loads dormant; a test moves it between beats.
+    pub armed: bool,
+    /// The wall-clock time of the last arm or disarm, display only and so
+    /// a fixed spelling here: this side formats no clock and reads none.
+    pub since: String,
+    /// `<name>@<tick>` of the last callback other than the frame to fire,
+    /// empty until one does.
+    pub last_callback: String,
+    /// The callbacks this session has seen, empty until one fires.
+    pub callbacks: Vec<String>,
     output: PathBuf,
     session: PathBuf,
     req: PathBuf,
@@ -246,6 +256,10 @@ impl Standin {
             phase: phase.to_owned(),
             stamp,
             tick: 0,
+            armed: false,
+            since: "2026-09-19 11:03:07".to_owned(),
+            last_callback: String::new(),
+            callbacks: Vec::new(),
             arm: session.join("arm"),
             output: root.to_owned(),
             session,
@@ -571,6 +585,38 @@ impl Standin {
         self.land(&self.output.join("executor.txt"), &bytes)
     }
 
+    /// The heartbeat, `<output>/heartbeat.txt`: the ten headers this
+    /// session keeps, in the executor's order, with the file's modification
+    /// time set to `at` after it lands, since the write would otherwise
+    /// stamp it now. The time is the caller's every time, because the age
+    /// a client derives comes from this stamp and from nothing in the
+    /// file's own text.
+    pub fn beat(&self, at: SystemTime) -> Result<(), String> {
+        let transport = self.session.display().to_string();
+        let ticks = self.tick.to_string();
+        let callbacks = self.callbacks.join(",");
+        let headers = [
+            ("protocol", PROTOCOL),
+            ("host", self.host.as_str()),
+            ("stamp", self.stamp.as_str()),
+            ("transport", transport.as_str()),
+            ("phase", self.phase.as_str()),
+            ("armed", if self.armed { "yes" } else { "no" }),
+            ("since", self.since.as_str()),
+            ("ticks", ticks.as_str()),
+            ("last_callback", self.last_callback.as_str()),
+            ("callbacks", callbacks.as_str()),
+        ];
+        let bytes = encode(&headers, b"")?;
+        let path = self.output.join("heartbeat.txt");
+        self.land(&path, &bytes)?;
+        File::options()
+            .write(true)
+            .open(&path)
+            .and_then(|file| file.set_modified(at))
+            .map_err(|why| format!("{}: {why}", path.display()))
+    }
+
     /// The `states` header for this host, as the executor declares them.
     fn states(&self) -> &'static str {
         if self.host == "export" {
@@ -637,6 +683,8 @@ mod tests {
     use crate::protocol::{Envelope, frame, parse};
     use crate::publish::send;
     use crate::testing::{Sandbox, entries, slurp};
+
+    use std::time::Duration;
 
     fn encoded(headers: &[(&str, &str)], body: &[u8]) -> Vec<u8> {
         encode(headers, body).expect("the envelope encodes")
@@ -991,6 +1039,93 @@ mod tests {
             opened(&Sandbox::new(), "export").states(),
             EXPORT_STATES,
             "and the other host's states"
+        );
+    }
+
+    /// The ten heartbeat headers, in the order the executor writes them.
+    const BEAT: [&str; 10] = [
+        "protocol",
+        "host",
+        "stamp",
+        "transport",
+        "phase",
+        "armed",
+        "since",
+        "ticks",
+        "last_callback",
+        "callbacks",
+    ];
+
+    /// The beat's headers, read back off the disk.
+    fn beaten(s: &Standin, at: SystemTime) -> Vec<(String, String)> {
+        s.beat(at).expect("the beat publishes");
+        let (headers, body) = decoded(&slurp(&s.output().join("heartbeat.txt")));
+        assert!(body.is_empty(), "the heartbeat carries no body");
+        headers
+    }
+
+    #[test]
+    fn the_beat_lands_under_the_output_with_the_time_it_was_given() {
+        let b = Sandbox::new();
+        let s = opened(&b, "hook");
+        let at = SystemTime::now() - Duration::from_secs(90);
+        let headers = beaten(&s, at);
+        assert_eq!(
+            entries(s.output()),
+            "heartbeat.txt rpc",
+            "under its final name and no .tmp left behind"
+        );
+        let names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, BEAT, "every header, in the writer's order");
+        let field = |name: &str| header(&headers, name).expect(name).to_owned();
+        assert_eq!(field("protocol"), "2");
+        assert_eq!(field("host"), "hook");
+        assert_eq!(field("stamp"), s.stamp);
+        assert_eq!(field("transport"), s.session().display().to_string());
+        assert_eq!(field("phase"), "menu");
+        assert_eq!(field("armed"), "no", "a session loads dormant");
+        assert_eq!(field("since"), s.since);
+        assert_eq!(field("ticks"), "0");
+        assert_eq!(field("last_callback"), "", "none has fired");
+        assert_eq!(field("callbacks"), "");
+        // Within a second, not equal: a volume whose timestamps are coarse
+        // will not give back the instant it was handed.
+        let modified = fs::metadata(s.output().join("heartbeat.txt"))
+            .and_then(|m| m.modified())
+            .expect("the beat has a modification time");
+        let off = modified
+            .duration_since(at)
+            .or_else(|_| at.duration_since(modified))
+            .expect("one is after the other");
+        assert!(off < Duration::from_secs(1), "{off:?} off the time given");
+    }
+
+    #[test]
+    fn armed_and_the_phase_moved_between_beats_are_the_next_beats() {
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        let now = SystemTime::now();
+        assert_eq!(header(&beaten(&s, now), "armed"), Some("no"));
+        s.armed = true;
+        s.phase = "mission".to_owned();
+        s.since = "2026-09-19 11:05:00".to_owned();
+        s.tick = 7;
+        s.last_callback = "onSimulationStart@3".to_owned();
+        s.callbacks = vec![
+            "onSimulationStart".to_owned(),
+            "onMissionLoadEnd".to_owned(),
+        ];
+        let headers = beaten(&s, now);
+        let field = |name: &str| header(&headers, name).expect(name).to_owned();
+        assert_eq!(field("armed"), "yes");
+        assert_eq!(field("phase"), "mission");
+        assert_eq!(field("since"), "2026-09-19 11:05:00");
+        assert_eq!(field("ticks"), "7");
+        assert_eq!(field("last_callback"), "onSimulationStart@3");
+        assert_eq!(
+            field("callbacks"),
+            "onSimulationStart,onMissionLoadEnd",
+            "joined with commas, as the executor concatenates them"
         );
     }
 
