@@ -110,13 +110,17 @@ rule alone.
 **That is narrower than the document's rule, deliberately.** The frozen text
 says a chunk that is not on the list is not a game-state read; the check here
 says a read-shaped chunk naming a callee the list does not hold is refused, and
-an `eval` written some other way is held to the never rule and to no list. The
-window carries exactly one such `eval`, the probe, and nothing in this crate
-can publish another; the gap is what a future caller handing `publish_reads` a
-body of its own would walk through, and a marker on the spec saying "this is
-not a read" would close it. It is not closed now because the only caller is
-`gather` and inventing a marker for a caller that does not exist would be
-guessing at its shape.
+an `eval` written some other way is held to the never rule and to no list.
+Read-shaped is read off the text between the body's first `pcall(` and the next
+`)`, not off the call the chunk actually makes, so a body naming a listed read
+there — in a comment, say — satisfies the allowlist while calling something
+else; that is the same gap seen from its other end. The window carries exactly
+one such `eval`, the probe, and nothing in this crate can publish another; the
+gap is what a future caller handing `publish_reads` a body of its own would
+walk through, and a marker on the spec saying "this is not a read" would close
+both halves of it. It is not closed now because the only caller is `gather` and
+inventing a marker for a caller that does not exist would be guessing at its
+shape.
 
 **The chunkname is `=dcs-eval read <callee>`**, so a crash, a raise and a log
 line all say which read it was, which is the whole reason for one chunk each.
