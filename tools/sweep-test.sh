@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=29
+CASES=30
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -621,7 +621,37 @@ check 'the run says how much of the whole it covered' \
 out=$(run_ --only fixture/applies) && got=0 || got=$?
 tree_intact || got=98
 check 'a filtered run cannot be read as a whole one' \
-    0 "$got" "1 of 2 in-scope controls performed" "$out"
+    0 "$got" "1 of 2 in-scope controls performed, 0 unperformed" "$out"
+
+# A control whose mutation no longer applies has to come off the coverage
+# figure as well as out of the summary, or the line the runner exists to keep
+# honest overstates by exactly the controls it could not perform.
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/applies
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+
+### fixture/anchor-gone
+
+- command: `sh -c 'exit 0'`
+- reddens: `held`
+
+```sweep-edit beta.txt
+- a line beta does not carry
++ replaced
+```
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+check 'a control that could not be performed comes off the coverage figure' \
+    1 "$got" "1 of 2 in-scope controls performed, 1 unperformed" "$out"
 
 # --- the gate that stops the inventory judging its own coverage -------------
 #

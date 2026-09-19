@@ -476,6 +476,9 @@ reddened=0
 green=0
 unperformed_n=0
 performed=0
+# In controls rather than entries, because the coverage line counts controls:
+# performed and unperformed_c together are the in-scope figure.
+unperformed_c=0
 failures=0
 
 report() {
@@ -486,13 +489,13 @@ report() {
 
 while IFS="$US" read -r id kind cmd reddens controls reason; do
     selected "$id" || continue
-    performed=$((performed + controls))
     note_breadcrumb "$id"
 
     base=$(baseline_of "$cmd")
     if [ -n "$base" ]; then
         report UNPERFORMED "$id" "$base"
         unperformed_n=$((unperformed_n + 1))
+        unperformed_c=$((unperformed_c + controls))
         failures=$((failures + 1))
         continue
     fi
@@ -500,11 +503,17 @@ while IFS="$US" read -r id kind cmd reddens controls reason; do
     if ! apply_control "$id"; then
         report UNPERFORMED "$id" "$unperformed"
         unperformed_n=$((unperformed_n + 1))
+        unperformed_c=$((unperformed_c + controls))
         failures=$((failures + 1))
         restore_all || exit 2
         continue
     fi
 
+    # Counted here and nowhere earlier: a control is performed when its
+    # mutation is in the tree and its command has been run under it. Counting
+    # at the top of the loop would let the coverage line claim a control the
+    # run reported UNPERFORMED — overstating exactly the figure it is for.
+    performed=$((performed + controls))
     run_command "$cmd"
     failed=$(failing_checks)
     restore_all || exit 2
@@ -551,7 +560,8 @@ EOF
 printf '\n'
 printf 'coverage: %s of %s controls swept, %s out of scope\n' \
     "$performed" "$((in_total + out_total))" "$out_total"
-printf '          %s of %s in-scope controls performed\n' "$performed" "$in_total"
+printf '          %s of %s in-scope controls performed, %s unperformed\n' \
+    "$performed" "$in_total" "$unperformed_c"
 printf '%s\n' "$rows" | while IFS="$US" read -r id kind cmd reddens controls reason; do
     [ "$kind" = out ] || continue
     printf '          %s not swept: %s controls, %s\n' "$id" "$controls" "$reason"
