@@ -416,6 +416,53 @@ fn this_sessions_heartbeat(s: &Session) -> Result<Option<Heartbeat>, WaitError> 
     }
 }
 
+/// How often a wait looks again. The fallback the specification keeps for
+/// a watch that reports nothing, which is what this is today: a watch on
+/// the reply directory is unreliable on some filesystems and the failure
+/// would be silent, so the poll stays whatever else is added beside it.
+const POLL: Duration = Duration::from_millis(25);
+
+/// Wait for something to happen in the reply directory, for at most
+/// `upto`.
+///
+/// The whole of the loop's sleeping is here, behind one function, so that
+/// an event-driven watch can take the directory without anything in the
+/// table, in `decide` or in `collect` knowing the difference: it would
+/// return early on an event and fall back to this same sleep when it
+/// reports nothing.
+fn settle(res: &Path, upto: Duration) {
+    let _ = res;
+    std::thread::sleep(upto.min(POLL));
+}
+
+/// The answer to one request, waited for.
+///
+/// A reply returns at once. A reply carrying another session's stamp is
+/// discarded and the loop goes on to read the table: there is nowhere in
+/// an outcome to put it and nothing that would read it. A terminal
+/// outcome returns at once, since nothing will change it. Otherwise the
+/// wait goes round until `upto` is spent and the last `pending` comes
+/// back — running out of time is never a failure, and the table is read at
+/// least once however little time there was.
+pub fn wait(s: &Session, sent: &Sent, upto: Duration) -> Result<Outcome, WaitError> {
+    let deadline = Instant::now() + upto;
+    loop {
+        let now = Instant::now();
+        if let Collected::Reply(envelope) = collect(s, sent.id())? {
+            return Ok(Outcome::Reply(envelope));
+        }
+        let outcome = decide(s, sent, now, SystemTime::now())?;
+        if outcome.terminal() {
+            return Ok(outcome);
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Ok(outcome);
+        }
+        settle(s.res(), left);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -850,5 +897,105 @@ mod tests {
             "{superseded:?}"
         );
         assert_eq!(superseded.id(), ID);
+    }
+
+    // ---- the wait, over the poll ------------------------------------------
+
+    /// A session that is alive and ticking, so the table says `pending`
+    /// and the wait is about the reply directory and nothing else.
+    fn ticking(b: &Sandbox) -> (Standin, Session) {
+        let mut s = standin(b);
+        s.pid = std::process::id();
+        s.armed = true;
+        let session = address(&s);
+        s.beat(SystemTime::now()).expect("a fresh beat");
+        (s, session)
+    }
+
+    #[test]
+    fn wait_returns_the_reply_as_soon_as_it_lands() {
+        let b = Sandbox::new();
+        let (s, session) = ticking(&b);
+        let sent = just_sent();
+        let got = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                std::thread::sleep(Duration::from_millis(60));
+                s.reply(ID, "ok", &[("op", "ping")], b"pong")
+                    .expect("the reply publishes");
+            });
+            wait(&session, &sent, Duration::from_secs(5)).expect("the wait reads")
+        });
+        let Outcome::Reply(envelope) = got else {
+            panic!("the reply, not {got:?}");
+        };
+        assert_eq!(envelope.body, b"pong", "landed after more than one poll");
+        assert_eq!(envelope.headers.get("status"), Some("ok"));
+    }
+
+    #[test]
+    fn wait_hands_back_pending_when_its_time_is_up_and_that_is_not_a_failure() {
+        let b = Sandbox::new();
+        let (_s, session) = ticking(&b);
+        let got = wait(&session, &just_sent(), Duration::from_millis(80))
+            .expect("running out of time is not an error");
+        assert_eq!(pending_of(&got), ("menu", None), "{got:?}");
+        assert!(!got.terminal(), "and it is collectable later");
+    }
+
+    #[test]
+    fn wait_stops_at_once_on_a_terminal_outcome() {
+        // An upper bound only. A lower one would be asserting that the
+        // machine is slow.
+        let b = Sandbox::new();
+        let (mut s, session) = ticking(&b);
+        s.stamp = format!("{}-restarted", s.stamp);
+        s.handshake().expect("the new session's handshake");
+        let began = Instant::now();
+        let got = wait(&session, &just_sent(), Duration::from_secs(5)).expect("the wait reads");
+        assert!(matches!(got, Outcome::Superseded { .. }), "{got:?}");
+        assert!(
+            began.elapsed() < Duration::from_secs(1),
+            "it did not wait its five seconds out: {:?}",
+            began.elapsed()
+        );
+    }
+
+    #[test]
+    fn wait_keeps_looking_after_it_discards_a_foreign_reply() {
+        let b = Sandbox::new();
+        let (mut s, session) = ticking(&b);
+        let mine = s.stamp.clone();
+        s.stamp = format!("{mine}-restarted");
+        s.reply(ID, "ok", &[], b"not yours")
+            .expect("the foreign reply publishes");
+        s.stamp = mine;
+        let got = wait(&session, &just_sent(), Duration::from_millis(80))
+            .expect("a foreign reply is not a refusal");
+        assert_eq!(
+            pending_of(&got),
+            ("menu", None),
+            "it went on to the table rather than handing the reply back: {got:?}"
+        );
+        assert_eq!(
+            entries(session.res()),
+            format!("{ID}.res"),
+            "and left the file where it was"
+        );
+    }
+
+    #[test]
+    fn wait_names_the_file_when_the_heartbeat_will_not_parse() {
+        let b = Sandbox::new();
+        let (_s, session) = ticking(&b);
+        std::fs::write(session.heartbeat(), b"this is not an envelope").expect("the bytes land");
+        let err = wait(&session, &just_sent(), Duration::from_secs(5))
+            .expect_err("a heartbeat that is there and will not read is a refusal");
+        assert!(matches!(err.kind, WaitErrorKind::Read(_)), "{err}");
+        assert_eq!(err.path, session.heartbeat());
+        assert!(
+            err.to_string()
+                .starts_with(&format!("{}: ", session.heartbeat().display())),
+            "{err}"
+        );
     }
 }
