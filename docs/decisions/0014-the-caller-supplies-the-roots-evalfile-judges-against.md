@@ -174,3 +174,31 @@ What this decision does not settle is everything that needs a byte: the hash,
 the BOM, the shebang and the send are the file reader's, and the gap between
 the stat and the read — a file that grows after it was measured — is there
 too. `check` hands back what the stat said and says so.
+
+Two more obligations sit on the far side of that boundary, and the reader
+owns both.
+
+The first is the other gap in the same place. `paths::resolve` canonicalises
+the nearest existing ancestor and puts the rest of the path back on, so a
+`Real` for a leaf that does not exist yet carries a final segment nothing
+followed. A caller can resolve `<project>\x.lua` while it is absent, `check`
+can admit it, and before the file is opened anyone who can write in that
+allowed root — the agent's own project directory — can create `x.lua` as a
+junction into the install, which `fs::metadata` follows and a read would
+follow too. Nothing in `check` can close that: the judgement is made when it
+is called, and the path is opened later by someone else. What closes it is
+the reader judging the handle it actually opened — the final path of the open
+file, not the path it was handed — or refusing a resolved leaf that is not
+there. Either answer belongs to the reader; what belongs here is saying that
+one is owed.
+
+The second is the header set. `check` counts the `headers` it is given, and
+nothing binds them to the headers the caller goes on to send: measure with
+`op` and `state`, then send a request carrying `chunkname` and `id` as well,
+and the framed request is over `max_request_bytes` after this side has
+already handed over the whole file — the case the ceiling exists to avoid
+here rather than at the executor. `check` cannot check it without building
+the headers itself, which is the circularity rejected above. So it is a
+contract, stated in the doc comment and repeated here: the caller measures
+with the exact set it will send, and the reader that assembles the request is
+the one holding that obligation.

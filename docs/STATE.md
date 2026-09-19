@@ -36,9 +36,10 @@ broken. Empty this when the task closes.*
 
 **Task T55** — the file-source reader `evalFile`: SHA-256, BOM strip, shebang
 blank, CRLF passthrough, `chunkname: @<resolved path>` and the provenance
-record. Everything needing a byte, T34 having settled everything decided
-before one. Done when `cargo test -p dcs-eval file_source` prints its count.
-Needs T34.
+record. Everything needing a byte, T34 having settled what is decided before
+one, plus ADR 0014's two obligations: judge the handle opened rather than the
+path given, and frame with the exact headers `check` measured. Done when
+`cargo test -p dcs-eval file_source` prints its count. Needs T34.
 
 **An agent verifies** it: `mise exec -- cargo test` on this machine. The
 raise on line 47 is the reference interpreter's, not DCS's, so the
