@@ -445,6 +445,27 @@ fn settle(res: &Path, upto: Duration) {
     std::thread::sleep(upto.min(POLL));
 }
 
+/// The instant `upto` from `now`, or the furthest one this clock can name
+/// where `upto` reaches past the end of it.
+///
+/// Saturating rather than refusing, because of what a deadline is for. A
+/// caller passing a duration bigger than the clock can hold is saying it
+/// will wait as long as it takes, and the longest wait this clock can
+/// express is the nearest thing to that there is; turning that into an
+/// error would make the one call in this module that never fails on time
+/// fail on asking for too much of it. Halving finds the furthest
+/// representable instant in a few dozen steps, and ends at `now` — a wait
+/// of no time, which is still an outcome — if even zero would not add.
+fn latest(now: Instant, upto: Duration) -> Instant {
+    let mut step = upto;
+    loop {
+        if let Some(at) = now.checked_add(step) {
+            return at;
+        }
+        step /= 2;
+    }
+}
+
 /// The answer to one request, waited for.
 ///
 /// A reply returns at once. A reply carrying another session's stamp is
@@ -455,7 +476,7 @@ fn settle(res: &Path, upto: Duration) {
 /// back — running out of time is never a failure, and the table is read at
 /// least once however little time there was.
 pub fn wait(s: &Session, sent: &Sent, upto: Duration) -> Result<Outcome, WaitError> {
-    let deadline = Instant::now() + upto;
+    let deadline = latest(Instant::now(), upto);
     loop {
         let now = Instant::now();
         if let Collected::Reply(envelope) = collect(s, sent.id())? {
@@ -1036,6 +1057,35 @@ mod tests {
             format!("{ID}.res"),
             "and left the file where it was"
         );
+    }
+
+    #[test]
+    fn a_deadline_past_the_end_of_the_clock_is_the_furthest_one_it_can_name() {
+        // Plain addition panics here. A caller asking to wait longer than
+        // the clock can count is asking to wait as long as it takes, and
+        // the answer is the longest wait there is rather than an error.
+        let now = Instant::now();
+        let far = latest(now, Duration::MAX);
+        assert!(
+            far.duration_since(now) > Duration::from_secs(365 * 24 * 3600),
+            "it saturated far out, not back to now: {:?}",
+            far.duration_since(now)
+        );
+        assert_eq!(
+            latest(now, Duration::ZERO),
+            now,
+            "and a deadline that fits is just itself"
+        );
+
+        // And the whole wait survives one, which is the panic the caller
+        // would otherwise have met. A terminal outcome so the test does
+        // not sit here for the rest of the clock.
+        let b = Sandbox::new();
+        let (mut s, session) = ticking(&b);
+        s.stamp = format!("{}-restarted", s.stamp);
+        s.handshake().expect("the new session's handshake");
+        let got = wait(&session, &just_sent(), Duration::MAX).expect("the wait reads");
+        assert!(matches!(got, Outcome::Superseded { .. }), "{got:?}");
     }
 
     #[test]
