@@ -479,9 +479,8 @@ impl Heartbeat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::frame;
     use crate::standin::Standin;
-    use crate::testing::{Sandbox, slurp};
+    use crate::testing::{Sandbox, framed, lines, past_ascii, real, slurp, with, without};
 
     /// A session with its handshake published, and the bytes it wrote.
     fn published(b: &Sandbox) -> (Standin, Vec<u8>) {
@@ -489,67 +488,6 @@ mod tests {
         s.handshake().expect("the handshake publishes");
         let bytes = slurp(&s.output().join("executor.txt"));
         (s, bytes)
-    }
-
-    /// The header lines of an envelope, to be edited and framed again.
-    fn lines(bytes: &[u8]) -> Vec<(String, String)> {
-        protocol::parse(bytes)
-            .expect("the fixture parses")
-            .headers
-            .iter()
-            .map(|(n, v)| (n.to_owned(), v.to_owned()))
-            .collect()
-    }
-
-    /// Header lines back into bytes. `frame`, not the stand-in's encoder,
-    /// because a fixture is composed here rather than published.
-    fn framed(lines: &[(String, String)]) -> Vec<u8> {
-        let refs: Vec<(&str, &str)> = lines
-            .iter()
-            .map(|(n, v)| (n.as_str(), v.as_str()))
-            .collect();
-        frame(&refs, b"").expect("the fixture frames")
-    }
-
-    /// The same envelope without `name`.
-    fn without(bytes: &[u8], name: &str) -> Vec<u8> {
-        let mut lines = lines(bytes);
-        lines.retain(|(n, _)| n != name);
-        framed(&lines)
-    }
-
-    /// The same envelope with `name` carrying `value`.
-    fn with(bytes: &[u8], name: &str, value: &str) -> Vec<u8> {
-        let mut lines = lines(bytes);
-        for line in lines.iter_mut() {
-            if line.0 == name {
-                line.1 = value.to_owned();
-            }
-        }
-        framed(&lines)
-    }
-
-    /// The same envelope with one byte of `name`'s value past ASCII.
-    /// `frame` refuses such a value outright, and the executor's framer
-    /// refuses it too, so the only way to a fixture is to edit the bytes
-    /// after they are framed.
-    fn past_ascii(bytes: &[u8], name: &str) -> Vec<u8> {
-        let mut out = bytes.to_vec();
-        let needle = format!("\n{name}: ").into_bytes();
-        let at = out
-            .windows(needle.len())
-            .position(|w| w == needle.as_slice())
-            .expect("the header is in the fixture")
-            + needle.len();
-        out[at] = 0xC3;
-        out
-    }
-
-    /// A fixture path is what the filesystem says it is, never the spelling
-    /// that made it: the sandbox sits under a temp directory this host
-    /// spells short, and a `Real` compares bytes.
-    fn real(path: &Path) -> Real {
-        paths::resolve(path).expect("the path resolves")
     }
 
     fn at(bytes: &[u8]) -> Handshake {

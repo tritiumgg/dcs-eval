@@ -1,10 +1,20 @@
 //! What the tests of more than one module need: a directory to work in that
-//! is gone when the test ends, and two readers of what was left in it.
-//! Compiled for the crate's own tests only.
+//! is gone when the test ends, two readers of what was left in it, and the
+//! means to compose an envelope by hand. Compiled for the crate's own tests
+//! only.
+//!
+//! A fixture that has to say something the stand-in never writes — another
+//! session's stamp, a header absent, a byte past ASCII — is built by taking
+//! published bytes apart and framing them again. More than one module's
+//! tests want that now, so it lives here rather than in whichever one
+//! needed it first.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use crate::paths::{self, Real};
+use crate::protocol::{self, frame};
 
 /// A fresh directory under the host's temp directory, gone when the test
 /// ends. The name carries the process id and a counter, and the directory
@@ -137,4 +147,65 @@ fn cmd(line: &str) -> String {
         String::from_utf8_lossy(&out.stderr).trim()
     );
     String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The header lines of an envelope, to be edited and framed again.
+pub(crate) fn lines(bytes: &[u8]) -> Vec<(String, String)> {
+    protocol::parse(bytes)
+        .expect("the fixture parses")
+        .headers
+        .iter()
+        .map(|(n, v)| (n.to_owned(), v.to_owned()))
+        .collect()
+}
+
+/// Header lines back into bytes. `frame`, not the stand-in's encoder,
+/// because a fixture is composed here rather than published.
+pub(crate) fn framed(lines: &[(String, String)]) -> Vec<u8> {
+    let refs: Vec<(&str, &str)> = lines
+        .iter()
+        .map(|(n, v)| (n.as_str(), v.as_str()))
+        .collect();
+    frame(&refs, b"").expect("the fixture frames")
+}
+
+/// The same envelope without `name`.
+pub(crate) fn without(bytes: &[u8], name: &str) -> Vec<u8> {
+    let mut lines = lines(bytes);
+    lines.retain(|(n, _)| n != name);
+    framed(&lines)
+}
+
+/// The same envelope with `name` carrying `value`.
+pub(crate) fn with(bytes: &[u8], name: &str, value: &str) -> Vec<u8> {
+    let mut lines = lines(bytes);
+    for line in lines.iter_mut() {
+        if line.0 == name {
+            line.1 = value.to_owned();
+        }
+    }
+    framed(&lines)
+}
+
+/// The same envelope with one byte of `name`'s value past ASCII.
+/// `frame` refuses such a value outright, and the executor's framer
+/// refuses it too, so the only way to a fixture is to edit the bytes
+/// after they are framed.
+pub(crate) fn past_ascii(bytes: &[u8], name: &str) -> Vec<u8> {
+    let mut out = bytes.to_vec();
+    let needle = format!("\n{name}: ").into_bytes();
+    let at = out
+        .windows(needle.len())
+        .position(|w| w == needle.as_slice())
+        .expect("the header is in the fixture")
+        + needle.len();
+    out[at] = 0xC3;
+    out
+}
+
+/// A fixture path is what the filesystem says it is, never the spelling
+/// that made it: the sandbox sits under a temp directory this host
+/// spells short, and a `Real` compares bytes.
+pub(crate) fn real(path: &Path) -> Real {
+    paths::resolve(path).expect("the path resolves")
 }
