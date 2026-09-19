@@ -10,6 +10,7 @@
 pub mod paths;
 pub mod protocol;
 pub mod publish;
+pub mod readers;
 
 // The stand-in is a test double: the crate's own tests always have it, and
 // another crate's tests get it through the `standin` feature. A user's
