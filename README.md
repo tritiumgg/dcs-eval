@@ -70,6 +70,11 @@ puts it back.
 `unknown` is a value, not a guess: an axis nothing measured says so and says
 why.
 
+`dcs_game_state` sends a fixed list of reads and nothing else; three calls
+suspected in a DCS crash are never sent at all. A second tier of four reads,
+the ones with no precedent for the state they would run in, is built and off,
+and there is no way to ask for it yet — *not built*.
+
 `dcs_eval_file` reads only what lies under a directory you allow it, and
 refuses the `Config\` of every DCS write directory it is told about, and the
 DCS install, whatever else is allowed — the first holds your account
