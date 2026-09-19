@@ -18,7 +18,7 @@ citations below point into documents that still say "bridge".
 
 ## Granularity
 
-This plan carries **56 tasks across 10 stages**. The count is driven by the four right-sizing
+This plan carries **57 tasks across 10 stages**. The count is driven by the four right-sizing
 tests, and the splits fall at interfaces rather than at steps: each Lua carrier (`hook` local,
 `net.dostring_in`, `a_do_script`) is one task because changing how one crosses a state
 boundary must not rewrite the others; the client and the server are separate crates and separate
@@ -274,6 +274,7 @@ fallback and the watch lands on top of it. ADR 0011 is why none of this brings i
 | T56 | The event-driven reply watch (`ReadDirectoryChangesW`, declared under ADR 0011), with the poll kept as the fallback `bridge.md` §3.2 requires for a watch that reports nothing | `cargo test -p dcs-eval watch` shows a reply woken on rather than polled for, a watch reporting nothing still answered by the poll, and no handle held once `wait` returns; mutation: a watch left open across a `wait` reddens the handle check | T54 | developer-only |
 | T35 | Game-state reads: the tier-1 chunks (one `pcall` each), the constant read-list with tier 2 built and left off until T50, never-send-unlisted | `cargo test -p dcs-eval game_reads` shows each read as its own request under one `pcall` and `getMissionLoaded`, `getPlayerUnitType` and `getMissionTheatre` absent by construction; mutation: sending a `DCS.*` name not in the constant list reddens the never-send check | T33 | developer-only |
 | T36 | Game-state derivation: the axes, `unknown` as a value, no default arm | `cargo test -p dcs-eval game_state` shows `loading` with no round trip, `paused (read)` noting a disagreeing callback phase, `session: client` on a `refused` `gui` probe, `unknown: <error>` on an errored axis alone, `unknown (tier 2 off)` when off; mutation: any axis filled from another's evidence reddens a no-default-arm check | T35,T31 | developer-only |
+| T57 | The mutation sweep, scripted: one runner that applies each control's named mutation to a copy, runs the one command that must redden, restores, and reports | `sh tools/sweep.sh` prints one row per control — the mutation, the command, the tests that failed — and exits non-zero if any control stayed green or any file did not come back identical; mutations: a control whose mutation no longer applies must be reported as unperformed rather than skipped silently, and a runner that restores with `git checkout` rather than from its own copy reddens the tree-clean check | T36,T53 | developer-only |
 
 **Stage command:** `cargo test -p dcs-eval paths readers wait status pipeline file_refusals
 file_source watch game_reads game_state`.  A filter here is a substring of a Rust test path, so it

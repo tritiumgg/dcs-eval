@@ -109,7 +109,7 @@ refuses to run anything under a different interpreter.
 ## Where things are written down
 
 - `docs/STATE.md` — what was just done and what is next. Read it first.
-- `docs/PLAN.md` — build order, 56 tasks in 10 stages.
+- `docs/PLAN.md` — build order, 57 tasks in 10 stages.
 - `docs/specs/` — the two frozen specifications the build starts from. They are
   not maintained and the build drifts from them by design.
 - `docs/decisions/` — where the build went somewhere the specifications did
