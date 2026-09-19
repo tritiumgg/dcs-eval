@@ -165,7 +165,7 @@ if [ "$list" -eq 1 ]; then
     printf '%s\n' "$rows" | while IFS="$US" read -r id kind cmd reddens controls reason; do
         selected "$id" || continue
         if [ "$kind" = out ]; then
-            printf 'out-of-scope  %-38s %s controls, %s\n' "$id" "$controls" "$reason"
+            printf 'out-of-scope  %-38s %s mutations, %s\n' "$id" "$controls" "$reason"
         else
             printf 'control       %-38s %s\n' "$id" "$cmd"
         fi
@@ -594,16 +594,21 @@ $rows
 EOF
 
 printf '\n'
-# The out-of-scope figure is a hand count in the inventory and nothing
-# re-derives it from the plan, so the line says so rather than letting a
-# reader take the whole total for something a tool checked.
-printf 'coverage: %s of %s controls swept, %s out of scope (counted by hand off the plan)\n' \
+# What the total counts is said in the line itself. It is one per mutation a
+# Stage 3–6 plan done-condition names, which is neither the number of checks
+# this build has nor the number of mutations its sessions performed: several
+# proved more by hand than their plan cell asked for, and those are in no
+# figure here. The out-of-scope half is a hand count in the inventory that
+# nothing re-derives. Both rules are written down where the counting is.
+printf 'coverage: %s of %s mutations named by a plan done-condition swept, %s out of scope\n' \
     "$performed" "$((in_total + out_total))" "$out_total"
-printf '          %s of %s in-scope controls performed, %s unperformed, %s inconclusive\n' \
+printf '          the out-of-scope figure is counted by hand off the plan, and a mutation\n'
+printf '          proved beyond what a plan cell names is in neither figure; docs/mutations.md\n'
+printf '          %s of %s in scope performed, %s unperformed, %s inconclusive\n' \
     "$performed" "$in_total" "$unperformed_c" "$inconclusive_c"
 printf '%s\n' "$rows" | while IFS="$US" read -r id kind cmd reddens controls reason; do
     [ "$kind" = out ] || continue
-    printf '          %s not swept: %s controls, %s\n' "$id" "$controls" "$reason"
+    printf '          %s not swept: %s mutations, %s\n' "$id" "$controls" "$reason"
 done
 printf 'summary:  %s reddened, %s stayed green, %s unperformed, %s failures\n' \
     "$reddened" "$green" "$unperformed_n" "$failures"

@@ -510,6 +510,16 @@ a cell naming two edits counts two. An edit named to show that a control does
 green — is not counted, because the sweep has no verdict for an edit that is
 meant to change nothing.
 
+**So the figure a run prints counts mutations the plan names, and not every
+mutation this build has seen go red.** Several sessions broke more than their
+cell asked for: `docs/STATE.md` records twelve mutations red for T35 and eight
+for T36, where each cell names one, and five for T53, where the cell names
+four. Those extra proofs are in neither figure — not swept, not out of scope,
+not counted at all — and nothing would notice one of them going quiet, which
+is the same gap one level down that this whole file exists to close. A row
+that wants one of them re-run names it in `docs/PLAN.md` first; it then gets
+an entry here like any other, and both figures move.
+
 ### out/stages-0-to-2
 
 - out-of-scope: Milestone A, closed before this runner existed, and several of

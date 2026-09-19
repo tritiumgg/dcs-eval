@@ -129,7 +129,7 @@ check 'the listing names a control and its command' \
 
 out=$(run_ --list) && got=0 || got=$?
 check 'the listing names an out-of-scope group and its count' \
-    0 "$got" "5 controls, nothing here is built yet, so there is nothing to break and nothing to put back." "$out"
+    0 "$got" "5 mutations, nothing here is built yet, so there is nothing to break and nothing to put back." "$out"
 
 out=$(run_ --list --only fixture/) && got=0 || got=$?
 case "$out" in *other/elsewhere*) got=99 ;; esac
@@ -675,12 +675,12 @@ EOF
 out=$(run_) && got=0 || got=$?
 tree_intact || got=98
 check 'the run says how much of the whole it covered' \
-    0 "$got" "coverage: 2 of 7 controls swept, 5 out of scope" "$out"
+    0 "$got" "coverage: 2 of 7 mutations named by a plan done-condition swept, 5 out of scope" "$out"
 
 out=$(run_ --only fixture/applies) && got=0 || got=$?
 tree_intact || got=98
 check 'a filtered run cannot be read as a whole one' \
-    0 "$got" "1 of 2 in-scope controls performed, 0 unperformed" "$out"
+    0 "$got" "1 of 2 in scope performed, 0 unperformed" "$out"
 
 # A control whose mutation no longer applies has to come off the coverage
 # figure as well as out of the summary, or the line the runner exists to keep
@@ -710,7 +710,7 @@ EOF
 out=$(run_) && got=0 || got=$?
 tree_intact || got=98
 check 'a control that could not be performed comes off the coverage figure' \
-    1 "$got" "1 of 2 in-scope controls performed, 1 unperformed" "$out"
+    1 "$got" "1 of 2 in scope performed, 1 unperformed" "$out"
 
 # So does a control whose mutation never built. It reached no verdict about
 # the check either, and the argument that keeps UNPERFORMED off the figure is
@@ -740,7 +740,7 @@ EOF
 out=$(run_) && got=0 || got=$?
 tree_intact || got=98
 check 'a mutation that never built comes off the coverage figure too' \
-    1 "$got" "1 of 2 in-scope controls performed, 0 unperformed, 1 inconclusive" "$out"
+    1 "$got" "1 of 2 in scope performed, 0 unperformed, 1 inconclusive" "$out"
 
 # --- the gate that stops the inventory judging its own coverage -------------
 #
