@@ -3,8 +3,10 @@
 //! the client's own serialiser turned around.
 //!
 //! It stands in for the executor's `tick` and `reply` in
-//! `DcsEvalExecutor.lua`: a session directory with `req` and `res` under a
-//! stamp, a tick that lists requests and answers them in name order, a
+//! `DcsEvalExecutor.lua`: an output directory with a session under
+//! `rpc\<stamp>` carrying `req` and `res`, as the executor lays one out
+//! when it falls back beside the output, a tick that lists requests and
+//! answers them in name order, a
 //! reply with the eight headers the executor puts first, the `ping` op,
 //! and `eval` as far as its checks go: no chunk runs here, and one that
 //! passes them is answered as one that returned nil. What it answers, it
@@ -208,6 +210,7 @@ pub struct Standin {
     /// Ticks so far. Incremented as a tick begins, so the first reply of a
     /// session says `tick: 1`.
     pub tick: u64,
+    output: PathBuf,
     session: PathBuf,
     req: PathBuf,
     res: PathBuf,
@@ -215,17 +218,21 @@ pub struct Standin {
 }
 
 impl Standin {
-    /// A session opened under `root` for `host`: `<root>/<stamp>/req` and
-    /// `res` made, the arm path named beside them and not made, since the
-    /// executor never makes it either. The stamp is the executor's shape,
-    /// the wall clock in seconds and this process's id.
+    /// A session opened for `host` with `root` as the output directory:
+    /// `<root>/rpc/<stamp>/req` and `res` made, the arm path named beside
+    /// them and not made, since the executor never makes it either. The
+    /// layout is the executor's own fallback, where the session sits under
+    /// `rpc` beside the output rather than in the temp directory, so a
+    /// client reading this side's handshake reads paths shaped like the
+    /// ones a real session names. The stamp is the executor's shape, the
+    /// wall clock in seconds and this process's id.
     pub fn open(root: &Path, host: &str) -> io::Result<Self> {
         let secs = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let stamp = format!("{secs}-{}", std::process::id());
-        let session = root.join(&stamp);
+        let session = root.join("rpc").join(&stamp);
         let req = session.join("req");
         let res = session.join("res");
         fs::create_dir_all(&req)?;
@@ -240,13 +247,19 @@ impl Standin {
             stamp,
             tick: 0,
             arm: session.join("arm"),
+            output: root.to_owned(),
             session,
             req,
             res,
         })
     }
 
-    /// The session directory, `<root>/<stamp>`.
+    /// The output directory, where the handshake and the heartbeat land.
+    pub fn output(&self) -> &Path {
+        &self.output
+    }
+
+    /// The session directory, `<output>/rpc/<stamp>`.
     pub fn session(&self) -> &Path {
         &self.session
     }
@@ -807,12 +820,14 @@ mod tests {
     fn open_makes_req_and_res_under_the_stamp_and_no_arm_file() {
         let b = Sandbox::new();
         let s = opened(&b, "hook");
+        assert_eq!(s.output(), b.path, "the root is the output directory");
+        assert_eq!(entries(&b.path), "rpc", "the transport root beside it");
         assert_eq!(
-            entries(&b.path),
+            entries(&b.join("rpc")),
             s.stamp,
             "one session directory, named by the stamp"
         );
-        assert_eq!(s.session(), b.join(&s.stamp));
+        assert_eq!(s.session(), b.join("rpc").join(&s.stamp));
         assert_eq!(entries(s.session()), "req res", "and no arm file");
         assert_eq!(s.req(), s.session().join("req"));
         assert_eq!(s.res(), s.session().join("res"));
