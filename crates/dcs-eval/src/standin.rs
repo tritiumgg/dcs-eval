@@ -541,7 +541,7 @@ impl Standin {
         if !named {
             return Answer::refusal(
                 "bad-request",
-                format!("state: {state} is not [A-Za-z][A-Za-z0-9_]*"),
+                format!("state: {} is not [A-Za-z][A-Za-z0-9_]*", excerpt(state)),
             );
         }
         let chunkname = match header(headers, "chunkname") {
@@ -1578,7 +1578,8 @@ mod tests {
         let stamp = s.stamp.clone();
         let long = "@".to_owned() + &"x".repeat(200);
         let digits = "-".to_owned() + &"1".repeat(100);
-        let cases: [(&str, &[(&str, &str)]); 13] = [
+        let wide = "9".to_owned() + &"x".repeat(99);
+        let cases: [(&str, &[(&str, &str)]); 14] = [
             ("0000000001-abcd", &[("state", "hook")]),
             (
                 "0000000002-abcd",
@@ -1616,13 +1617,14 @@ mod tests {
                 "0000000013-abcd",
                 &[("state", "hook"), ("max_instructions", &digits)],
             ),
+            ("0000000014-abcd", &[("state", &wide)]),
         ];
         for (id, extra) in cases {
             let mut headers = vec![("op", "eval"), ("for", stamp.as_str())];
             headers.extend_from_slice(extra);
             sent(&s, id, &headers, b"return 1");
         }
-        assert_eq!(s.tick().len(), 13, "every one is answered");
+        assert_eq!(s.tick().len(), 14, "every one is answered");
         for (id, name, budget) in [
             ("0000000001-abcd", "=dcs-eval", "instructions=1000000"),
             ("0000000002-abcd", "@x.lua", "instructions=1000000"),
@@ -1664,6 +1666,12 @@ mod tests {
             "0000000004-abcd",
             "bad-request",
             "state: 9x is not [A-Za-z][A-Za-z0-9_]*",
+        );
+        refused(
+            &s,
+            "0000000014-abcd",
+            "bad-request",
+            &format!("state: 9{}... is not [A-Za-z][A-Za-z0-9_]*", "x".repeat(79)),
         );
         refused(
             &s,

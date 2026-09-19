@@ -316,6 +316,11 @@ do
   t.eq(v.status, "unsupported", "unknown: a state this host does not declare is unsupported")
   t.eq(body, "nope is not a state this host serves", "unknown: naming it")
 
+  order, v, body = eval(E, frame, "5-e", "state: 9" .. string.rep("x", 99) .. "\n", "return 1")
+  t.eq(v.status, "bad-request", "long shape: a hundred bytes is still refused for its shape")
+  t.eq(body, "state: 9" .. string.rep("x", 79) .. "... is not [A-Za-z][A-Za-z0-9_]*",
+    "long shape: the state it names is cut at eighty bytes and three dots")
+
   local long = "@" .. string.rep("y", 200)
   order, v, body = eval(E, frame, "5-h", "state: hook\nchunkname: " .. long .. "\n", "return 1")
   fields(order, HEAD, "long chunkname")
