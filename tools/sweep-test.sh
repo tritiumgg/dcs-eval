@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=30
+CASES=31
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -333,6 +333,27 @@ tree_intact || got=98
 case "$out" in *REDDENED*) got=97 ;; esac
 check 'a mutation that will not build is not evidence of a red control' \
     1 "$got" "BUILD-FAILED  fixture/will-not-build" "$out"
+
+# The Lua harness catches its own load error and prints it in the shape of a
+# failing check, so a mutation that is a syntax error looks from the outside
+# like a red that moved. It is a build failure and has to be reported as one.
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/will-not-load
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "FAIL  fixture/whatever: raised: harness: cannot load the executor: unexpected symbol"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture/whatever`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+case "$out" in *REDDENED*) got=97 ;; esac
+check 'a Lua mutation that will not load is a build failure, not a red' \
+    1 "$got" "BUILD-FAILED  fixture/will-not-load" "$out"
 
 fresh_tree
 cat > "$sandbox/inventory.md" <<'EOF'

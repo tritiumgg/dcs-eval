@@ -437,6 +437,16 @@ failing_checks() {
     awk '/^test .* \.\.\. FAILED$/ || /^FAIL  / { print }' "$work/out.log"
 }
 
+# Did the mutation stop the code being loadable at all? cargo answers that by
+# exiting with no test having run, which failing_checks reads as an empty
+# result. The Lua harness does not: it catches its own load error and prints it
+# in the shape of a failing check, so a mutation that is a syntax error would
+# come back as a red that had merely moved. It says the same thing every time
+# the executor will not load, and that line is what is looked for here.
+load_failed() {
+    grep -qF 'harness: cannot load the executor' "$work/out.log"
+}
+
 # --- the run ----------------------------------------------------------------
 
 printf '%s\n' "$rows" | grep -v "${US}out${US}" > "$work/todo" || true
@@ -525,10 +535,16 @@ while IFS="$US" read -r id kind cmd reddens controls reason; do
     elif [ "$rc" -eq 124 ]; then
         report TIMEOUT "$id" "$cmd" "killed after ${timeout_s}s"
         failures=$((failures + 1))
-    elif [ -z "$failed" ]; then
+    elif [ -z "$failed" ] || load_failed; then
+        if [ -z "$failed" ]; then
+            notbuilt="exit $rc with no failing check named"
+            said=$(head -3 "$work/out.log" | tr '\n' ' ')
+        else
+            notbuilt="exit $rc and the executor would not load"
+            said=$(printf '%s\n' "$failed" | head -1)
+        fi
         report BUILD-FAILED "$id" "$cmd" \
-            "exit $rc with no failing check named; a mutation that will not build proves nothing" \
-            "$(head -3 "$work/out.log" | tr '\n' ' ')"
+            "$notbuilt; a mutation that will not build proves nothing" "$said"
         failures=$((failures + 1))
     elif printf '%s\n' "$failed" | grep -qF "$reddens"; then
         report REDDENED "$id" "$cmd" "$(printf '%s\n' "$failed" | head -4 | tr '\n' '|')"
