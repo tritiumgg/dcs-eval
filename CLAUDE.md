@@ -23,6 +23,7 @@ docs/
   STATE.md             the handoff between sessions. Read it first
   PLAN.md              build order, 57 tasks in 10 stages. Not frozen
   audit.md             what the documents disagree about
+  mutations.md         every control, its mutation, and the red it produced
   specs/               frozen: bridge.md and mcp.md. Never edited
   decisions/           where the build goes somewhere the specs did not
   conventions/         how a decision record is written
@@ -31,7 +32,8 @@ crates/dcs-mcp         the binary: the MCP server, the installer and the CLI
 types/dcs.lua          the DCS-provided globals, declared for the language server
 tools/                 mklua.sh, check-lua.sh, check-lua-test.sh, spec.sh,
                        statecheck.sh, nospecrefs.sh, hooktest.sh,
-                       buildcheck.sh, harness.lua, harness-test.sh
+                       buildcheck.sh, harness.lua, harness-test.sh,
+                       sweep.sh, sweep-test.sh, sweep-cover.sh
 tools/harness/         the harness suites, registered in suites.lua
 .claude/hooks/         the read guard, the frozen-write guard, the shell guard,
                        the commit checks, the session start, the stop check
@@ -114,6 +116,12 @@ can observe the result itself, whether it needs a maintainer reading a CI
 result, or whether only somebody at a live install can see it. Write it in
 `docs/STATE.md` under the task. An agent that skips this declares victory on
 something it never observed.
+
+**A task that builds a control adds its row to `docs/mutations.md`, in the same
+pull request.** That file is what `tools/sweep.sh` re-runs every proof from, and
+a control nobody wrote down is one nothing will ever notice going quiet.
+`tools/sweep-cover.sh` catches a plan row with no entry; it cannot catch a
+second control added to a row that already has one.
 
 ## Toolchain
 

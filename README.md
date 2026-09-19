@@ -111,9 +111,36 @@ that version with `make`, which Windows does not have. `tools/mklua.sh`
 compiles the same pinned tarball with MSVC instead, and `tools/check-lua.sh`
 refuses to run anything under a different interpreter.
 
+## The mutation sweep
+
+Every check in this build was proved by breaking the code it watches and
+watching it go red. `tools/sweep.sh` re-runs those proofs: it applies each
+recorded mutation to a file it has copied first, runs the one command that must
+fail, restores from the copy and reports one row per control.
+
+```sh
+sh tools/sweep.sh                  # every control
+sh tools/sweep.sh --list           # what the inventory holds; edits nothing
+sh tools/sweep.sh --only paths/    # one control, or one group by its slash
+```
+
+It is deliberately not part of `mise run check`: it is slow and it edits files
+in the working tree. A run over the Stage 3–6 controls takes about three and a
+half minutes on a warm `target/`; a cold checkout pays a full workspace build
+first. It restores from its own copies and never from git, so an uncommitted
+edit of your own survives a run — and a run that fails leaves the tree exactly
+as it found it. It exits 0 when every control reddened as recorded, 1 when one
+did not, and 2 when the tree cannot be vouched for, which is the code to stop
+and look at.
+
+The controls themselves are `docs/mutations.md`, which also says what the sweep
+does *not* cover. A task that builds a control adds its entry there.
+
 ## Where things are written down
 
 - `docs/STATE.md` — what was just done and what is next. Read it first.
+- `docs/mutations.md` — every control, the mutation that must redden it, and
+  what was observed when it did.
 - `docs/PLAN.md` — build order, 57 tasks in 10 stages.
 - `docs/specs/` — the two frozen specifications the build starts from. They are
   not maintained and the build drifts from them by design.
