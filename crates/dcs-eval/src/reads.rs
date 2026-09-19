@@ -1094,6 +1094,99 @@ mod game_reads {
     }
 
     #[test]
+    fn tier_two_is_not_published_while_the_switch_is_off() {
+        // The absence and the control are one assertion: a gather that
+        // published nothing would fail the five before it could pass the
+        // four, so the absence cannot be true vacuously.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        for callee in tier_one() {
+            assert_eq!(
+                carrying(&s, callee),
+                1,
+                "the control: no request names {callee}"
+            );
+        }
+        for (n, seen) in s.seen().iter().enumerate() {
+            let text = String::from_utf8_lossy(&seen.bytes);
+            for off in [
+                "isMultiplayer",
+                "isServer",
+                "isTrackPlaying",
+                "get_my_player_id",
+            ] {
+                assert!(
+                    !text.contains(off),
+                    "request {} carries {off} and tier 2 is off",
+                    n + 1
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_tier_two_read_with_the_switch_off_is_not_sent_rather_than_unanswered() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        for key in ["multiplayer", "server", "track", "player_id"] {
+            assert_eq!(
+                readings.of(key),
+                Some(&Answer::NotSent {
+                    why: NotSent::TierTwoOff
+                }),
+                "{key}"
+            );
+        }
+        assert_eq!(readings.skipped().len(), 4);
+    }
+
+    #[test]
+    fn a_tier_two_read_is_not_sent_during_a_load_either_and_says_the_switch_not_the_load() {
+        // The tier filter runs first: a read the switch would not have
+        // sent is not held back by the load, because it would not have
+        // gone either way.
+        let b = Sandbox::new();
+        let (_s, h) = ticking(&b);
+        let readings = gather(&h, "load", Tiers::default(), UPTO).expect("not refused");
+        assert_eq!(
+            readings.of("multiplayer"),
+            Some(&Answer::NotSent {
+                why: NotSent::TierTwoOff
+            })
+        );
+        assert_eq!(
+            readings.of("pause"),
+            Some(&Answer::NotSent {
+                why: NotSent::Loading
+            })
+        );
+    }
+
+    #[test]
+    fn the_switch_exists_and_sends_nine_when_it_is_asked_for() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::with_tier_two(), 9);
+        for r in listed(Tiers::with_tier_two()) {
+            assert_eq!(
+                carrying(&s, &chunkname(r.callee())),
+                1,
+                "no request names {}",
+                r.callee()
+            );
+        }
+        assert_eq!(s.seen().len(), 9);
+    }
+
+    #[test]
+    fn the_default_tiers_value_is_tier_one_alone() {
+        assert!(!Tiers::default().tier_two());
+        assert!(Tiers::with_tier_two().tier_two());
+    }
+
+    #[test]
     fn the_tier_one_list_is_the_five_ed_calls_from_a_hook() {
         assert_eq!(
             tier_one(),
