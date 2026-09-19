@@ -9,6 +9,7 @@
 
 pub mod id;
 pub mod paths;
+pub mod pipeline;
 pub mod protocol;
 pub mod publish;
 pub mod readers;
