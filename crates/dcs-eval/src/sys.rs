@@ -337,10 +337,12 @@ impl Changes {
         // Delete sharing is deliberately not granted. A held directory
         // refusing its own removal is what the executor's sibling sweep
         // reads as "a client is still watching this session", and it is
-        // what every check here that no handle outlives a wait rests on;
-        // granting it is the one flag that could let a removal through
-        // and make all of that vacuous. Read and write sharing stay, so
-        // the executor's writes into the directory are never blocked.
+        // what every check here that no handle outlives a wait rests on.
+        // Granting it was tried, and on this Windows the removal then
+        // went through and the refusal stopped happening at all, so the
+        // exclusion is load-bearing rather than belt-and-braces. Read
+        // and write sharing stay, so the executor's writes into the
+        // directory are never blocked.
         let dir_handle = unsafe {
             CreateFileW(
                 wide.as_ptr(),
