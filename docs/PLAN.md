@@ -18,7 +18,7 @@ citations below point into documents that still say "bridge".
 
 ## Granularity
 
-This plan carries **53 tasks across 10 stages**. The count is driven by the four right-sizing
+This plan carries **56 tasks across 10 stages**. The count is driven by the four right-sizing
 tests, and the splits fall at interfaces rather than at steps: each Lua carrier (`hook` local,
 `net.dostring_in`, `a_do_script`) is one task because changing how one crosses a state
 boundary must not rewrite the others; the client and the server are separate crates and separate
@@ -249,22 +249,34 @@ while the game is played and wakes on a file.
 
 ## Stage 6 — The client library completed   *(Milestone B)*
 
-The `dcs-eval` crate's remaining surface: containment, the death-vs-silence outcome table, status,
-the pipeline, the file source, and the game-state reads and their derivation.
+The `dcs-eval` crate's remaining surface: containment, the readers, the death-vs-silence outcome
+table, status, the pipeline, the file source, and the game-state reads and their derivation.
+
+Three rows here were one row each when the stage was first written. T31 carried the handshake and
+heartbeat readers, `collect`, `wait` and the §4.4 table together, which is a file-format interface
+and a decision table in one task and about 1,500 lines with its tests; T34 carried what `evalFile`
+refuses before it reads a byte and what it does with the bytes afterwards, which `mcp.md` §7 lists
+as three separate controls. Both are split at the interface, as this plan's granularity rule asks.
+T56 is not a split: §3.2's watch is a task's worth of declared Win32 that `wait` does not need in
+order to be correct, so `wait` ships on the poll §3.2 keeps as its fallback and the watch lands on
+top of it. ADR 0011 is why none of this brings in a crate.
 
 | id | task | done when | needs | runs on |
 |---|---|---|---|---|
-| T30 | Client path containment and resolution (`canonicalize`, strip `\\?\`, fold case, segment boundary, 8.3 short names and junctions) | `cargo test -p dcs-eval paths` (on Windows) prints its count; mutations: a path admitted through an 8.3 short spelling, a junction, or a byte-prefix match reddens the boundary check | T02 | developer-only |
-| T31 | Client `wait`/`collect`, a reply whose `stamp` is not the session addressed discarded as `foreign` (T25 built the executor's half of §4.3), and the §4.4 outcome table reading the heartbeat `armed` field | `cargo test -p dcs-eval wait` shows `superseded` on a stamp change, `dead` on a gone PID, `pending`+`waking` for a dormant executor under 10 s, `stalled` past it, and a reply carrying another session's `stamp` discarded rather than returned; mutation: treating a dormant heartbeat's age as staleness reddens the `armed: no` rule | T13,T29 | developer-only |
-| T32 | Client `status()` (files + PID probe, problems found, running `app_version` vs the model's) | `cargo test -p dcs-eval status` shows a foreign-stamp and a foreign-transport heartbeat each reported as a problem and zero round trips; mutation: a round trip issued by `status` reddens the "costs the executor nothing" check | T31 | developer-only |
-| T33 | Client `pipeline(specs, W)` yielding replies in id order | `cargo test -p dcs-eval pipeline` shows W-deep sends and in-order replies; mutation: out-of-order yielding reddens the ordering check | T14 | developer-only |
-| T34 | The file-source reader (`evalFile`): hash, BOM strip, shebang blank, CRLF passthrough, `chunkname: @<path>`, size ceiling, containment before a byte is read | `cargo test -p dcs-eval file-source` shows a BOM+`#`+CRLF file raising on its line 47 and the run record carrying `bom: stripped`, `shebang: blanked`, the SHA-256; mutations: reading a path outside every root, or a `Config\` path, before refusing reddens the guard; a file one byte over the ceiling sent rather than refused reddens the limit | T30 | developer-only |
-| T35 | Game-state reads: the tier-1 chunks (one `pcall` each), the constant read-list, never-send-unlisted | `cargo test -p dcs-eval reads` shows each read as its own request under one `pcall`; mutation: sending a `DCS.*` name not in the constant list reddens the never-send check | T30 | developer-only |
-| T36 | Game-state derivation: the axes, `unknown` as a value, no default arm | `cargo test -p dcs-eval game-state` shows `loading` with no round trip, `paused (read)` noting a disagreeing callback phase, `session: client` on a `refused` `gui` probe, `unknown: <error>` on an errored axis alone, `unknown (tier 2 off)` when off; mutation: any axis filled from another's evidence reddens a no-default-arm check | T35 | developer-only |
+| T30 | Client path containment and resolution (`canonicalize`, strip `\\?\`, fold case, segment boundary, 8.3 short names and junctions) | `cargo test -p dcs-eval paths` (on Windows) prints its count, with the sandbox's short-name and junction helpers failing loudly on a volume that cannot make one rather than skipping; mutations: a path admitted through an 8.3 short spelling, a junction, or a byte-prefix match reddens the boundary check | T02 | developer-only |
+| T31 | The handshake and heartbeat readers, and the stand-in publishing both — `standin.rs` left both files for "the readers for them" | `cargo test -p dcs-eval readers` prints its count (`readers`, not `session`, because the Lua harness already has a suite by that name); a handshake missing `stamp`, one whose `protocol` is not `2`, one carrying a byte past ASCII, and a heartbeat whose `armed` is neither `yes` nor `no` are each refused naming the field, and a heartbeat's age is taken from the file's mtime while `since` stays display-only, being local wall clock with no zone; mutation: an absent `armed` defaulted to `no` reddens the tri-state check | T13,T29 | developer-only |
+| T54 | Client `collect`/`wait`: a reply on the stamp addressed or discarded as `foreign` (T25 built the executor's half of §4.3), and the §4.4 outcome table, over the 25 ms poll §3.2 keeps as its fallback | `cargo test -p dcs-eval wait` shows `superseded` on a stamp change, `dead` on a gone PID, `pending`+`waking` for a dormant executor under 10 s, `stalled` past it, `pending` at any age while the phase is `load`, and a reply carrying another session's `stamp` discarded rather than returned; mutation: treating a dormant heartbeat's age as staleness reddens the `armed: no` rule | T31,T14 | developer-only |
+| T32 | Client `status()` (files + PID probe, problems found, the running `app_version` against the build the embedded executor was last measured on — a difference, never a refusal, and `unmeasured` until Stage 9 records one) | `cargo test -p dcs-eval status` shows a foreign-stamp and a foreign-transport heartbeat each reported as a problem and zero round trips; mutation: a round trip issued by `status` reddens the "costs the executor nothing" check | T31 | developer-only |
+| T33 | Client `pipeline(specs, W)` yielding replies in id order, and the id minted — `publish::is_id` validates the shape and nothing mints one yet | `cargo test -p dcs-eval pipeline` shows W-deep sends and in-order replies against a stand-in that answers out of order; mutation: out-of-order yielding reddens the ordering check | T54 | developer-only |
+| T34 | What `evalFile` refuses before a byte is read: containment against the roots, `Config\`, the install, and the ceiling taken off the stat against the handshake's `max_request_bytes`, never assumed | `cargo test -p dcs-eval file-refusals` shows a path outside every root, a `Config\` path and an install path each refused naming the rule and no content, a file one byte over the ceiling refused naming the limit and the size, and one at the ceiling sent whole; mutations: opening the file before the containment check reddens the guard, whose fixture is a path the process could not read anyway so that a late refusal cannot pass for an early one; a file over the ceiling truncated rather than refused reddens the limit | T30,T31 | developer-only |
+| T55 | The file-source reader (`evalFile`): SHA-256 (ADR 0011), BOM strip, shebang blank, CRLF passthrough, `chunkname: @<resolved path>`, and the provenance record | `cargo test -p dcs-eval file-source` shows a BOM+`#`+CRLF file raising on its line 47 and the run record carrying `bom: stripped`, `shebang: blanked`, the byte count and the SHA-256, with the raise asserted against the abbreviated tail Lua prints for a chunkname over 60 bytes; mutations: a shebang line removed rather than blanked reddens the line-47 check; a `\r\n` converted on the way in reddens the byte-for-byte check | T34 | developer-only |
+| T56 | The event-driven reply watch (`ReadDirectoryChangesW`, declared under ADR 0011), with the poll kept as the fallback §3.2 requires for a watch that reports nothing | `cargo test -p dcs-eval watch` shows a reply woken on rather than polled for, a watch reporting nothing still answered by the poll, and no handle held once `wait` returns; mutation: a watch left open across a `wait` reddens the handle check | T54 | developer-only |
+| T35 | Game-state reads: the tier-1 chunks (one `pcall` each), the constant read-list with tier 2 built and left off until T50, never-send-unlisted | `cargo test -p dcs-eval reads` shows each read as its own request under one `pcall` and `getMissionLoaded`, `getPlayerUnitType` and `getMissionTheatre` absent by construction; mutation: sending a `DCS.*` name not in the constant list reddens the never-send check | T33 | developer-only |
+| T36 | Game-state derivation: the axes, `unknown` as a value, no default arm | `cargo test -p dcs-eval game-state` shows `loading` with no round trip, `paused (read)` noting a disagreeing callback phase, `session: client` on a `refused` `gui` probe, `unknown: <error>` on an errored axis alone, `unknown (tier 2 off)` when off; mutation: any axis filled from another's evidence reddens a no-default-arm check | T35,T31 | developer-only |
 
-**Stage command:** `cargo test -p dcs-eval paths wait status pipeline file-source reads
-game-state`.  **Milestone B acceptance:** the Stage 3–6 commands all green, plus a mutation sweep
-showing each §10/§7 control reddening under the mutation in its cell.
+**Stage command:** `cargo test -p dcs-eval paths readers wait status pipeline file-refusals
+file-source watch reads game-state`.  **Milestone B acceptance:** the Stage 3–6 commands all green,
+plus a mutation sweep showing each §10/§7 control reddening under the mutation in its cell.
 
 ---
 
@@ -279,7 +291,7 @@ the same functions.
 | T38 | The six tools registered, listed and callable over a real MCP session on an in-memory pair | `cargo test -p dcs-mcp tools-listed` lists exactly `dcs_status`, `dcs_ping`, `dcs_game_state`, `dcs_eval`, `dcs_eval_file`, `dcs_collect` and calls each; mutation: a tool that registers but is not listed reddens the count | T37 | developer-only |
 | T39 | The reply wording (one place): refusals read as refusals — `no-mission`, `stale-session`, `oversize`, `budget` — and `pending` names its id and phase | `cargo test -p dcs-mcp wording` shows each status worded as a non-empty refusal and `pending` not marked `isError`; mutation: an `oversize` reply worded like an empty result reddens it | T38 | developer-only |
 | T40 | The CLI verbs with `--out`/`--capture` (reply verbatim, nothing for `pending`) and the `runs.jsonl` provenance line | `cargo test -p dcs-mcp cli` shows `--out` writing headers+body verbatim and a `pending` writing nothing, plus one `runs.jsonl` line per eval with path+SHA-256; the CLI's text for one reply is byte-identical to the tool's (diff empty); mutation: a zero-byte file written for a `pending` reddens the capture check | T39 | developer-only |
-| T41 | The server-idle obligations (`mcp.md` §6): no thread wakes in 60 s of silence, the reply watch open only while waiting and never on a superseded session, the executor never held armed | `cargo test -p dcs-mcp idle` shows a sibling-directory sweep succeeding while the server is idle and no watch held between calls; mutation: a keepalive `ping` or a watch left open reddens the "never hold armed"/"hold no handle" checks | T31,T37 | developer-only |
+| T41 | The server-idle obligations (`mcp.md` §6): no thread wakes in 60 s of silence, the reply watch open only while waiting and never on a superseded session, the executor never held armed | `cargo test -p dcs-mcp idle` shows a sibling-directory sweep succeeding while the server is idle and no watch held between calls; mutation: a keepalive `ping` or a watch left open reddens the "never hold armed"/"hold no handle" checks | T54,T56,T37 | developer-only |
 
 **Stage command:** `cargo test -p dcs-mcp serve tools-listed wording cli idle`.
 

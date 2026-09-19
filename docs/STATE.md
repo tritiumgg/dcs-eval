@@ -91,7 +91,7 @@ entries at most: an eleventh means something here is finished, or belongs in
   built (T29); the sweep on that same disarm is unclaimed.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is
   proved with a file the suite keeps open; a client's `ReadDirectoryChangesW` handle is Stage 9's.
-- **The client's half of the fence waits on T31,** whose row now names it: the
+- **The client's half of the fence waits on T54,** whose row now names it: the
   executor fences a foreign `for` since T25, and discarding a reply with
   another session's `stamp`, with the round-trip's `superseded`, needs `collect`.
   Both now have a heartbeat to read (ADR 0010), absent until the first arm.
