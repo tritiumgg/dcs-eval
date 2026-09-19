@@ -18,8 +18,10 @@
 //! ledger of the bytes that reached the disk.
 
 use std::fmt;
+use std::time::Duration;
 
-use crate::pipeline::PipeError;
+use crate::pipeline::{PipeError, Pipeline, Spec};
+use crate::readers::Handshake;
 use crate::wait::Outcome;
 
 /// Which tier a read belongs to, and so whether it is sent by default.
@@ -364,10 +366,177 @@ pub fn answer_of(item: Result<Outcome, PipeError>) -> Answer {
     }
 }
 
+/// Why a window of reads was not published at all.
+///
+/// Both refusals are decided before anything reaches the disk, and
+/// neither subsumes the other: a name may be unlisted without being
+/// forbidden, and a forbidden name promoted into the table would be
+/// listed and must still be refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refused {
+    /// One of the three names that are never sent appeared in a request
+    /// about to be published.
+    NeverSent { name: String },
+    /// A request named a callee the constant list does not hold. The rule
+    /// is a list of what may be sent, not a list of what may not.
+    Unlisted { name: String },
+}
+
+impl fmt::Display for Refused {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NeverSent { name } => write!(f, "gather refused: {name} is never sent"),
+            Self::Unlisted { name } => write!(
+                f,
+                "gather refused: {name} is not a read on the constant list"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// What one gather came to: an answer per listed read, in list order.
+#[derive(Debug)]
+pub struct Readings {
+    entries: Vec<(&'static Read, Answer)>,
+}
+
+impl Readings {
+    /// Every read and its answer, in the order the table lists them.
+    #[must_use]
+    pub fn entries(&self) -> &[(&'static Read, Answer)] {
+        &self.entries
+    }
+
+    /// The answer for one fact, by its key.
+    #[must_use]
+    pub fn of(&self, key: &str) -> Option<&Answer> {
+        self.entries
+            .iter()
+            .find(|(r, _)| r.key() == key)
+            .map(|(_, a)| a)
+    }
+
+    /// The reads that were never published, and why each one was not.
+    #[must_use]
+    pub fn skipped(&self) -> Vec<(&'static Read, NotSent)> {
+        self.entries
+            .iter()
+            .filter_map(|(r, a)| match a {
+                Answer::NotSent { why } => Some((*r, *why)),
+                _ => None,
+            })
+            .collect()
+    }
+}
+
+/// The chunkname a read is compiled under, which names the call so that a
+/// crash, a raise and a log line all say which read it was.
+fn chunkname(callee: &str) -> String {
+    format!("=dcs-eval read {callee}")
+}
+
+/// Publish `specs` over one window and answer each one.
+///
+/// This is the only route from this module to the disk, and it is a seam
+/// of its own so that what is about to be published can be checked as
+/// bytes rather than as the table they came from.
+pub(crate) fn publish_reads(
+    h: &Handshake,
+    specs: Vec<Spec>,
+    depth: usize,
+    upto: Duration,
+) -> Result<Vec<Answer>, Refused> {
+    Ok(Pipeline::over(h, specs, depth, upto)
+        .map(answer_of)
+        .collect())
+}
+
+/// Every listed read this session will answer, in list order.
+///
+/// A load publishes nothing: nothing answers during one, so a request
+/// written into it would only wait. The tier filter runs first and the
+/// load skip second, so a tier-2 read with the switch off says so even
+/// during a load — it would not have been sent either way.
+///
+/// The window is as deep as there are reads, because the whole point of
+/// the window here is that the five share one tick rather than costing a
+/// wake each.
+pub fn gather(
+    h: &Handshake,
+    phase: &str,
+    tiers: Tiers,
+    upto: Duration,
+) -> Result<Readings, Refused> {
+    let reads = listed(tiers);
+    let mut entries: Vec<(&'static Read, Answer)> = Vec::with_capacity(READS.len());
+    for r in READS.iter() {
+        if r.tier() == Tier::Two && !tiers.tier_two() {
+            entries.push((
+                r,
+                Answer::NotSent {
+                    why: NotSent::TierTwoOff,
+                },
+            ));
+        }
+    }
+    if phase == "load" {
+        for r in &reads {
+            entries.push((
+                r,
+                Answer::NotSent {
+                    why: NotSent::Loading,
+                },
+            ));
+        }
+        entries.sort_by_key(|(r, _)| order_of(r));
+        return Ok(Readings { entries });
+    }
+    let specs: Vec<Spec> = reads
+        .iter()
+        .map(|r| {
+            // `for` is written here because a window adds nothing on the
+            // way out, the session stamp included.
+            let name = chunkname(r.callee());
+            Spec::new(
+                &[
+                    ("op", "eval"),
+                    ("for", h.stamp.as_str()),
+                    ("state", "hook"),
+                    ("chunkname", name.as_str()),
+                ],
+                &chunk(r.callee()),
+            )
+        })
+        .collect();
+    let depth = specs.len().max(1);
+    let answers = publish_reads(h, specs, depth, upto)?;
+    for (r, answer) in reads.iter().zip(answers) {
+        entries.push((r, answer));
+    }
+    entries.sort_by_key(|(r, _)| order_of(r));
+    Ok(Readings { entries })
+}
+
+/// Where a read sits in the table, so the entries come back in list order
+/// whichever branch put each one there.
+fn order_of(read: &Read) -> usize {
+    READS
+        .iter()
+        .position(|r| r.key() == read.key())
+        .unwrap_or(usize::MAX)
+}
+
 #[cfg(test)]
 mod game_reads {
     use super::*;
     use crate::protocol::{Envelope, frame, parse};
+    use crate::standin::Standin;
+    use crate::testing::Sandbox;
+    use std::fs;
+    use std::path::Path;
+    use std::time::{Instant, SystemTime};
 
     /// The five tier-1 callees, spelt as the frozen text spells them.
     fn tier_one() -> Vec<&'static str> {
@@ -714,6 +883,214 @@ mod game_reads {
             panic!("wanted Unanswered, got {dead:?}");
         };
         assert!(why.contains("gone"), "{why}");
+    }
+
+    /// Long enough that a busy box delays a test rather than turning a
+    /// reply into a `pending` and reddening a check about what was
+    /// published for a reason that has nothing to do with publishing.
+    const UPTO: Duration = Duration::from_secs(5);
+
+    /// A stand-in that looks alive, and the handshake a client reads off
+    /// it.
+    fn ticking(b: &Sandbox) -> (Standin, Handshake) {
+        let mut s = Standin::open(&b.join("dcs"), "hook").expect("the stand-in opens");
+        s.pid = std::process::id();
+        s.armed = true;
+        s.handshake().expect("the handshake publishes");
+        s.beat(SystemTime::now()).expect("a fresh beat");
+        let h = Handshake::read(&s.output().join("executor.txt")).expect("the handshake reads");
+        (s, h)
+    }
+
+    /// Poll `dir` until at least `want` files with `suffix` are there,
+    /// panicking naming what it saw: every caller is gating a tick on it
+    /// and a gate that quietly opened proves nothing.
+    fn until(dir: &Path, suffix: &str, want: usize, upto: Duration) {
+        let deadline = Instant::now() + upto;
+        loop {
+            let saw = fs::read_dir(dir)
+                .expect("the directory lists")
+                .filter_map(Result::ok)
+                .filter(|e| e.file_name().to_string_lossy().ends_with(suffix))
+                .count();
+            if saw >= want {
+                return;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "waited for {want} {suffix} files in {} and saw {saw}",
+                dir.display()
+            );
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// How many requests in the ledger carry `needle`. Every count here
+    /// is by predicate and never by total, so a later window that adds a
+    /// request of its own does not redden a check about the reads.
+    fn carrying(s: &Standin, needle: &str) -> usize {
+        s.seen()
+            .iter()
+            .filter(|seen| String::from_utf8_lossy(&seen.bytes).contains(needle))
+            .count()
+    }
+
+    /// The `.req` names in `dir`.
+    fn published(dir: &Path) -> usize {
+        fs::read_dir(dir)
+            .expect("the request directory lists")
+            .filter_map(Result::ok)
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".req"))
+            .count()
+    }
+
+    /// One gather against a stand-in that answers the whole window in one
+    /// tick, and how many ticks it took.
+    fn gathered(
+        s: &mut Standin,
+        h: &Handshake,
+        phase: &str,
+        tiers: Tiers,
+        want: usize,
+    ) -> Readings {
+        std::thread::scope(|scope| {
+            let ticker = scope.spawn(|| {
+                until(s.req(), ".req", want, UPTO);
+                s.tick();
+            });
+            let readings = gather(h, phase, tiers, UPTO);
+            ticker.join().expect("the ticker finishes");
+            readings
+        })
+        .expect("the gather is not refused")
+    }
+
+    #[test]
+    fn each_read_is_its_own_request() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        for callee in tier_one() {
+            assert_eq!(
+                carrying(&s, &chunkname(callee)),
+                1,
+                "the ledger does not hold exactly one eval naming {callee}"
+            );
+        }
+        assert_eq!(
+            s.seen().len(),
+            5,
+            "the ledger holds {} requests and should hold 5, one per read",
+            s.seen().len()
+        );
+    }
+
+    #[test]
+    fn the_five_reads_share_one_tick() {
+        // The window's whole purpose here: five reads, one wake. The
+        // ticker waits for all five to be on the disk before it answers
+        // anything, so a client that published them one at a time would
+        // never let it past the wait.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        assert_eq!(s.tick, 1, "the session answered over {} ticks", s.tick);
+    }
+
+    #[test]
+    fn every_read_is_sent_to_the_hook_state() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        assert_eq!(carrying(&s, "state: hook"), 5);
+        assert_eq!(carrying(&s, "op: eval"), 5);
+    }
+
+    #[test]
+    fn every_published_body_holds_exactly_one_pcall() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        for (n, seen) in s.seen().iter().enumerate() {
+            let text = String::from_utf8_lossy(&seen.bytes);
+            let calls = text.matches("pcall(").count();
+            assert_eq!(
+                calls,
+                1,
+                "body {} holds {calls} pcall calls and should hold 1",
+                n + 1
+            );
+        }
+    }
+
+    #[test]
+    fn the_readings_come_back_in_the_list_order() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        let keys: Vec<&str> = readings.entries().iter().map(|(r, _)| r.key()).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "pause",
+                "mission_name",
+                "mission_file",
+                "model_time",
+                "sim_mode",
+                "multiplayer",
+                "server",
+                "track",
+                "player_id"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_loading_phase_publishes_nothing_at_all() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let readings = gather(&h, "load", Tiers::default(), UPTO).expect("not refused");
+        assert_eq!(
+            published(s.req()),
+            0,
+            "the request directory holds {} files and nothing answers during a load",
+            published(s.req())
+        );
+        s.tick();
+        assert_eq!(s.seen().len(), 0, "the ledger holds a request");
+        for r in listed(Tiers::default()) {
+            assert_eq!(
+                readings.of(r.key()),
+                Some(&Answer::NotSent {
+                    why: NotSent::Loading
+                }),
+                "{}",
+                r.key()
+            );
+        }
+    }
+
+    #[test]
+    fn a_read_whose_reply_is_scripted_comes_back_as_a_value() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        s.script("DCS.getPause", "ok", "string", b"boolean\ttrue");
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 5);
+        assert_eq!(
+            readings.of("pause"),
+            Some(&Answer::Value {
+                lua_type: "boolean".to_owned(),
+                value: Some("true".to_owned()),
+            })
+        );
+        // The other four are unscripted, so the stand-in answers them as
+        // chunks that returned nil — which is not this grammar, and says
+        // so rather than inventing a value.
+        assert!(
+            matches!(readings.of("sim_mode"), Some(Answer::Malformed { .. })),
+            "{:?}",
+            readings.of("sim_mode")
+        );
     }
 
     #[test]
