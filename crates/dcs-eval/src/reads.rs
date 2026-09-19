@@ -422,6 +422,54 @@ pub fn answer_of(item: Result<Outcome, PipeError>) -> Answer {
     }
 }
 
+/// What the reachability probe came to.
+///
+/// The probe is not a read: it calls nothing, speaks no read grammar and
+/// answers about the carrier rather than about the game, so it has
+/// answers of its own rather than borrowing a read's. Routing it through
+/// the read grammar would report its one success — a body of `ok`, which
+/// carries no tab — as a body that is not a read's, so the outcome
+/// meaning "the state is reachable" would arrive on the arm reserved for
+/// a far end that has stopped speaking.
+///
+/// The three the frozen document names are here: `ok` is [`Self::Reachable`],
+/// and `refused` and `invalid-state` are the status on
+/// [`Unanswered::NotOk`], which is what lets a reader tell which of the
+/// two it was without reading a sentence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Probe {
+    /// The state answered the probe's own word, so it can be reached.
+    Reachable,
+    /// No `ok` reply came back. A refusal is the interesting one and
+    /// carries its status; the rest says nothing about the carrier.
+    Unanswered { why: Unanswered },
+    /// An `ok` reply that is not the probe's word. Like a read's
+    /// `Malformed`, this is a finding about this build and never a fact
+    /// about the game.
+    Malformed { body: Vec<u8> },
+}
+
+/// What the pipeline's item for the probe says the probe came to.
+///
+/// The probe returns one known string, so the test is equality against
+/// it rather than a grammar: anything else is a far end answering
+/// something this side did not ask for.
+#[must_use]
+pub fn probe_of(item: Result<Outcome, PipeError>) -> Probe {
+    let envelope = match replied(item) {
+        Ok(envelope) => envelope,
+        Err(why) => return Probe::Unanswered { why },
+    };
+    if envelope.headers.get("result_type").unwrap_or_default() != "string"
+        || envelope.body != PROBE_ANSWER
+    {
+        return Probe::Malformed {
+            body: envelope.body,
+        };
+    }
+    Probe::Reachable
+}
+
 /// Why a window of reads was not published at all.
 ///
 /// Both refusals are decided before anything reaches the disk, and
@@ -464,7 +512,7 @@ impl std::error::Error for Refused {}
 pub struct Readings {
     entries: Vec<(&'static Read, Answer)>,
     ping: Option<Envelope>,
-    probe: Option<Answer>,
+    probe: Option<Probe>,
 }
 
 impl Readings {
@@ -477,7 +525,7 @@ impl Readings {
 
     /// What the reachability probe came to, where one was sent.
     #[must_use]
-    pub fn probe(&self) -> Option<&Answer> {
+    pub fn probe(&self) -> Option<&Probe> {
         self.probe.as_ref()
     }
 
@@ -591,6 +639,10 @@ fn chunkname(callee: &str) -> String {
 /// reached at all.
 const PROBE: &[u8] = b"return 'ok'";
 
+/// What the probe's chunk returns when the state ran it, which is the
+/// whole of what a reachable answer may be.
+const PROBE_ANSWER: &[u8] = b"ok";
+
 /// Publish `specs` over one window and hand back what each came to, in
 /// the order they were given.
 ///
@@ -696,7 +748,7 @@ pub fn gather(
         );
         entries.push((r, answer));
     }
-    let probe = items.next().map(answer_of);
+    let probe = items.next().map(probe_of);
     entries.sort_by_key(|(r, _)| order_of(r));
     Ok(Readings {
         entries,
@@ -1635,6 +1687,77 @@ mod game_reads {
         let ping = readings.ping().expect("the ping answered");
         assert_eq!(ping.body, b"pong");
         assert!(readings.probe().is_some(), "the probe answered");
+    }
+
+    #[test]
+    fn a_probe_the_state_answered_is_reachable_and_not_a_body_this_side_cannot_read() {
+        // The success path, which is the one the read grammar would have
+        // mangled: `ok` carries no tab, so a probe routed through a
+        // read's answer would come back as a far end that has stopped
+        // speaking rather than as a state that can be reached.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        s.script("return 'ok'", "ok", "string", b"ok");
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        assert_eq!(readings.probe(), Some(&Probe::Reachable));
+    }
+
+    #[test]
+    fn a_probe_the_state_refused_keeps_the_status_that_says_which_refusal() {
+        // The stand-in declares `gui` and does not serve it, which is the
+        // refusal this arm exists for. What matters downstream is the
+        // status as a field: the two refusals the document names are told
+        // apart by it and by nothing else.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let Some(Probe::Unanswered {
+            why: Unanswered::NotOk { status, .. },
+        }) = readings.probe()
+        else {
+            panic!("wanted a refusal, got {:?}", readings.probe());
+        };
+        assert_eq!(status, "unsupported");
+    }
+
+    #[test]
+    fn a_probe_answering_anything_but_its_own_word_is_malformed() {
+        assert_eq!(
+            probe_of(reply("ok", "string", b"nope")),
+            Probe::Malformed {
+                body: b"nope".to_vec()
+            }
+        );
+        assert_eq!(
+            probe_of(reply("ok", "nil", b"")),
+            Probe::Malformed { body: Vec::new() }
+        );
+        assert_eq!(
+            probe_of(reply("ok", "string", PROBE_ANSWER)),
+            Probe::Reachable
+        );
+    }
+
+    #[test]
+    fn an_invalid_state_probe_is_told_from_a_refused_one_without_reading_prose() {
+        // T36 puts `session: client` on a `refused` probe and nothing on
+        // an `invalid-state` one, so these two must not share an arm.
+        let refused = probe_of(Ok(Outcome::Reply(envelope(
+            &[("status", "refused"), ("stage", "eval")],
+            b"no",
+        ))));
+        let invalid = probe_of(Ok(Outcome::Reply(envelope(
+            &[("status", "invalid-state"), ("stage", "eval")],
+            b"no",
+        ))));
+        assert_ne!(refused, invalid);
+        let Probe::Unanswered {
+            why: Unanswered::NotOk { status, .. },
+        } = &refused
+        else {
+            panic!("wanted a refusal, got {refused:?}");
+        };
+        assert_eq!(status, "refused");
     }
 
     #[test]
