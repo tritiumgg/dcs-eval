@@ -1,4 +1,10 @@
-//! What evaluating a file refuses before a byte of it is read.
+//! What evaluating a file refuses, and what it learns about it before a byte
+//! is read.
+//!
+//! The judging is here; the reading is in [`crate::source`]. One refusal type
+//! spans both halves, because a caller asking "may I evaluate this file"
+//! wants one answer and one sentence: which side of the split decided it is
+//! this module's business and not the caller's.
 //!
 //! A Lua compile error carries the token it choked on, and the wire returns
 //! that error verbatim; for an unterminated string the token is the rest of
@@ -138,11 +144,30 @@ impl Roots {
 /// the judgement in its signature rather than in a note asking its callers
 /// to have run one. A public field would let any caller assemble a path
 /// nothing judged and a size that came from nowhere.
-#[derive(Clone, Debug)]
+///
+/// `block` is the framed header block, kept rather than recomputed: the
+/// reader sends these very bytes, so the envelope it publishes is the one
+/// whose length was counted against the ceiling and there is no second set
+/// of headers to disagree with the measured one.
+#[derive(Clone)]
 pub struct Admitted {
     path: Real,
     size: u64,
     headroom: u64,
+    block: Vec<u8>,
+}
+
+// The block is bytes nobody wants in a failure message, so it is shown as a
+// length. Everything else is what a test that went red needs to read.
+impl fmt::Debug for Admitted {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Admitted")
+            .field("path", &self.path.to_string())
+            .field("size", &self.size)
+            .field("headroom", &self.headroom)
+            .field("header_bytes", &self.block.len())
+            .finish()
+    }
 }
 
 impl Admitted {
@@ -161,6 +186,13 @@ impl Admitted {
     /// of `size` are in the envelope.
     pub fn headroom(&self) -> u64 {
         self.headroom
+    }
+
+    /// The framed header block the ceiling was measured against, which the
+    /// reader puts the body behind. Crate-private: it is an internal hand-off
+    /// between the two halves and not a thing a caller assembles.
+    pub(crate) fn block(&self) -> &[u8] {
+        &self.block
     }
 }
 
@@ -247,6 +279,7 @@ pub fn check(
         path: real.clone(),
         size,
         headroom: h.max_request_bytes - total,
+        block,
     })
 }
 
@@ -294,6 +327,28 @@ pub enum Refusal {
     /// Neither a regular file nor a directory, so nothing whose length the
     /// stat settles and nothing a read is sure to reach the end of.
     NotAFile,
+    /// The resolved path is too long to name the chunk with. Refused here
+    /// rather than sent, because the far end caps the header and this
+    /// crate's framer caps no value at any length.
+    Name(crate::source::NameTooLong),
+    /// The file could not be opened, although the stat had answered about
+    /// it. Between the two somebody may have removed it, replaced it, or
+    /// taken a hold that denies this process's reads.
+    Open(io::Error),
+    /// The file opened and then would not read to the end.
+    Read(io::Error),
+    /// The file grew past the ceiling between the stat and the read. The
+    /// figures are all three of them, because "too big" without the one it
+    /// was measured against a moment ago reads as a contradiction.
+    Grew {
+        read: u64,
+        admitted: u64,
+        headroom: u64,
+    },
+    /// Nothing left to evaluate once the two rules had run. The far end
+    /// answers an empty body `bad-request`, and a refusal issued here can
+    /// say which kind of empty it was.
+    Empty { bom: crate::source::Bom },
 }
 
 impl FileRefusal {
@@ -324,6 +379,24 @@ impl FileRefusal {
                 "is neither a file nor a directory, and only a file is evaluated from here"
                     .to_owned()
             }
+            Refusal::Name(source) => source.to_string(),
+            Refusal::Open(source) => format!("could not be opened: {source}"),
+            Refusal::Read(source) => format!("could not be read to the end: {source}"),
+            Refusal::Grew {
+                read,
+                admitted,
+                headroom,
+            } => format!(
+                "was {admitted} bytes when it was checked, with {headroom} to spare, and read \
+                 {read}; it grew past the request ceiling while it was being read"
+            ),
+            Refusal::Empty { bom } => match bom {
+                crate::source::Bom::Stripped => {
+                    "was a byte-order mark and nothing else, so it holds no chunk to evaluate"
+                        .to_owned()
+                }
+                crate::source::Bom::None => "holds no chunk to evaluate".to_owned(),
+            },
         }
     }
 }

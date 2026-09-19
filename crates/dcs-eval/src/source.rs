@@ -13,7 +13,13 @@
 //! compile error than for a raise. A consumer showing a user an error beside
 //! the file it came from wants both, so both are rendered here.
 
+use std::fmt;
+use std::fs;
+use std::io::Read as _;
+
+use crate::file::{Admitted, FileRefusal, Refusal};
 use crate::paths::Real;
+use crate::sha256;
 
 /// The most a `chunkname` header may carry. The far end caps the value at
 /// this, and this crate's framer caps no value at any length, so a deeply
@@ -112,6 +118,215 @@ pub fn chunkid(name: &str, bufflen: usize) -> String {
     }
 }
 
+/// Whether a leading byte-order mark was there and taken off. Renders as the
+/// record's own word.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Bom {
+    None,
+    Stripped,
+}
+
+/// Whether a first line beginning `#` was there and emptied. Two enums and
+/// not one shared marker: the two words that are not `none` are different
+/// words, and the record prints them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shebang {
+    None,
+    Blanked,
+}
+
+impl fmt::Display for Bom {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Bom::None => "none",
+            Bom::Stripped => "stripped",
+        })
+    }
+}
+
+impl fmt::Display for Shebang {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Shebang::None => "none",
+            Shebang::Blanked => "blanked",
+        })
+    }
+}
+
+/// A file read and ready to send: the request bytes, and the provenance of
+/// the chunk inside them.
+///
+/// One value rather than two, because the record is about the very bytes the
+/// request carries and a second value would be a second chance to describe
+/// bytes that are not these. Nothing is written to disk here: the run record
+/// also carries a timestamp, an id, a stamp and everything that comes off
+/// the reply, none of which this crate knows, so rendering the line belongs
+/// to whoever holds all of it. What this crate owns is the six fields the
+/// source itself answers for.
+pub struct Source {
+    path: Real,
+    chunkname: String,
+    request: Vec<u8>,
+    body_at: usize,
+    sha256: [u8; 32],
+    bom: Bom,
+    shebang: Shebang,
+}
+
+impl Source {
+    /// The resolved path the bytes came from.
+    pub fn path(&self) -> &Real {
+        &self.path
+    }
+
+    /// The name the chunk is compiled under, whole. What a message shows of
+    /// it is [`chunkid`] of this.
+    pub fn chunkname(&self) -> &str {
+        &self.chunkname
+    }
+
+    /// The whole request: the header block `check` measured, then the body.
+    pub fn request(&self) -> &[u8] {
+        &self.request
+    }
+
+    /// The chunk as it will be compiled, which is what the digest is over.
+    pub fn body(&self) -> &[u8] {
+        &self.request[self.body_at..]
+    }
+
+    /// The digest of [`Source::body`].
+    pub fn sha256(&self) -> &[u8; 32] {
+        &self.sha256
+    }
+
+    /// The digest as the record prints it.
+    pub fn sha256_hex(&self) -> String {
+        sha256::hex(&self.sha256)
+    }
+
+    pub fn bom(&self) -> Bom {
+        self.bom
+    }
+
+    pub fn shebang(&self) -> Shebang {
+        self.shebang
+    }
+}
+
+impl fmt::Debug for Source {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Source")
+            .field("path", &self.path.to_string())
+            .field("chunkname", &self.chunkname)
+            .field("bytes", &self.body().len())
+            .field("sha256", &self.sha256_hex())
+            .field("bom", &self.bom.to_string())
+            .field("shebang", &self.shebang.to_string())
+            .finish()
+    }
+}
+
+/// Read an admitted file into the bytes that go on the wire, and the record
+/// of what they are.
+///
+/// There is no `headers` parameter. The framer writes the header lines, a
+/// blank line, then the body verbatim, so the block `check` framed is the
+/// same block whatever the body turns out to be; this uses that block rather
+/// than framing a second one. A reader that took headers could be handed a
+/// different set from the one the ceiling was measured against, and the
+/// absence of the parameter is what makes that impossible rather than merely
+/// checked.
+///
+/// The order is open, read, size, mark, shebang, empty, hash. The size is
+/// compared against the raw bytes, before either rule shortens them, because
+/// the question is what the file turned out to be. The mark comes off before
+/// the shebang is looked for, so a file that is a mark followed by `#!` still
+/// has its first line blanked.
+pub fn read(admitted: &Admitted) -> Result<Source, FileRefusal> {
+    let refusal = |kind| FileRefusal {
+        path: admitted.path().clone(),
+        kind,
+    };
+    // The name first, because it is a refusal this file's bytes cannot
+    // change and there is no reason to read them to reach it.
+    let chunkname = chunkname(admitted.path()).map_err(|source| refusal(Refusal::Name(source)))?;
+    let mut file = open(admitted)?;
+    let mut bytes = Vec::with_capacity(admitted.size() as usize);
+    file.read_to_end(&mut bytes)
+        .map_err(|source| refusal(Refusal::Read(source)))?;
+    let read = bytes.len() as u64;
+    if read > admitted.size() + admitted.headroom() {
+        return Err(refusal(Refusal::Grew {
+            read,
+            admitted: admitted.size(),
+            headroom: admitted.headroom(),
+        }));
+    }
+
+    let mut body = &bytes[..];
+    let mut bom = Bom::None;
+    if let Some(rest) = body.strip_prefix(BOM) {
+        body = rest;
+        bom = Bom::Stripped;
+    }
+
+    let mut shebang = Shebang::None;
+    let mut body = body.to_vec();
+    if body.first() == Some(&b'#') {
+        // The line's content goes; its own terminator stays as it was. A
+        // `\n` supplied over a line that ended `\r\n` would be the
+        // conversion this reader exists not to make, and dropping the
+        // terminator with the line would move every line number below it.
+        match body.iter().position(|&b| b == b'\n') {
+            Some(nl) => {
+                // `\r\n` keeps both bytes, `\n` keeps the one.
+                let keep_from = if nl > 0 && body[nl - 1] == b'\r' {
+                    nl - 1
+                } else {
+                    nl
+                };
+                body.drain(..keep_from);
+                shebang = Shebang::Blanked;
+            }
+            // A `#` line with nothing behind it is the whole file, so
+            // blanking it leaves nothing; the refusal below says so.
+            None => {
+                body.clear();
+                shebang = Shebang::Blanked;
+            }
+        }
+    }
+
+    if body.is_empty() {
+        return Err(refusal(Refusal::Empty { bom }));
+    }
+
+    let sha256 = sha256::digest(&body);
+    let mut request = admitted.block().to_vec();
+    let body_at = request.len();
+    request.extend_from_slice(&body);
+    Ok(Source {
+        path: admitted.path().clone(),
+        chunkname,
+        request,
+        body_at,
+        sha256,
+        bom,
+        shebang,
+    })
+}
+
+const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
+
+/// Open the admitted path.
+fn open(admitted: &Admitted) -> Result<fs::File, FileRefusal> {
+    fs::File::open(admitted.path().as_path()).map_err(|source| FileRefusal {
+        path: admitted.path().clone(),
+        kind: Refusal::Open(source),
+    })
+}
+
 /// The largest index at or below `at` that begins a character, so a cut
 /// through a multi-byte path does not panic. Lua counts bytes and does not
 /// care; Rust's slicing does.
@@ -135,10 +350,14 @@ fn ceil_char(s: &str, at: usize) -> usize {
 #[cfg(test)]
 mod file_source {
     use super::*;
-    use crate::testing::{Sandbox, real};
+    use crate::file::{Roots, check};
+    use crate::protocol;
+    use crate::readers::Handshake;
+    use crate::standin::Standin;
+    use crate::testing::{Sandbox, real, slurp};
 
-    use std::fs;
     use std::io;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
     /// Compile a file's bytes under a given name and say what Lua said.
@@ -311,5 +530,300 @@ end
         let (kind, msg) = lua(&b, b"\nlocal a = 1\nerror('boom')\n", &name);
         assert_eq!(kind, "run", "and the raise does not: {msg}");
         assert!(msg.starts_with("..."), "{msg}");
+    }
+
+    // ---- the bytes --------------------------------------------------------
+
+    /// A box with a project root that is allowed and a session that has
+    /// published, so the ceiling comes off a handshake rather than out of a
+    /// constant.
+    struct Scene {
+        /// Held, not read: dropping it takes the fixtures with it, so the
+        /// scene has to outlive every path below.
+        _b: Sandbox,
+        project: Real,
+        h: Handshake,
+    }
+
+    fn scene() -> Scene {
+        let b = Sandbox::new();
+        let project = b.join("project");
+        fs::create_dir_all(&project).expect("the project root is made");
+        let session = b.join("session");
+        fs::create_dir_all(&session).expect("the session root is made");
+        let s = Standin::open(&session, "hook").expect("the session opens");
+        s.handshake().expect("the handshake publishes");
+        let bytes = slurp(&s.output().join("executor.txt"));
+        let h =
+            Handshake::from_bytes(Path::new("executor.txt"), &bytes).expect("the handshake reads");
+        Scene {
+            _b: b,
+            project: real(&project),
+            h,
+        }
+    }
+
+    impl Scene {
+        fn roots(&self) -> Roots {
+            Roots::new(std::slice::from_ref(&self.project), &[], None).expect("the roots resolve")
+        }
+
+        /// A file under the allowed root, written and put through `check`.
+        /// The headers are the ones a caller really sends, the name among
+        /// them, so the block the reader reuses is a realistic one.
+        fn admit(&self, name: &str, bytes: &[u8]) -> crate::file::Admitted {
+            let path = self.write(name, bytes);
+            let real = real(&path);
+            let headers = self.headers(&real);
+            let refs: Vec<(&str, &str)> = headers
+                .iter()
+                .map(|(n, v)| (n.as_str(), v.as_str()))
+                .collect();
+            check(&self.roots(), &self.h, &refs, &real).expect("the file is admitted")
+        }
+
+        fn headers(&self, real: &Real) -> Vec<(String, String)> {
+            vec![
+                ("op".to_owned(), "eval".to_owned()),
+                ("state".to_owned(), "hook".to_owned()),
+                (
+                    "chunkname".to_owned(),
+                    chunkname(real).expect("the name fits"),
+                ),
+            ]
+        }
+
+        fn write(&self, name: &str, bytes: &[u8]) -> PathBuf {
+            let path = self.project.as_path().join(name);
+            fs::write(&path, bytes).expect("the fixture is written");
+            path
+        }
+    }
+
+    /// A fixture chosen for the byte-for-byte control: `\r\n` endings, a
+    /// lone `\r`, a `\0` and a byte past ASCII, so a conversion or a lossy
+    /// round trip on the way in shows rather than hides.
+    const AWKWARD: &[u8] =
+        b"-- one\r\n-- two\rstill two\r\nlocal z = '\x00\xC3\xA9'\r\nreturn z\r\n";
+
+    #[test]
+    fn a_plain_file_is_shipped_byte_for_byte() {
+        let s = scene();
+        let admitted = s.admit("awkward.lua", AWKWARD);
+        let source = read(&admitted).expect("the file reads");
+        assert_eq!(source.body(), AWKWARD, "the bytes are not the file's");
+    }
+
+    #[test]
+    fn the_record_says_none_when_there_was_no_bom_and_no_shebang() {
+        let s = scene();
+        let source = read(&s.admit("plain.lua", b"return 1\n")).expect("the file reads");
+        assert_eq!(source.bom(), Bom::None);
+        assert_eq!(source.shebang(), Shebang::None);
+        assert_eq!(source.bom().to_string(), "none");
+        assert_eq!(source.shebang().to_string(), "none");
+    }
+
+    #[test]
+    fn a_bom_is_stripped_and_said_so() {
+        let s = scene();
+        let source = read(&s.admit("bom.lua", b"\xEF\xBB\xBFreturn 1\n")).expect("the file reads");
+        assert_eq!(source.body(), b"return 1\n");
+        assert_eq!(source.bom(), Bom::Stripped);
+        assert_eq!(source.bom().to_string(), "stripped");
+    }
+
+    #[test]
+    fn a_shebang_is_blanked_and_its_terminator_kept() {
+        // The line's text goes and its own `\r\n` stays, so the body is the
+        // file less exactly the text.
+        let s = scene();
+        let file = b"#!/usr/bin/env lua\r\nreturn 1\r\n";
+        let source = read(&s.admit("she.lua", file)).expect("the file reads");
+        assert_eq!(source.body(), b"\r\nreturn 1\r\n");
+        assert_eq!(
+            source.body().len(),
+            file.len() - "#!/usr/bin/env lua".len(),
+            "only the text is gone"
+        );
+        assert_eq!(source.shebang(), Shebang::Blanked);
+        assert_eq!(source.shebang().to_string(), "blanked");
+    }
+
+    #[test]
+    fn a_shebang_ending_in_a_bare_newline_keeps_that_one_byte() {
+        let s = scene();
+        let source = read(&s.admit("she-lf.lua", b"#!lua\nreturn 1\n")).expect("the file reads");
+        assert_eq!(source.body(), b"\nreturn 1\n");
+    }
+
+    #[test]
+    fn a_bom_before_a_shebang_still_blanks_the_shebang() {
+        // The ordering, stated once: the mark comes off first, so the `#`
+        // is a first byte when the shebang rule looks at it.
+        let s = scene();
+        let source =
+            read(&s.admit("both.lua", b"\xEF\xBB\xBF#!lua\r\nreturn 1\r\n")).expect("it reads");
+        assert_eq!(source.body(), b"\r\nreturn 1\r\n");
+        assert_eq!(source.bom(), Bom::Stripped);
+        assert_eq!(source.shebang(), Shebang::Blanked);
+    }
+
+    #[test]
+    fn a_shebang_with_no_terminator_leaves_nothing() {
+        let s = scene();
+        let err = read(&s.admit("only-she.lua", b"#!lua")).expect_err("nothing is left");
+        assert!(
+            matches!(err.kind, Refusal::Empty { bom: Bom::None }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_only_a_bom_is_refused() {
+        let s = scene();
+        let err = read(&s.admit("just-bom.lua", b"\xEF\xBB\xBF")).expect_err("nothing is left");
+        assert!(
+            matches!(err.kind, Refusal::Empty { bom: Bom::Stripped }),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("byte-order mark"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_file_is_refused_in_different_words() {
+        let s = scene();
+        let err = read(&s.admit("empty.lua", b"")).expect_err("nothing to evaluate");
+        assert!(
+            matches!(err.kind, Refusal::Empty { bom: Bom::None }),
+            "{err:?}"
+        );
+        assert!(!err.to_string().contains("byte-order mark"), "{err}");
+    }
+
+    #[test]
+    fn a_file_whose_first_hash_is_not_on_line_one_is_left_alone() {
+        // `#` is a Lua operator, so only the first line is a shebang.
+        let s = scene();
+        let file = b"local t = {}\n#t\n";
+        let source = read(&s.admit("hash.lua", file)).expect("the file reads");
+        assert_eq!(source.body(), file);
+        assert_eq!(source.shebang(), Shebang::None);
+    }
+
+    #[test]
+    fn the_hash_is_over_what_is_sent_and_not_over_the_file() {
+        // Both readings in one place, so neither can drift alone: a plain
+        // file agrees with `sha256sum`, and a file the two rules changed
+        // does not — it agrees with the digest of the body instead.
+        let s = scene();
+        let plain = s.write("plain-hash.lua", b"return 1\n");
+        let source = read(&s.admit("plain-hash.lua", b"return 1\n")).expect("it reads");
+        assert_eq!(
+            source.sha256_hex(),
+            crate::testing::sha256sum(&plain),
+            "a file with neither rule applied hashes as the tool says"
+        );
+
+        let bytes = b"\xEF\xBB\xBF#!lua\r\nreturn 1\r\n";
+        let marked = s.write("marked.lua", bytes);
+        let source = read(&s.admit("marked.lua", bytes)).expect("it reads");
+        assert_eq!(
+            source.sha256_hex(),
+            sha256::hex(&sha256::digest(source.body())),
+            "the digest is the body's"
+        );
+        assert_ne!(
+            source.sha256_hex(),
+            crate::testing::sha256sum(&marked),
+            "and not the file's, which is why the record carries bom and shebang"
+        );
+    }
+
+    #[test]
+    fn the_request_is_the_block_check_measured_and_then_the_body() {
+        let s = scene();
+        let path = s.write("req.lua", b"return 1\n");
+        let real = real(&path);
+        let headers = s.headers(&real);
+        let refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        let admitted = check(&s.roots(), &s.h, &refs, &real).expect("admitted");
+        let source = read(&admitted).expect("it reads");
+        let envelope = protocol::parse(source.request()).expect("the request parses");
+        let sent: Vec<(String, String)> = envelope
+            .headers
+            .iter()
+            .map(|(n, v)| (n.to_owned(), v.to_owned()))
+            .collect();
+        assert_eq!(sent, headers, "the headers are the ones check was given");
+        assert_eq!(envelope.body, b"return 1\n", "and the body is the chunk");
+    }
+
+    #[test]
+    fn a_file_exactly_at_the_ceiling_is_sent_whole() {
+        let s = scene();
+        let path = s.project.as_path().join("exact.lua");
+        let real_guess = path.clone();
+        // The header block depends on the name, which depends on the path,
+        // so the block is measured on the path the file will have.
+        fs::write(&real_guess, b"x").expect("a placeholder so the path resolves");
+        let real = real(&real_guess);
+        let headers = s.headers(&real);
+        let refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        let block = protocol::frame(&refs, b"")
+            .expect("the headers frame")
+            .len() as u64;
+        let size = s.h.max_request_bytes - block;
+        fs::write(&real_guess, vec![b'-'; size as usize]).expect("the fixture is written");
+        let admitted = check(&s.roots(), &s.h, &refs, &real).expect("exactly at the ceiling");
+        assert_eq!(admitted.headroom(), 0, "nothing is left over");
+        let source = read(&admitted).expect("and it is read whole");
+        assert_eq!(source.body().len() as u64, size, "nothing is truncated");
+        assert_eq!(
+            source.request().len() as u64,
+            s.h.max_request_bytes,
+            "and the request is the ceiling exactly"
+        );
+        assert_eq!(
+            source.body(),
+            fs::read(&real_guess).expect("the file reads")
+        );
+    }
+
+    #[test]
+    fn a_file_that_grew_after_the_stat_is_refused_naming_the_three_figures() {
+        let s = scene();
+        let admitted = s.admit("growing.lua", b"return 1\n");
+        // Past the ceiling, not merely past the stat: a file with headroom
+        // that grew into it is still sendable.
+        let big = vec![b'x'; (s.h.max_request_bytes + 1) as usize];
+        fs::write(admitted.path().as_path(), &big).expect("the file grows");
+        let err = read(&admitted).expect_err("it grew past the ceiling");
+        let line = err.to_string();
+        assert!(matches!(err.kind, Refusal::Grew { .. }), "{err:?}");
+        assert!(line.contains(&big.len().to_string()), "the read: {line}");
+        assert!(
+            line.contains(&admitted.size().to_string()),
+            "the stat: {line}"
+        );
+        assert!(
+            line.contains(&admitted.headroom().to_string()),
+            "the headroom: {line}"
+        );
+    }
+
+    #[test]
+    fn a_file_removed_between_the_check_and_the_read_is_refused() {
+        let s = scene();
+        let admitted = s.admit("vanishing.lua", b"return 1\n");
+        fs::remove_file(admitted.path().as_path()).expect("the file goes");
+        let err = read(&admitted).expect_err("there is nothing to open");
+        assert!(matches!(err.kind, Refusal::Open(_)), "{err:?}");
     }
 }
