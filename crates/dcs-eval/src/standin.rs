@@ -305,6 +305,24 @@ impl Standin {
     /// whose reply could not be written, which the executor counts and
     /// this side drops.
     pub fn tick(&mut self) -> Vec<String> {
+        self.tick_with(|_| {})
+    }
+
+    /// One frame whose listing `pick` may reorder or shorten before any of
+    /// it is answered. It is handed the ids the executor would answer —
+    /// the exact `.req` names in sorted order, each without its suffix —
+    /// and whatever it leaves in the vector is answered in the order it
+    /// left them.
+    ///
+    /// A live executor never does this: it answers in sorted order until
+    /// its tick budget is spent. The hook is here because a client that
+    /// claims to yield replies in id order can only be held to it by a
+    /// session that answers in some other order, and a fixture that waits
+    /// for replies to happen to arrive out of order proves nothing. What
+    /// `pick` drops is left on the disk for a later frame, which is also
+    /// what a spent budget does, so a test can hold one request back
+    /// without inventing a state the executor cannot be in.
+    pub fn tick_with(&mut self, pick: impl FnOnce(&mut Vec<String>)) -> Vec<String> {
         self.tick += 1;
         let mut names: Vec<String> = match fs::read_dir(&self.req) {
             Ok(listing) => listing
@@ -315,9 +333,14 @@ impl Standin {
             Err(_) => Vec::new(),
         };
         names.sort();
+        let mut ids: Vec<String> = names
+            .iter()
+            .map(|name| name[..name.len() - 4].to_owned())
+            .collect();
+        pick(&mut ids);
         let mut answered = Vec::new();
-        for name in names {
-            let id = name[..name.len() - 4].to_owned();
+        for id in ids {
+            let name = format!("{id}.req");
             let Some(answer) = self.answer(&self.req.join(&name)) else {
                 continue;
             };
@@ -1238,6 +1261,54 @@ mod tests {
             read(&s, "0000000004-abcd").headers.get("tick"),
             Some("3"),
             "the quiet tick counted"
+        );
+    }
+
+    #[test]
+    fn a_tick_answers_in_the_order_its_pick_left() {
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        for id in ["0000000001-abcd", "0000000002-abcd", "0000000003-abcd"] {
+            pinged(&s, id);
+        }
+        let answered = s.tick_with(|ids| {
+            assert_eq!(
+                ids,
+                &["0000000001-abcd", "0000000002-abcd", "0000000003-abcd"],
+                "the pick is handed sorted ids with the suffix off"
+            );
+            ids.reverse();
+        });
+        assert_eq!(
+            answered,
+            ["0000000003-abcd", "0000000002-abcd", "0000000001-abcd"],
+            "answered backwards, which no live frame does"
+        );
+        assert_eq!(entries(s.req()), "", "and every request is still taken");
+    }
+
+    #[test]
+    fn what_a_pick_drops_is_left_for_the_next_tick() {
+        let b = Sandbox::new();
+        let mut s = opened(&b, "hook");
+        pinged(&s, "0000000001-abcd");
+        pinged(&s, "0000000002-abcd");
+        assert_eq!(
+            s.tick_with(|ids| ids.truncate(1)),
+            ["0000000001-abcd"],
+            "only what the pick left"
+        );
+        assert_eq!(
+            entries(s.req()),
+            "0000000002-abcd.req",
+            "the other is untouched on the disk"
+        );
+        assert_eq!(entries(s.res()), "0000000001-abcd.res");
+        assert_eq!(s.tick(), ["0000000002-abcd"], "and the next tick takes it");
+        assert_eq!(
+            read(&s, "0000000002-abcd").headers.get("tick"),
+            Some("2"),
+            "on the tick that answered it"
         );
     }
 
