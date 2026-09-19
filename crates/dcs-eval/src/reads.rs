@@ -1288,6 +1288,28 @@ mod game_reads {
             );
         }
         assert_eq!(readings.skipped().len(), 4);
+        // One entry per read and no more. Without this the check is a
+        // ceiling alone: a gather that both marked a tier-2 read not sent
+        // *and* published it would leave two entries under one key, and
+        // the lookup above would find the first and pass.
+        assert_eq!(
+            readings.entries().len(),
+            9,
+            "the readings hold {} entries and there are nine reads",
+            readings.entries().len()
+        );
+        for r in listed(Tiers::with_tier_two()) {
+            assert_eq!(
+                readings
+                    .entries()
+                    .iter()
+                    .filter(|(e, _)| e.key() == r.key())
+                    .count(),
+                1,
+                "{} has more than one answer",
+                r.key()
+            );
+        }
     }
 
     #[test]
