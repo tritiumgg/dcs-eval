@@ -1719,7 +1719,11 @@ mod game_state {
         // host `DCS` is nil, so no read is possible there at all. An arm
         // keyed on the word rather than the host would make a mission out
         // of an answer that could not have come from that host.
-        for word in ["loaded", "sim", "stopped"] {
+        // `sim` first: it is the word both hosts hold, so it is the one
+        // a derivation keyed on the word alone would turn into a
+        // mission, and a loop that met it last would report some other
+        // word's failure instead.
+        for word in ["sim", "loaded", "stopped"] {
             let got = activity_of(
                 Some(&ours(Host::Export, word, true)),
                 Some(&said("Caucasus TvT")),
