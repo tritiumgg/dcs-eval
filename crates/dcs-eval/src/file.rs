@@ -704,4 +704,87 @@ mod file_refusals {
         assert!(line.contains("split the file"), "{line}");
         assert!(line.contains("dofile"), "{line}");
     }
+
+    // ---- before the file is opened ----------------------------------------
+    //
+    // The same three containment fixtures, each held open with nothing
+    // shared, so this process cannot read them. A guard that read first and
+    // refused afterwards cannot pass here: it would fail on the read. The
+    // stat still answers under such a hold, so these are specific to
+    // reading rather than reddening anything that merely touches the file.
+    //
+    // The whole of `check` is driven, not `judge` alone, because the order
+    // these prove is the order inside `check`.
+
+    /// The bytes every held fixture carries, and the token no refusal may
+    /// repeat back.
+    const SECRET: &[u8] = b"local password = 'hunter2'\n";
+
+    #[test]
+    fn a_held_file_outside_every_root_is_refused_without_being_opened() {
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let path = s.outside.as_path().join("secret.lua");
+        let real = file(&path, SECRET);
+        let hold = held(&path);
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("refused");
+        drop(hold);
+        assert_eq!(err.reason(), "is not under any allowed root", "{err}");
+    }
+
+    #[test]
+    fn a_held_config_file_is_refused_without_being_opened() {
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let path = s.writedir.as_path().join("Config").join("network.vault");
+        let real = file(&path, SECRET);
+        let hold = held(&path);
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("refused");
+        drop(hold);
+        assert!(matches!(err.kind, Refusal::Credentials { .. }), "{err}");
+    }
+
+    #[test]
+    fn a_held_install_file_is_refused_without_being_opened() {
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let path = s.install.as_path().join("MissionScripting.lua");
+        let real = file(&path, SECRET);
+        let hold = held(&path);
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("refused");
+        drop(hold);
+        assert!(matches!(err.kind, Refusal::Install { .. }), "{err}");
+    }
+
+    #[test]
+    fn no_refusal_carries_a_byte_of_the_file_or_an_open_error() {
+        // A refusal that leaked the first line would be the compile-error
+        // read this module exists to prevent, arriving by another door; one
+        // that leaked the open error would be an admission that the file
+        // was opened.
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let fixtures = [
+            s.outside.as_path().join("secret.lua"),
+            s.writedir.as_path().join("Config").join("network.vault"),
+            s.install.as_path().join("MissionScripting.lua"),
+        ];
+        let roots = s.roots();
+        for path in fixtures {
+            let real = file(&path, SECRET);
+            let hold = held(&path);
+            let line = check(&roots, &h, HEADERS, &real)
+                .expect_err("refused")
+                .to_string();
+            drop(hold);
+            assert!(
+                !line.contains("password") && !line.contains("hunter2"),
+                "the refusal repeats the file back: {line}"
+            );
+            assert!(
+                !line.contains("another process") && !line.contains("os error"),
+                "the refusal admits the file was opened: {line}"
+            );
+        }
+    }
 }
