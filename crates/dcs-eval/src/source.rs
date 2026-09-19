@@ -425,7 +425,7 @@ mod file_source {
     use crate::protocol;
     use crate::readers::Handshake;
     use crate::standin::Standin;
-    use crate::testing::{Sandbox, real, slurp};
+    use crate::testing::{Sandbox, real, sha256sum, slurp};
 
     use std::io;
     use std::path::{Path, PathBuf};
@@ -1155,9 +1155,14 @@ end
             raw.len() - BOM.len() - "#!/usr/bin/env lua".len(),
             "the mark and the shebang's text, and nothing else"
         );
-        let hex = source.sha256_hex();
-        assert_eq!(hex.len(), 64);
-        assert_eq!(hex, sha256::hex(&sha256::digest(source.body())));
+        // The digest is pinned against something outside this crate, and
+        // not against the expression `read` computed it from: comparing it
+        // with `sha256::digest(source.body())` would hold for any digest
+        // function, right or wrong, since that is the very call being
+        // checked. The body is written out and `sha256sum` asked about it.
+        let sent = s.b().join("line47-as-sent.lua");
+        fs::write(&sent, source.body()).expect("the body as sent is written");
+        assert_eq!(source.sha256_hex(), sha256sum(&sent));
     }
 
     #[test]
