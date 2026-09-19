@@ -35,6 +35,7 @@ mid-task is recorded here in the same commit that resolves it.
 | Subject | The question | Where it is settled |
 |---|---|---|
 | A path with a byte past ASCII | `bridge.md` §7.1: "Header values are ASCII and **may not contain CR or LF**; a writer refuses one rather than escaping it". The handshake carries five paths under `Saved Games`, and a Windows user name past ASCII puts such a byte in every one. Neither document says what the wire does with one. | Not settled. The executor refuses the handshake and stops the load with the header named in `dcs.log`, a visible failure rather than a file the client's parser would refuse. Where the answer lands is the client's parser (T13) or a decision record; `docs/STATE.md` carries it. |
+| How the install is named in the environment | `mcp.md` §4.2 spells it `DCS_INSTALL`; `bridge.md` §8 spells the same thing `DCS_API_DCS_INSTALL`, the prior project's name. | Not settled, and nothing turns on it yet: ADR 0014 has the client library take the install as a supplied `Real` and read no environment variable at all. Stage 7's argument parsing in `dcs-mcp` has to pick one spelling. |
 
 ## What each document says it could not determine
 
