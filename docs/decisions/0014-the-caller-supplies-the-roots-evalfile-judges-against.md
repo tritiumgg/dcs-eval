@@ -74,11 +74,23 @@ is not knowable until the resolution it has not done yet has happened.
 The caller supplies the roots, and `evalFile`'s judgement is made against a
 path the type system already proves was resolved.
 
-- **`Roots::new(allowed, writedir, install)` takes what it judges against.**
+- **`Roots::new(allowed, writedirs, install)` takes what it judges against.**
   All three are `paths::Real`, resolved by the caller. The library reads no
   argument vector, no environment variable, and never the process's current
-  directory. `Roots::new` resolves `<writedir>\Config` once, so a junction at
-  `Config` is followed too.
+  directory. `Roots::new` resolves a `Config` per write directory once, so a
+  junction at one is followed too.
+- **`writedirs` is a list, because `<Saved Games>\DCS*\Config\` is a glob
+  over every variant.** Stable, open beta and a dedicated server sit side by
+  side under `Saved Games`, each with its own `network.vault`, and one
+  allowed root of `Saved Games` covers all of them — a guard on a single
+  write directory would leave the siblings' credentials readable, which is
+  the opposite of what the bullet asks for. So every write directory the
+  caller supplies is guarded. What the library will not do is expand the
+  glob: which variants exist is a question about the machine, of the same
+  kind as where the install is, and this library answers none of those. The
+  expansion is `dcs-mcp`'s argument parsing in Stage 7, and until it lands
+  the guard covers exactly the variants a caller named — which the README
+  says on its line and a test pins from both sides.
 - **No root admits nothing, and there is no fallback to the current
   directory.** §4.2's "the server's working directory at launch" is a policy
   of `dcs-mcp serve`, where "at launch" is a real moment; a library call has
@@ -94,7 +106,8 @@ path the type system already proves was resolved.
   handshake had been read at all. `dcs-mcp` may *seed* the supplied install
   from `install_guard` visibly at start-up, which keeps it configuration.
   With no install supplied the install rule does not fire; with no write
-  directory supplied the `Config` rule has no root to fire on. "Always
+  directory supplied the `Config` rule has no root to fire on, and with one
+  variant supplied it fires for that variant alone. "Always
   refused" means *an allowed root does not excuse it*, not *refused without
   knowing where Saved Games is* — refusing every path with a `Config` segment
   would refuse `C:\project\Config\x.lua`, which §4.2 does not ask for.
@@ -132,11 +145,13 @@ Alternatives rejected:
 
 ## Consequences
 
-A caller that supplies no write directory gets **no credential guard**. That
+A caller that supplies no write directory gets **no credential guard**, and a
+caller that supplies one of several variants gets it for that one only. That
 is the honest reading of a library that derives nothing, and it moves the
 obligation rather than removing it: `dcs-mcp serve` refusing to serve without
-a write directory is Stage 7's, and until that lands the guard exists only
-where a caller configures one. The same is true of the install rule.
+a write directory, and enumerating the `DCS*` siblings beside the one it was
+given, are both Stage 7's, and until that lands the guard exists only where a
+caller configures one. The same is true of the install rule.
 
 The order of judgement is load-bearing. `Config` and the install are reported
 ahead of the roots rule so a user who added an allowed root covering `Config`

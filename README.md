@@ -71,10 +71,12 @@ puts it back.
 why.
 
 `dcs_eval_file` reads only what lies under a directory you allow it, and
-refuses `<Saved Games>\DCS*\Config\` and the DCS install whatever else is
-allowed — the first holds your account credentials, the second holds nothing
-a chunk needs. How the roots are configured on the command line is *not
-built*.
+refuses the `Config\` of every DCS write directory it is told about, and the
+DCS install, whatever else is allowed — the first holds your account
+credentials, the second holds nothing a chunk needs. Finding the `DCS*`
+siblings of the write directory you configure, so a second variant's
+credentials are refused too, is *not built*; nor is how the roots are
+configured on the command line.
 
 ## Use it from a terminal — *not built*
 

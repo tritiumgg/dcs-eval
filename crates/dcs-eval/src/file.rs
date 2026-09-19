@@ -8,7 +8,7 @@
 //! protection if it runs first: a refusal issued after the bytes are in hand
 //! has already done the reading it was meant to prevent.
 //!
-//! Three rules and a ceiling, in that order. A path under the write
+//! Three rules and a ceiling, in that order. A path under a write
 //! directory's `Config` is refused because `network.vault` there holds the
 //! user's account credentials. A path under the DCS install is refused
 //! because nothing served from here needs ED's own file as a chunk — an
@@ -30,7 +30,7 @@ use crate::protocol::{self, FrameError};
 use crate::readers::Handshake;
 
 /// The roots a file path is judged against: the directories a caller
-/// allowed, the `Config` inside the write directory, and the install.
+/// allowed, the `Config` inside each write directory, and the install.
 ///
 /// All three are supplied. Nothing here reads an argument vector, an
 /// environment variable, or this process's current directory, and nothing
@@ -40,33 +40,41 @@ use crate::readers::Handshake;
 #[derive(Clone, Debug)]
 pub struct Roots {
     allowed: Vec<Real>,
-    config: Option<Real>,
+    configs: Vec<Real>,
     install: Option<Real>,
 }
 
 impl Roots {
-    /// The roots, with `<writedir>\Config` resolved once here so that a
-    /// junction standing where `Config` should be is followed rather than
+    /// The roots, with a `Config` resolved once per write directory here so
+    /// that a junction standing where one should be is followed rather than
     /// walked around.
+    ///
+    /// `writedirs` is a list because a machine normally carries several DCS
+    /// variants side by side — stable, open beta, a dedicated server — each
+    /// with its own write directory and its own `network.vault`, and a guard
+    /// covering one of them leaves the others' credentials under whatever
+    /// root the caller allowed. Which directories exist is a question about
+    /// the machine, so finding them stays with the caller, as the install
+    /// does.
     ///
     /// An empty `allowed` is legal and admits nothing. It does not mean
     /// "anything goes" and it does not fall back to wherever this process
-    /// is sitting, which would be a containment check on an accident. A
-    /// `writedir` or `install` left out switches its rule off for want of
-    /// a root to fire on, and the caller that leaves one out is the one
-    /// that decided to go without that guard.
+    /// is sitting, which would be a containment check on an accident. An
+    /// empty `writedirs` or an `install` left out switches its rule off for
+    /// want of a root to fire on, and the caller that leaves one out is the
+    /// one that decided to go without that guard.
     pub fn new(
         allowed: &[Real],
-        writedir: Option<&Real>,
+        writedirs: &[Real],
         install: Option<&Real>,
     ) -> Result<Self, PathError> {
-        let config = match writedir {
-            Some(wd) => Some(paths::resolve(&wd.as_path().join("Config"))?),
-            None => None,
-        };
+        let mut configs = Vec::with_capacity(writedirs.len());
+        for wd in writedirs {
+            configs.push(paths::resolve(&wd.as_path().join("Config"))?);
+        }
         Ok(Self {
             allowed: allowed.to_vec(),
-            config,
+            configs,
             install: install.cloned(),
         })
     }
@@ -80,9 +88,7 @@ impl Roots {
     /// last because it is the one a user can fix by allowing another
     /// directory.
     pub fn judge(&self, real: &Real) -> Result<(), FileRefusal> {
-        if let Some(config) = &self.config
-            && config.contains(real)
-        {
+        if let Some(config) = self.configs.iter().find(|config| config.contains(real)) {
             return Err(FileRefusal {
                 path: real.clone(),
                 kind: Refusal::Credentials {
@@ -202,7 +208,7 @@ pub struct FileRefusal {
 
 #[derive(Debug)]
 pub enum Refusal {
-    /// Under the write directory's `Config`, where the account credentials
+    /// Under a write directory's `Config`, where the account credentials
     /// live. Refused whether or not an allowed root covers it.
     Credentials { config: Real },
     /// Under the DCS install. Refused whether or not an allowed root covers
@@ -313,7 +319,7 @@ mod file_refusals {
         fn roots(&self) -> Roots {
             Roots::new(
                 std::slice::from_ref(&self.project),
-                Some(&self.writedir),
+                std::slice::from_ref(&self.writedir),
                 Some(&self.install),
             )
             .expect("the roots resolve")
@@ -343,7 +349,7 @@ mod file_refusals {
         // An empty allow list is not "anything goes", and it does not fall
         // back to wherever this process is sitting.
         let s = scene();
-        let roots = Roots::new(&[], None, None).expect("the roots resolve");
+        let roots = Roots::new(&[], &[], None).expect("the roots resolve");
         let real = file(&s.project.as_path().join("ok.lua"), b"return 1\n");
         let err = roots.judge(&real).expect_err("nothing is admitted");
         assert!(matches!(err.kind, Refusal::OutsideEveryRoot), "{err}");
@@ -362,7 +368,7 @@ mod file_refusals {
         let second = dir(&s.b, "other-project");
         let roots = Roots::new(
             &[s.project.clone(), second.clone()],
-            Some(&s.writedir),
+            std::slice::from_ref(&s.writedir),
             Some(&s.install),
         )
         .expect("the roots resolve");
@@ -379,7 +385,7 @@ mod file_refusals {
         let logs = dir(&s.b, "Saved Games\\DCS\\Logs");
         let roots = Roots::new(
             &[s.project.clone(), logs.clone()],
-            Some(&s.writedir),
+            std::slice::from_ref(&s.writedir),
             Some(&s.install),
         )
         .expect("the roots resolve");
@@ -397,7 +403,7 @@ mod file_refusals {
         let config = real(&s.writedir.as_path().join("Config"));
         let roots = Roots::new(
             std::slice::from_ref(&s.writedir),
-            Some(&s.writedir),
+            std::slice::from_ref(&s.writedir),
             Some(&s.install),
         )
         .expect("the roots resolve");
@@ -418,7 +424,7 @@ mod file_refusals {
         let config = real(&s.writedir.as_path().join("Config"));
         let under_root = Roots::new(
             std::slice::from_ref(&s.writedir),
-            Some(&s.writedir),
+            std::slice::from_ref(&s.writedir),
             Some(&s.install),
         )
         .expect("the roots resolve");
@@ -433,11 +439,41 @@ mod file_refusals {
     }
 
     #[test]
+    fn refuses_every_supplied_variants_config_and_only_those() {
+        // A machine normally carries several DCS variants side by side, each
+        // with its own vault, and an allowed root as wide as `Saved Games`
+        // covers all of them. Each write directory the caller supplies is
+        // guarded; one it does not name is not, which is the boundary
+        // between this library and whoever finds the variants.
+        let s = scene();
+        let saved = dir(&s.b, "Saved Games");
+        let beta = dir(&s.b, "Saved Games\\DCS.openbeta");
+        let server = dir(&s.b, "Saved Games\\DCS.release_server");
+        let roots = Roots::new(
+            std::slice::from_ref(&saved),
+            &[s.writedir.clone(), beta.clone()],
+            Some(&s.install),
+        )
+        .expect("the roots resolve");
+        for wd in [&s.writedir, &beta] {
+            let vault = file(&wd.as_path().join("Config").join("network.vault"), b"x");
+            let err = roots
+                .judge(&vault)
+                .expect_err("a supplied variant is guarded");
+            assert!(matches!(err.kind, Refusal::Credentials { .. }), "{err}");
+        }
+        let unnamed = file(&server.as_path().join("Config").join("network.vault"), b"x");
+        roots
+            .judge(&unnamed)
+            .expect("a variant nobody supplied has no root to fire on");
+    }
+
+    #[test]
     fn a_writedir_the_caller_did_not_supply_leaves_config_with_no_root() {
         // No write directory means no Config to fire on. It is not a rule
         // about the word: `C:\project\Config\x.lua` is an ordinary path.
         let s = scene();
-        let roots = Roots::new(std::slice::from_ref(&s.project), None, Some(&s.install))
+        let roots = Roots::new(std::slice::from_ref(&s.project), &[], Some(&s.install))
             .expect("the roots resolve");
         let real = file(
             &s.project.as_path().join("Config").join("x.lua"),
@@ -475,7 +511,7 @@ mod file_refusals {
         let b = Sandbox::new();
         let project = dir(&b, "project");
         let install = dir(&b, "DCS World OpenBeta");
-        let roots = Roots::new(&[project], None, Some(&install)).expect("the roots resolve");
+        let roots = Roots::new(&[project], &[], Some(&install)).expect("the roots resolve");
         let short = short_name(install.as_path());
         let path = short.join("Scripts").join("x.lua");
         let real = file(&path, b"return 1\n");
@@ -497,7 +533,7 @@ mod file_refusals {
         fs::create_dir_all(install.as_path().join("Scripts")).expect("Scripts");
         let link = b.join("project").join("link");
         junction(&link, &install.as_path().join("Scripts"));
-        let roots = Roots::new(&[project], None, Some(&install)).expect("the roots resolve");
+        let roots = Roots::new(&[project], &[], Some(&install)).expect("the roots resolve");
         let path = link.join("x.lua");
         let real = file(&path, b"return 1\n");
         let err = roots.judge(&real).expect_err("the junction is followed");
@@ -511,8 +547,12 @@ mod file_refusals {
     #[test]
     fn an_install_the_caller_did_not_supply_is_not_a_rule() {
         let s = scene();
-        let roots = Roots::new(std::slice::from_ref(&s.install), Some(&s.writedir), None)
-            .expect("the roots resolve");
+        let roots = Roots::new(
+            std::slice::from_ref(&s.install),
+            std::slice::from_ref(&s.writedir),
+            None,
+        )
+        .expect("the roots resolve");
         let real = file(&s.install.as_path().join("x.lua"), b"return 1\n");
         roots
             .judge(&real)
