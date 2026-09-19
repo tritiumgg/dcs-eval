@@ -512,6 +512,14 @@ end
         while dir.as_os_str().len() < CHUNKNAME_MAX {
             dir = dir.join("a-directory-with-a-name-of-its-own");
         }
+        // Past 200 bytes but still short of what Windows will make without
+        // being asked nicely, so a host with a long temp path says what is
+        // wrong here instead of failing in the filesystem below.
+        let leaf = dir.as_os_str().len() + "\\probe.lua".len();
+        assert!(
+            leaf < 260,
+            "this host's temp path leaves no room for the fixture: {leaf} bytes"
+        );
         fs::create_dir_all(&dir).expect("the deep directory is made");
         let path = dir.join("probe.lua");
         fs::write(&path, b"return 1\n").expect("the file is written");
@@ -527,6 +535,14 @@ end
         // fixture is a path padded to land the name on it exactly.
         let b = Sandbox::new();
         let here = real(&b.path).to_string().len();
+        // The padding is what is left of 200 once this host's own temp path
+        // is spent, so a host with a long one cannot hold the fixture. Say
+        // so here rather than underflow the subtraction below.
+        let spent = 1 + "\\".len() * 2 + "probe.lua".len();
+        assert!(
+            here + spent < CHUNKNAME_MAX,
+            "this host's temp path is {here} bytes, too long to pad a 200-byte name from"
+        );
         let filler = CHUNKNAME_MAX - 1 - here - "\\".len() * 2 - "probe.lua".len();
         let dir = b.path.join("d".repeat(filler));
         fs::create_dir_all(&dir).expect("the padded directory is made");
