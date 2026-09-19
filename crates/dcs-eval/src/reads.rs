@@ -17,6 +17,11 @@
 //! published is proved at the publication seam and on the stand-in's own
 //! ledger of the bytes that reached the disk.
 
+use std::fmt;
+
+use crate::pipeline::PipeError;
+use crate::wait::Outcome;
+
 /// Which tier a read belongs to, and so whether it is sent by default.
 ///
 /// Tier 2 is built and off. The four in it are present in the hook state
@@ -197,9 +202,172 @@ pub fn chunk(callee: &str) -> Vec<u8> {
     .into_bytes()
 }
 
+/// Why a listed read was not published at all.
+///
+/// The two are kept apart, and the tier filter is applied first: a tier-2
+/// read while the switch is off says so even during a load, because it
+/// would not have been sent either way, and only a read the switch admits
+/// can be held back by the load.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotSent {
+    /// Tier 2 is off, and this read is in it.
+    TierTwoOff,
+    /// The session is loading. Nothing answers during a load, so a
+    /// request published into one would only wait.
+    Loading,
+}
+
+impl fmt::Display for NotSent {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::TierTwoOff => write!(f, "tier 2 is off"),
+            Self::Loading => write!(f, "the session is loading"),
+        }
+    }
+}
+
+/// What one read came to. Five arms and no default: an errored read, an
+/// absent read, a false read and a far end that has stopped speaking the
+/// grammar are four different findings, and the derivation that reads
+/// these must not be able to confuse them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Answer {
+    /// The chunk ran and returned. `value` is the scalar's text, or
+    /// `None` where the type was one the chunk reports without
+    /// stringifying.
+    Value {
+        lua_type: String,
+        value: Option<String>,
+    },
+    /// The read threw inside its own `pcall`, message verbatim. Nothing
+    /// else produces this arm, which is what makes an errored read its
+    /// own axis rather than a kind of absence.
+    Raised { message: String },
+    /// An `ok` reply that is not the chunk's grammar. It is kept apart
+    /// from a raise because a far end that has stopped speaking the
+    /// grammar is a finding about this build, not a fact about the game.
+    Malformed { body: Vec<u8> },
+    /// Anything that is not an `ok` reply: a refusal with its status and
+    /// stage, a pending, a session superseded or gone, or a window that
+    /// could not publish or could not read. All of it means the same
+    /// thing to a reader — no answer came back — and none of it says
+    /// anything about the game.
+    Unanswered { why: String },
+    /// The read was never published.
+    NotSent { why: NotSent },
+}
+
+/// The grammar's tag words that carry no text after the tab.
+const OPAQUE: [&str; 4] = ["table", "function", "userdata", "thread"];
+
+/// Every Lua type name, which is the whole of what a well-formed tag may
+/// be besides `error`.
+const TYPES: [&str; 8] = [
+    "nil", "boolean", "number", "string", "table", "function", "userdata", "thread",
+];
+
+/// What the pipeline's item for one read says that read came to.
+///
+/// It takes the whole item rather than the outcome alone, so the error
+/// half — a spec that never reached the disk, a counter with nothing
+/// left, a session that would not read — lands on `Unanswered` instead of
+/// being dropped or unwrapped.
+///
+/// The body is split at the **first** tab and no other: a raised message
+/// or a returned string may carry tabs and newlines of its own, and the
+/// tail is passed through exactly as it came. `error` is not a Lua type
+/// name, so a read that *returns* the string "error" is tagged `string`
+/// and cannot be mistaken for one that threw.
+#[must_use]
+pub fn answer_of(item: Result<Outcome, PipeError>) -> Answer {
+    let envelope = match item {
+        Ok(Outcome::Reply(envelope)) => envelope,
+        Ok(Outcome::Pending { id, phase, .. }) => {
+            return Answer::Unanswered {
+                why: format!("{id} is still pending, the session in {phase}"),
+            };
+        }
+        Ok(Outcome::Superseded { id }) => {
+            return Answer::Unanswered {
+                why: format!("{id}: the session was superseded before it answered"),
+            };
+        }
+        Ok(Outcome::Dead { id }) => {
+            return Answer::Unanswered {
+                why: format!("{id}: the session was gone before it answered"),
+            };
+        }
+        Err(err) => {
+            return Answer::Unanswered {
+                why: err.to_string(),
+            };
+        }
+    };
+    let status = envelope.headers.get("status").unwrap_or_default();
+    if status != "ok" {
+        let stage = envelope.headers.get("stage").unwrap_or_default();
+        let stage = if stage.is_empty() {
+            String::new()
+        } else {
+            format!(" at {stage}")
+        };
+        return Answer::Unanswered {
+            why: format!(
+                "{status}{stage}: {}",
+                String::from_utf8_lossy(&envelope.body)
+            ),
+        };
+    }
+    // The chunk always returns a string, so a reply that says it returned
+    // anything else did not run the chunk this side built.
+    if envelope.headers.get("result_type").unwrap_or_default() != "string" {
+        return Answer::Malformed {
+            body: envelope.body,
+        };
+    }
+    let Ok(text) = std::str::from_utf8(&envelope.body) else {
+        return Answer::Malformed {
+            body: envelope.body,
+        };
+    };
+    let Some((tag, rest)) = text.split_once('\t') else {
+        return Answer::Malformed {
+            body: envelope.body,
+        };
+    };
+    if tag == "error" {
+        return Answer::Raised {
+            message: rest.to_owned(),
+        };
+    }
+    if !TYPES.contains(&tag) {
+        return Answer::Malformed {
+            body: envelope.body,
+        };
+    }
+    if OPAQUE.contains(&tag) {
+        if !rest.is_empty() {
+            // The chunk never stringifies one of these, so text after the
+            // tab means something else wrote the body.
+            return Answer::Malformed {
+                body: envelope.body,
+            };
+        }
+        return Answer::Value {
+            lua_type: tag.to_owned(),
+            value: None,
+        };
+    }
+    Answer::Value {
+        lua_type: tag.to_owned(),
+        value: Some(rest.to_owned()),
+    }
+}
+
 #[cfg(test)]
 mod game_reads {
     use super::*;
+    use crate::protocol::{Envelope, frame, parse};
 
     /// The five tier-1 callees, spelt as the frozen text spells them.
     fn tier_one() -> Vec<&'static str> {
@@ -332,6 +500,220 @@ mod game_reads {
             over_a_stub("stub = function() return {} end", "stub"),
             "table\t"
         );
+    }
+
+    /// A reply as the pipeline hands one over: the status, the
+    /// `result_type` and the body, which is all `answer_of` reads.
+    fn reply(status: &str, result_type: &str, body: &[u8]) -> Result<Outcome, PipeError> {
+        let mut lines = vec![("status", status), ("id", "0000000001-ab")];
+        if !result_type.is_empty() {
+            lines.push(("result_type", result_type));
+        }
+        Ok(Outcome::Reply(envelope(&lines, body)))
+    }
+
+    /// An envelope built the way one really arrives: framed and parsed,
+    /// so a fixture cannot say something the wire could not.
+    fn envelope(headers: &[(&str, &str)], body: &[u8]) -> Envelope {
+        let bytes = frame(headers, body).expect("the envelope frames");
+        parse(&bytes).expect("the envelope parses")
+    }
+
+    /// An `ok` reply carrying `body`, which is the ordinary case.
+    fn ok(body: &[u8]) -> Answer {
+        answer_of(reply("ok", "string", body))
+    }
+
+    #[test]
+    fn a_boolean_false_is_a_value_and_not_an_absence() {
+        // The four arms this stage exists to keep apart, in one place:
+        // a false read, an errored read, an absent read and a read that
+        // never went.
+        let f = ok(b"boolean\tfalse");
+        assert_eq!(
+            f,
+            Answer::Value {
+                lua_type: "boolean".to_owned(),
+                value: Some("false".to_owned()),
+            }
+        );
+        let raised = ok(b"error\tattempt to call a nil value");
+        let unanswered = answer_of(Err(PipeError::Exhausted));
+        let not_sent = Answer::NotSent {
+            why: NotSent::TierTwoOff,
+        };
+        assert!(matches!(raised, Answer::Raised { .. }), "{raised:?}");
+        assert!(
+            matches!(unanswered, Answer::Unanswered { .. }),
+            "{unanswered:?}"
+        );
+        assert_ne!(f, raised);
+        assert_ne!(f, unanswered);
+        assert_ne!(f, not_sent);
+        assert_ne!(raised, unanswered);
+        assert_ne!(raised, not_sent);
+        assert_ne!(unanswered, not_sent);
+    }
+
+    #[test]
+    fn an_errored_read_carries_its_message_verbatim() {
+        assert_eq!(
+            ok(b"error\t[string \"=dcs-eval read DCS.getPause\"]:1: boom"),
+            Answer::Raised {
+                message: "[string \"=dcs-eval read DCS.getPause\"]:1: boom".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_raised_message_carrying_a_tab_keeps_it_because_the_split_is_at_the_first() {
+        assert_eq!(
+            ok(b"error\tone\ttwo\nthree"),
+            Answer::Raised {
+                message: "one\ttwo\nthree".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_read_that_returned_the_word_error_is_a_string_and_not_a_raise() {
+        // `error` is not a Lua type name, so the tag says which of the
+        // two this is and the value never has to.
+        assert_eq!(
+            ok(b"string\terror"),
+            Answer::Value {
+                lua_type: "string".to_owned(),
+                value: Some("error".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn a_table_is_reported_by_type_with_no_text() {
+        assert_eq!(
+            ok(b"table\t"),
+            Answer::Value {
+                lua_type: "table".to_owned(),
+                value: None,
+            }
+        );
+    }
+
+    #[test]
+    fn a_table_with_a_tail_is_malformed_because_the_chunk_never_stringifies_one() {
+        assert_eq!(
+            ok(b"table\ttable: 0x00a1b2c3"),
+            Answer::Malformed {
+                body: b"table\ttable: 0x00a1b2c3".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn a_body_with_no_tab_is_malformed() {
+        assert_eq!(
+            ok(b"boolean true"),
+            Answer::Malformed {
+                body: b"boolean true".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_unknown_type_word_is_malformed_and_not_a_value() {
+        assert_eq!(
+            ok(b"integer\t7"),
+            Answer::Malformed {
+                body: b"integer\t7".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_ok_reply_whose_result_type_is_not_string_is_malformed() {
+        assert_eq!(
+            answer_of(reply("ok", "nil", b"boolean\ttrue")),
+            Answer::Malformed {
+                body: b"boolean\ttrue".to_vec(),
+            }
+        );
+    }
+
+    #[test]
+    fn the_empty_body_of_a_nil_reply_is_malformed_and_not_a_nil_value() {
+        // A read chunk always returns a string, so an empty body is a far
+        // end that has stopped speaking the grammar and not a game fact.
+        assert_eq!(
+            answer_of(reply("ok", "nil", b"")),
+            Answer::Malformed { body: Vec::new() }
+        );
+        assert_eq!(
+            answer_of(reply("ok", "string", b"")),
+            Answer::Malformed { body: Vec::new() }
+        );
+    }
+
+    #[test]
+    fn an_error_status_is_unanswered_because_a_host_without_dcs_raises_outside_the_pcall() {
+        // The chunk indexes the callee before `pcall` is entered, so on a
+        // host where that table is nil the executor answers `error` with a
+        // stage. That is a request that did not run, not a read that threw.
+        let got = answer_of(reply(
+            "error",
+            "",
+            b"attempt to index global 'DCS' (a nil value)",
+        ));
+        let Answer::Unanswered { why } = got else {
+            panic!("wanted Unanswered, got {got:?}");
+        };
+        assert!(why.starts_with("error"), "{why}");
+        assert!(why.contains("nil value"), "{why}");
+    }
+
+    #[test]
+    fn a_refusal_is_unanswered_naming_its_status_and_stage() {
+        let got = answer_of(Ok(Outcome::Reply(envelope(
+            &[("status", "unsupported"), ("stage", "eval")],
+            b"gui is declared and not yet served by this executor",
+        ))));
+        let Answer::Unanswered { why } = got else {
+            panic!("wanted Unanswered, got {got:?}");
+        };
+        assert!(why.contains("unsupported"), "{why}");
+        assert!(why.contains("at eval"), "{why}");
+        assert!(why.contains("not yet served"), "{why}");
+    }
+
+    #[test]
+    fn a_pipeline_error_is_unanswered_and_not_a_missing_read() {
+        // The error half of the window's item has nowhere else to go, and
+        // dropping it would turn a window that could not publish into a
+        // read that was never listed.
+        let got = answer_of(Err(PipeError::Exhausted));
+        let Answer::Unanswered { why } = got else {
+            panic!("wanted Unanswered, got {got:?}");
+        };
+        assert!(why.contains("ten-digit seq"), "{why}");
+    }
+
+    #[test]
+    fn a_pending_and_a_dead_session_are_unanswered_each_in_its_own_words() {
+        let pending = answer_of(Ok(Outcome::Pending {
+            id: "0000000001-ab".to_owned(),
+            phase: "menu".to_owned(),
+            flag: None,
+        }));
+        let Answer::Unanswered { why } = pending else {
+            panic!("wanted Unanswered, got {pending:?}");
+        };
+        assert!(why.contains("pending") && why.contains("menu"), "{why}");
+        let dead = answer_of(Ok(Outcome::Dead {
+            id: "0000000001-ab".to_owned(),
+        }));
+        let Answer::Unanswered { why } = dead else {
+            panic!("wanted Unanswered, got {dead:?}");
+        };
+        assert!(why.contains("gone"), "{why}");
     }
 
     #[test]
