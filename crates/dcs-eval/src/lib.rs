@@ -8,6 +8,12 @@
 //! any other Rust program that wants to talk to a running DCS.
 
 pub mod file;
+
+// The axes: what the game is doing, derived from the handshake, the
+// heartbeat, a process probe and the reads. It owns the vocabulary and
+// the reason every unknown carries, and it decides nothing it was not
+// given evidence for.
+pub mod game;
 pub mod id;
 pub mod paths;
 pub mod pipeline;
