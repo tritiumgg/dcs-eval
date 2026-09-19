@@ -511,6 +511,71 @@ mod tests {
     }
 
     #[test]
+    fn the_window_stays_w_deep_while_specs_remain() {
+        // The window is counted from the session's side, never from the
+        // client's own bookkeeping: what is proved is how many requests
+        // were on the disk at once. Three deep over nine specs, one
+        // answered per frame, and the reading before each frame must be
+        // three until there are fewer than three specs left — a flat run
+        // of 3s is exactly what a batch cannot produce. A batch of three
+        // publishes three, waits for all three, and only then publishes
+        // the next three, so its second reading is 2 and no refill comes
+        // until the third is consumed.
+        //
+        // This depends on the refill happening before the yield: a client
+        // that refilled on its way back in would be two deep for as long
+        // as the caller held the reply.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let specs = pings(&s, 9);
+        let census = std::thread::scope(|scope| {
+            let ticker = scope.spawn(|| {
+                let mut readings = Vec::new();
+                for step in 0..9 {
+                    readings.push(census(s.req(), (9 - step).min(3), Duration::from_secs(2)));
+                    s.tick_with(|listed| listed.truncate(1));
+                }
+                readings
+            });
+            let drained: Vec<_> = Pipeline::over_with(&h, Minter::seeded(5), specs, 3, UPTO)
+                .map(|item| item.is_ok())
+                .collect();
+            assert_eq!(drained, vec![true; 9], "every spec came back");
+            ticker.join().expect("the ticker finishes")
+        });
+        assert_eq!(census, vec![3, 3, 3, 3, 3, 3, 3, 2, 1]);
+    }
+
+    #[test]
+    fn the_window_never_holds_more_than_w() {
+        // The other side of the same number, and it needs its own run: a
+        // client that published all nine at once would satisfy the flat
+        // run of 3s above vacuously, since a reading of "at least three"
+        // is what that one polls for. Here each reading is taken after the
+        // window has had time to settle, so a flood has finished flooding
+        // by the time it is counted.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let specs = pings(&s, 9);
+        let most = std::thread::scope(|scope| {
+            let ticker = scope.spawn(|| {
+                let mut most = 0;
+                for step in 0..9 {
+                    census(s.req(), (9 - step).min(3), Duration::from_secs(2));
+                    std::thread::sleep(Duration::from_millis(50));
+                    most = most.max(in_flight(s.req()));
+                    s.tick_with(|listed| listed.truncate(1));
+                }
+                most
+            });
+            let drained = Pipeline::over_with(&h, Minter::seeded(5), specs, 3, UPTO).count();
+            assert_eq!(drained, 9, "every spec came back");
+            ticker.join().expect("the ticker finishes")
+        });
+        assert!(most <= 3, "saw {most} requests in req/, wanted at most 3");
+    }
+
+    #[test]
     fn an_empty_spec_list_publishes_nothing_and_yields_nothing() {
         let b = Sandbox::new();
         let (s, h) = ticking(&b);
