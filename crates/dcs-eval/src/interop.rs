@@ -4,6 +4,16 @@
 //! the one place the two implementations of the protocol meet: every other
 //! control of the parser reads bytes some Rust wrote.
 //!
+//! The handshake is read twice here, once as an envelope and once through
+//! the typed reader, and both belong here. The envelope check holds the
+//! wire — the names, their order, the bytes. The typed one holds the
+//! reader against the only handshake nobody in this crate composed: its
+//! other fixtures are the stand-in's output or envelopes assembled in a
+//! test, so a field the executor renamed or respelt would leave them all
+//! green. No heartbeat is read: this suite plants requests and runs one
+//! frame, which publishes replies and never `heartbeat.txt`, so there are
+//! no real bytes of one to read and none are invented.
+//!
 //! The control is behavioural. Nothing here hashes the Lua: what reddens it
 //! is a byte of the executor's `frame` that changes the wire, and a byte in
 //! a comment leaves it green, which is right, because nothing on the wire
@@ -39,8 +49,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use crate::paths::{self, Real};
 use crate::protocol::{Envelope, PROTOCOL, parse};
 use crate::publish::send;
+use crate::readers::{Diagnostic, Handshake};
 use crate::standin::Standin;
 use crate::testing::{Sandbox, entries, slurp};
 
@@ -223,6 +235,92 @@ fn the_shipped_executors_handshake_parses() {
         !r.handshake_bytes.contains(&b'\r'),
         "the Lua writes LF alone: these are its bytes, not the stand-in's"
     );
+}
+
+/// The handshake's own value under `name`, as the executor wrote it.
+fn said<'a>(r: &'a Run, name: &str) -> &'a str {
+    r.handshake
+        .headers
+        .get(name)
+        .unwrap_or_else(|| panic!("the handshake names {name}"))
+}
+
+/// A path the executor wrote, as the filesystem says it is. The reader
+/// resolves every transport path, so this is what a typed field must equal
+/// — never the spelling, which the box's own short name makes differ.
+fn as_resolved(r: &Run, name: &str) -> Real {
+    paths::resolve(Path::new(said(r, name))).expect("the executor's path resolves")
+}
+
+#[test]
+fn the_shipped_executors_handshake_reads_through_the_typed_reader() {
+    // The reader's own tests read the stand-in and envelopes composed in
+    // Rust. This is the one that reads the Lua: if the executor's writer
+    // and the stand-in's drift apart, this reddens and they do not.
+    let r = run();
+    let h = Handshake::read(&PathBuf::from(said(&r, "output")).join("executor.txt"))
+        .expect("the client reads the shipped executor's handshake");
+    assert_eq!(
+        h,
+        Handshake::from_bytes(Path::new("executor.txt"), &r.handshake_bytes)
+            .expect("and the same bytes read the same way"),
+        "off the disk and off the captured bytes alike"
+    );
+
+    assert_eq!(h.host, "hook");
+    assert_eq!(h.stamp, said(&r, "stamp"));
+    assert_eq!(h.pid.to_string(), said(&r, "pid"));
+    // `started` is a local wall clock the run minted; it is carried through
+    // verbatim, which is all the reader claims of it, so that is what is
+    // asserted rather than a time.
+    assert_eq!(h.started, said(&r, "started"));
+
+    // Every transport path, against what the filesystem says of what the
+    // executor wrote.
+    assert_eq!(h.transport, as_resolved(&r, "transport"));
+    assert_eq!(h.req, as_resolved(&r, "req"));
+    assert_eq!(h.res, as_resolved(&r, "res"));
+    assert_eq!(h.arm, as_resolved(&r, "arm"));
+    assert_eq!(h.output, as_resolved(&r, "output"));
+    assert!(
+        h.transport.contains(&h.req)
+            && h.transport.contains(&h.res)
+            && h.transport.contains(&h.arm),
+        "the three sit in the session directory the executor named"
+    );
+
+    assert!(h.eval, "the executor wrote `allowed`, and it read as true");
+    assert_eq!(h.ops, ["ping", "eval"]);
+    assert_eq!(h.states, said(&r, "states"));
+    assert_eq!(h.namespace, "DcsEvalExecutor");
+    assert_eq!(h.source.as_deref(), Some("DcsEvalExecutor.lua"));
+    assert_eq!(h.transport_source, "lfs.tempdir");
+
+    assert_eq!(h.tick_budget_ms, 8);
+    assert_eq!(h.instruction_budget, 1_000_000);
+    assert_eq!(h.instruction_ceiling, 50_000_000);
+    assert_eq!(h.probe_every, 8);
+    assert_eq!(h.quiet_s, 3);
+    assert_eq!(h.max_request_bytes, 262_144);
+    assert_eq!(h.max_result_bytes, 65_536);
+
+    // `_APP_VERSION` is a DCS global and the reference interpreter is not
+    // DCS, so the executor wrote `ABSENT` here and nothing else can be
+    // proved of it away from a live install.
+    assert_eq!(h.app_version, None);
+    // The temp directory is the one this test's own box gave, so it
+    // resolves and can be compared.
+    assert_eq!(h.lfs_tempdir.real(), Some(&as_resolved(&r, "lfs_tempdir")));
+    assert_eq!(h.lfs_tempdir.problem(), None);
+    // The guard names the directory the run was launched from, which is a
+    // DCS install only on a machine that has one. Whether it resolves is
+    // the machine's answer, not the reader's, so only the reading is
+    // asserted: it is a path the executor named, not `ABSENT`.
+    match &h.install_guard {
+        Diagnostic::Real(path) => assert_eq!(path, &as_resolved(&r, "install_guard")),
+        Diagnostic::Unresolved { named, .. } => assert_eq!(named, said(&r, "install_guard")),
+        Diagnostic::Absent => panic!("the executor named a guard and the reader lost it"),
+    }
 }
 
 #[test]
