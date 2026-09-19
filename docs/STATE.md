@@ -89,8 +89,8 @@ entries at most: an eleventh means something here is finished, or belongs in
   wire is the writer's side, unsettled.
 - **The disarm owes a sweep, and no row asks for one.** Its heartbeat half is
   built (T29); the sweep on that same disarm is unclaimed.
-- **The held sibling is a held file.** The sweep's "cannot be removed" path is
-  proved with a file the suite keeps open; a client's `ReadDirectoryChangesW` handle is Stage 9's.
+- **The held sibling is a held file.** The sweep's "cannot be removed" path is proved
+  with a file the suite keeps open; the client's own handle is T56's, unheld at T41.
 - **The client's half of the fence waits on T54,** whose row now names it: the
   executor fences a foreign `for` since T25, and discarding a reply with
   another session's `stamp`, with the round-trip's `superseded`, needs `collect`.
