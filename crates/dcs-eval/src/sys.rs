@@ -22,6 +22,7 @@
 //! it times out while the process runs and returns at once once it has
 //! gone.
 
+use core::ptr::NonNull;
 use std::cell::Cell;
 use std::io;
 use std::os::windows::ffi::OsStrExt;
@@ -271,16 +272,22 @@ impl Drop for Owned {
     }
 }
 
+/// How much the kernel may write in one notification. The contents are
+/// never read, so the size is only about how much churn a directory may
+/// take before the kernel gives up and reports an overflow — which reads
+/// here as an ordinary wake anyway.
+const BUFFER: usize = 4096;
+
 /// The memory the kernel writes into while a read is pending.
 ///
-/// It is boxed by the `Changes` that owns it, and that is the single
-/// reason it is a type of its own: the kernel is handed an address, and a
-/// `Changes` moved between the arm and the completion must not take that
-/// address with it. A heap allocation stays where it is however often its
-/// owner moves.
+/// It is heap-allocated by the `Changes` that owns it, and that is the
+/// single reason it is a type of its own: the kernel is handed an
+/// address, and a `Changes` moved between the arm and the completion must
+/// not take that address with it. A heap allocation stays where it is
+/// however often its owner moves.
 #[repr(C, align(8))]
 struct Pending {
-    buffer: [u8; 4096],
+    buffer: [u8; BUFFER],
     overlapped: Overlapped,
 }
 
@@ -311,7 +318,19 @@ pub(crate) enum Woke {
 pub(crate) struct Changes {
     dir: Owned,
     event: Owned,
-    state: Box<Pending>,
+    /// The buffer and the `OVERLAPPED`, held as a bare pointer and never
+    /// as a `Box`.
+    ///
+    /// A heap allocation is what keeps the address stable, but a `Box` is
+    /// more than a heap allocation: it asserts that nothing else refers
+    /// to what it points at. While a read is outstanding that assertion
+    /// is false — the kernel holds a pointer into this very allocation —
+    /// and every fresh dereference of the `Box` would be a fresh claim
+    /// that it does not. The pointer is derived once, here, and every
+    /// address handed to a Win32 call is derived from it rather than
+    /// through a reference. `Drop` is what gives the allocation back,
+    /// and only once the drain says the kernel has let go of it.
+    state: NonNull<Pending>,
     /// Exactly one completion is outstanding, or posted and unconsumed.
     /// Set only by a successful arm; cleared only where a completion has
     /// been consumed or drained. The drain's `GetOverlappedResult` waits,
@@ -361,8 +380,8 @@ impl Changes {
         let event = Owned::from_nullable(unsafe {
             CreateEventW(core::ptr::null_mut(), 0, 0, core::ptr::null())
         })?;
-        let state = Box::new(Pending {
-            buffer: [0; 4096],
+        let state = Box::into_raw(Box::new(Pending {
+            buffer: [0; BUFFER],
             overlapped: Overlapped {
                 internal: 0,
                 internal_high: 0,
@@ -370,7 +389,8 @@ impl Changes {
                 offset_high: 0,
                 h_event: event.0,
             },
-        });
+        }));
+        let state = NonNull::new(state).expect("a box's address is never null");
         Ok(Self {
             dir,
             event,
@@ -392,6 +412,22 @@ impl Changes {
         self.armed
     }
 
+    /// The address of the `OVERLAPPED` the kernel is given, and the only
+    /// way anything here names it.
+    fn overlapped(&self) -> *mut Overlapped {
+        // SAFETY: the allocation is live from `open` until `Drop` gives
+        // it back, and the offset is taken without forming a reference to
+        // the whole of it, so nothing here claims the kernel is not also
+        // holding a pointer into it.
+        unsafe { &raw mut (*self.state.as_ptr()).overlapped }
+    }
+
+    /// The address of the buffer the kernel writes notifications into.
+    fn buffer(&self) -> *mut u8 {
+        // SAFETY: as `overlapped`.
+        unsafe { (&raw mut (*self.state.as_ptr()).buffer).cast::<u8>() }
+    }
+
     /// Ask the directory to report its next change.
     ///
     /// Not recursive: the reply directory has no subdirectories, and a
@@ -404,11 +440,17 @@ impl Changes {
         // status is still sitting in these fields, and the kernel is
         // documented to be handed a clean structure with only the event
         // filled in.
-        self.state.overlapped.internal = 0;
-        self.state.overlapped.internal_high = 0;
-        self.state.overlapped.offset = 0;
-        self.state.overlapped.offset_high = 0;
-        self.state.overlapped.h_event = self.event.0;
+        let overlapped = self.overlapped();
+        // SAFETY: no read is outstanding here — `armed` was false — so
+        // these fields are nobody's but this thread's, and the pointer
+        // points at a live allocation.
+        unsafe {
+            (*overlapped).internal = 0;
+            (*overlapped).internal_high = 0;
+            (*overlapped).offset = 0;
+            (*overlapped).offset_high = 0;
+            (*overlapped).h_event = self.event.0;
+        }
         // SAFETY: the directory handle is open, the buffer and the
         // `OVERLAPPED` are in one heap allocation this value owns and
         // will not free before the drain has run, and the length passed
@@ -416,12 +458,12 @@ impl Changes {
         let ok = unsafe {
             ReadDirectoryChangesW(
                 self.dir.0,
-                self.state.buffer.as_mut_ptr().cast(),
-                self.state.buffer.len() as u32,
+                self.buffer().cast(),
+                BUFFER as u32,
                 0,
                 FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_LAST_WRITE,
                 core::ptr::null_mut(),
-                &raw mut self.state.overlapped,
+                self.overlapped(),
                 None,
             )
         };
@@ -478,8 +520,7 @@ impl Changes {
         // auto-reset event's signal has just been consumed, so a call
         // that ever did have to wait would be waiting on something
         // nobody will set again.
-        let ok =
-            unsafe { GetOverlappedResult(self.dir.0, &raw mut self.state.overlapped, &mut got, 0) };
+        let ok = unsafe { GetOverlappedResult(self.dir.0, self.overlapped(), &mut got, 0) };
         if ok != 0 {
             self.armed = false;
             return Woke::Event;
@@ -513,14 +554,13 @@ impl Changes {
         //
         // SAFETY: the handle is open and the `OVERLAPPED` is the one
         // armed against it.
-        unsafe { CancelIoEx(self.dir.0, &raw mut self.state.overlapped) };
+        unsafe { CancelIoEx(self.dir.0, self.overlapped()) };
         let mut got = 0u32;
         // SAFETY: as above, and `bWait` is true here because the question
         // is whether the kernel has genuinely let go of the buffer.
         // `armed` is the invariant that keeps it finite: a completion is
         // outstanding or posted, so one is coming.
-        let ok =
-            unsafe { GetOverlappedResult(self.dir.0, &raw mut self.state.overlapped, &mut got, 1) };
+        let ok = unsafe { GetOverlappedResult(self.dir.0, self.overlapped(), &mut got, 1) };
         self.drained.set(Some(if ok != 0 {
             0
         } else {
@@ -532,11 +572,18 @@ impl Changes {
 
 impl Drop for Changes {
     fn drop(&mut self) {
-        // Cancel, drain, and only then release. Nothing in this body
-        // releases anything: the two handles and the box are dropped by
-        // the compiler after it returns, which is what makes the drain
-        // impossible to skip on any path out of a wait, a `?` or a panic.
+        // Cancel, drain, and only then release. The order is the whole of
+        // it: the drain returns before the allocation the kernel was
+        // handed a pointer into is given back, and putting it in `Drop`
+        // is what makes it impossible to skip on any path out of a wait,
+        // a `?` or a panic. The two handles the compiler closes after
+        // this body returns.
         self.quiesce();
+        // SAFETY: the pointer came from `Box::into_raw` in `open`, no
+        // other owner of it was ever made, the drain above has returned
+        // so no read is outstanding against the allocation, and nothing
+        // reads `self.state` after this.
+        drop(unsafe { Box::from_raw(self.state.as_ptr()) });
     }
 }
 
