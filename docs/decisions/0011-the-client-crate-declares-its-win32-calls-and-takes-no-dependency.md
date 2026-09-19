@@ -19,10 +19,10 @@ for the binary; §1.6 weighs the installer first:
 
 > 1. **The installer.** `dcs-mcp.exe` with `DcsApi.lua` inside it
 >    (`include_bytes!`), one download, no runtime, no package manager, on a
->    Windows machine whose owner wants to fly.
+>    Windows machine whose owner wants to fly. […]
 
-For the library, the nearest thing to a rule is §8's last paragraph, which says
-why the skin is specified apart from it:
+For the library, the nearest thing to a rule is `bridge.md` §8's last
+paragraph, which says why the skin is specified apart from it:
 
 > The MCP skin is specified as its own project in `mcp.md`, which owns this
 > library so that several unrelated projects can use it without depending on
@@ -32,15 +32,15 @@ That sentence is about not making a consumer take the MCP server to get the
 wire. A dependency tree is the same argument one level down: a consumer that
 links this crate for the protocol takes everything the crate links with it.
 
-§3.2 also names an implementation by name, which is the one place a
-specification reaches for an OS call directly:
+`bridge.md` §3.2 also names an implementation by name, which is the one place
+a specification reaches for an OS call directly:
 
 > The client's `wait` replaces its fixed sleep with a watch on the reply
 > directory (`fs.watch`, which on Windows is `ReadDirectoryChangesW`), waking
 > on any event and then listing the directory once. A poll at 25 ms remains as
 > the fallback for a watch that reports nothing, because `fs.watch` is
 > documented as unreliable on some filesystems and the failure would be
-> silent.
+> silent. […]
 
 ## Decision
 
@@ -50,9 +50,18 @@ standard library it declares or writes:
 - The Win32 symbols it calls are declared in one module, `sys.rs`, each with
   its ABI written out and wrapped in a safe function, so that every `unsafe`
   in the crate is in one file a reviewer can audit whole. The set is small and
-  known: `OpenProcess`, `GetExitCodeProcess` and `CloseHandle` for liveness,
+  known: `OpenProcess`, `WaitForSingleObject` and `CloseHandle` for liveness,
   and `CreateFileW`, `CreateEventW`, `ReadDirectoryChangesW`,
-  `GetOverlappedResult` and `WaitForSingleObject` for the watch.
+  `GetOverlappedResult`, `WaitForSingleObject` and `CancelIoEx` for the watch.
+
+  Two of those are chosen against the obvious call. Liveness is decided by
+  `WaitForSingleObject(h, 0)` returning `WAIT_TIMEOUT` rather than by
+  `GetExitCodeProcess`, which reports `STILL_ACTIVE` for a process that
+  exited with code 259 and so calls a dead executor alive. And `CancelIoEx`
+  is in the set because a `wait` that times out must cancel the pending
+  overlapped read before its buffer goes out of scope; closing the handle
+  alone leaves the kernel a pointer into freed memory, and T56's
+  "no handle held once `wait` returns" is exactly that path.
 - SHA-256 is written in the crate and proved against the published vectors and
   against `sha256sum` on a fixture. It is a fixed algorithm with published
   test vectors, used here for provenance rather than for security.
