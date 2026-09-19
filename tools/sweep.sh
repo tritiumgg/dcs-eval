@@ -328,15 +328,26 @@ END {
     }
 }'
 
-# The paths one control touches, in the order its blocks name them.
+# The paths one control touches, in the order its blocks first name them. A
+# control may carry two blocks for one file — a line moved from here to there
+# is two hunks far apart — and that file is copied once and rewritten once.
 paths_of() {
-    awk '/^F\t/ { p = $0; sub(/^F\t/, "", p); print p }' "$work/edits"
+    awk '/^F\t/ { p = $0; sub(/^F\t/, "", p); if (!(p in seen)) { seen[p] = 1; print p } }' \
+        "$work/edits"
 }
 
+# Every hunk of one file, from however many blocks name it, with a blank line
+# between blocks so the last hunk of one does not run into the first of the
+# next.
 hunks_of() {
     awk -v want="$1" '
-        /^F\t/ { p = $0; sub(/^F\t/, "", p); on = (p == want); next }
-        on && /^L\t/ { t = $0; sub(/^L\t/, "", t); print t }
+        /^F\t/ {
+            p = $0; sub(/^F\t/, "", p)
+            on = (p == want)
+            if (on && any) print ""
+            next
+        }
+        on && /^L\t/ { t = $0; sub(/^L\t/, "", t); any = 1; print t }
     ' "$work/edits"
 }
 
@@ -351,10 +362,6 @@ apply_control() {
         return 1
     fi
     paths=$(paths_of)
-    if [ "$(printf '%s\n' "$paths" | sort | uniq -d)" != "" ]; then
-        unperformed="two blocks name the same file; the format wants one per file"
-        return 1
-    fi
     # Every file is checked before any file is copied, and every copy is taken
     # before any file is written.
     for p in $paths; do
