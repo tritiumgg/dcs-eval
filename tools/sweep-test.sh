@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=28
+CASES=29
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -540,6 +540,49 @@ tree_intact || got=98
 [ -e "$tree/.sweep-inflight" ] && got=97
 check 'an interrupted run puts the file back and says how many' \
     130 "$got" "interrupted: restored" "$out"
+
+# A kill -9 fires no trap, so the breadcrumb is all a human is left with. It
+# has to name the mutated file and the copy it goes back from — and the
+# command it prints has to be one that actually puts the file back.
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/killed-outright
+
+- command: `sh -c 'if grep -q moved alpha.txt; then sleep 9; fi; exit 0'`
+- reddens: `held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+sh "$runner" --inventory "$sandbox/inventory.md" --root "$tree" \
+    > "$sandbox/killed.log" 2>&1 &
+bg=$!
+# Killing before the mutation lands would prove nothing about what the
+# breadcrumb says once it has.
+waited=0
+while ! grep -q moved "$tree/alpha.txt" 2>/dev/null; do
+    waited=$((waited + 1))
+    [ "$waited" -ge 100 ] && break
+    sleep 0.1
+done
+kill -KILL "$bg" 2>/dev/null || true
+wait "$bg" >/dev/null 2>&1 || true
+out=$(cat "$tree/.sweep-inflight" 2>&1)
+got=0
+grep -q moved "$tree/alpha.txt" || got=95
+# Run the recovery command the breadcrumb printed, exactly as it printed it.
+sh -c "$(grep '^  cp ' "$tree/.sweep-inflight")" || got=94
+tree_intact || got=93
+# Nothing cleaned up after the killed run, so this does: the copies it took
+# and the breadcrumb that pointed at them.
+rm -rf "$(dirname "$(sed -n 's/^copies: //p' "$tree/.sweep-inflight")")"
+rm -f "$tree/.sweep-inflight"
+# The destination is compared on its tail: the runner resolves --root with
+# `pwd -P`, which on Windows spells the same directory a different way.
+check 'a run killed outright leaves a breadcrumb that names the file and puts it back' \
+    0 "$got" '/tree/alpha.txt"' "$out"
 
 # --- what the run says it covered -------------------------------------------
 

@@ -390,6 +390,11 @@ apply_control() {
         fi
     done
     for p in $paths; do take_copy "$p"; done
+    # Rewritten now that the copies exist. The breadcrumb is the only thing a
+    # kill -9 leaves behind — no trap fires — and one written before the first
+    # copy was taken names no file to put back and nowhere to put it from,
+    # which is the whole of what it is for.
+    note_breadcrumb "$1"
     for p in $paths; do
         hunks_of "$p" > "$work/hunks"
         if why=$(awk -v hunks="$work/hunks" "$APPLY" "$root/$p" 2>&1 >"$work/out"); then
