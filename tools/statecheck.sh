@@ -60,5 +60,27 @@ printf '%s\n' "$budgets" | while IFS='	' read -r name budget; do
     fi
 done || fail=1
 
+# A line budget alone does not hold the shape the file asks for: one entry
+# written as a single four-thousand-character line counts as one line and
+# walks straight past it, while being exactly the paragraph CLAUDE.md says
+# never to write. So an entry is held to its width too. The number is
+# generous — two or three sentences fit — and an entry that wants more than
+# that wants the pull request body or a decision record instead, which is
+# where a reader who wants the evidence should be sent.
+widest=450
+printf '%s\n' "$budgets" | while IFS='	' read -r name budget; do
+    awk -v want="## $name" -v max="$widest" -v section="$name" '
+        $0 == want { on = 1; next }
+        on && /^## / { exit }
+        on && length($0) > max {
+            printf "docs/STATE.md: \"%s\" has a %d-character entry, budget %d.\n", section, length($0), max > "/dev/stderr"
+            printf "  It begins: %.70s...\n", $0 > "/dev/stderr"
+            printf "  Put the evidence in the pull request; say here what was done.\n" > "/dev/stderr"
+            bad = 1
+        }
+        END { exit bad + 0 }
+    ' "$file" || exit 1
+done || fail=1
+
 [ "$fail" -eq 0 ] || exit 1
 echo "docs/STATE.md: within budget"
