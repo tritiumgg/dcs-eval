@@ -16,12 +16,23 @@
 //! gated axis's own values — including `n/a` and `unknown` — never supply
 //! one.
 //!
-//! The deny below is the structural half of "no default arm". A match over
-//! the evidence writes every arm out, so that adding a value to any of
-//! these enums stops the build instead of falling quietly into a
+//! The denies below are the structural half of "no default arm". A match
+//! over the evidence writes every arm out, so that adding a value to any
+//! of these enums stops the build instead of falling quietly into a
 //! catch-all that would fill an axis from something else.
+//!
+//! Both are needed and one is not enough. What each one catches was
+//! measured here rather than assumed. `wildcard_enum_match_arm` reddens a
+//! `_` standing for three missing arms and passes one standing for a
+//! single missing arm in silence, which is the case a derivation would
+//! reach for first — hence the second deny, which does redden it. One gap
+//! is left and is known: neither lint fires for a `_` standing for `None`
+//! in a match on an `Option`, which clippy exempts. The behavioural
+//! checks are what cover that, and a structural check nobody has driven
+//! is worth nothing, so this says what was driven.
 
 #![deny(clippy::wildcard_enum_match_arm)]
+#![deny(clippy::match_wildcard_for_single_variants)]
 
 use std::fmt;
 
