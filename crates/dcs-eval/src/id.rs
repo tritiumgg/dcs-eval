@@ -217,12 +217,16 @@ mod tests {
 
     #[test]
     fn two_minters_in_one_process_do_not_share_a_tag() {
-        // This rests on the process-local counter in the seed and on
-        // nothing else: these minters share a process id, and being built
-        // in one loop they share the address of the stack local too, so
-        // the counter is the only term that has to differ. It says
-        // nothing whatever about two *processes* started in the same
-        // millisecond, which nothing in this crate can test.
+        // These minters share a process id, and being built in one loop
+        // they share the address of the stack local too, so two terms of
+        // the seed differ: the clock and the process-local counter. The
+        // counter is the one that makes distinctness hold by mechanism
+        // rather than by clock resolution — but this test does not
+        // isolate it, and would stay green with the counter dropped on
+        // any box whose nanosecond clock separates adjacent calls, as
+        // this one does. It says nothing whatever about two *processes*
+        // started in the same millisecond, which nothing in this crate
+        // can test.
         let tags: HashSet<String> = (0..1_000).map(|_| Minter::new().tag().to_owned()).collect();
         assert_eq!(tags.len(), 1_000, "1,000 minters, 1,000 tags");
     }
