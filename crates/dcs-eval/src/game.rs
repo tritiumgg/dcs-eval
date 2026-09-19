@@ -285,6 +285,217 @@ impl fmt::Display for Why {
     }
 }
 
+/// The one reading of the heartbeat every axis works from.
+///
+/// The stamp and host checks happen once, here, rather than in each axis,
+/// so that no axis can come to read a file the others rejected. A
+/// heartbeat that is not this session's yields no phase at all: it is
+/// another install's file, and a phase taken off it would make an axis
+/// definite out of evidence that is not this session's. `status` carries a
+/// `belongs` flag and a wait takes its heartbeat through the same check,
+/// for the same reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Beat {
+    /// This session's, on the host this output directory is for.
+    Ours {
+        host: Host,
+        phase: Phase,
+        armed: bool,
+        last_callback: Option<String>,
+        callbacks: Vec<String>,
+    },
+    /// Another session's stamp: two installs writing into one output
+    /// directory.
+    Foreign { saw: String, wanted: String },
+    /// Another host's file under this host's directory.
+    WrongHost { saw: String, wanted: String },
+    /// There and would not parse.
+    Unreadable { detail: String },
+}
+
+impl Beat {
+    /// The verdict on `beat`, read for the session stamped `stamp` on
+    /// `host`.
+    ///
+    /// The stamp is checked before the host, and the order decides the
+    /// case where both differ: a file another session wrote says nothing
+    /// about this one, its host header included.
+    #[must_use]
+    pub fn verdict(beat: &crate::readers::Heartbeat, stamp: &str, host: &Host) -> Self {
+        if beat.stamp != stamp {
+            return Self::Foreign {
+                saw: beat.stamp.clone(),
+                wanted: stamp.to_owned(),
+            };
+        }
+        if beat.host != host.word() {
+            return Self::WrongHost {
+                saw: beat.host.clone(),
+                wanted: host.word().to_owned(),
+            };
+        }
+        let host = Host::named(&beat.host);
+        let phase = phase_of(&host, &beat.phase);
+        Self::Ours {
+            host,
+            phase,
+            armed: beat.armed,
+            last_callback: beat.last_callback.clone(),
+            callbacks: beat.callbacks.clone(),
+        }
+    }
+}
+
+/// Why this beat gives no phase, or `None` where it gives one.
+///
+/// Every axis that wants a phase asks here first, so the four ways there
+/// is no usable heartbeat stay four reasons rather than collapsing into
+/// one. It never produces a value, only a reason: an axis whose evidence
+/// is missing is unknown, and which way it is missing is what a reader
+/// needs.
+#[must_use]
+fn unusable(beat: Option<&Beat>) -> Option<Why> {
+    match beat {
+        Some(Beat::Ours { .. }) => None,
+        Some(Beat::Foreign { saw, wanted }) => Some(Why::ForeignHeartbeat {
+            saw: saw.clone(),
+            wanted: wanted.clone(),
+        }),
+        Some(Beat::WrongHost { saw, wanted }) => Some(Why::WrongHost {
+            saw: saw.clone(),
+            wanted: wanted.clone(),
+        }),
+        Some(Beat::Unreadable { detail }) => Some(Why::HeartbeatUnreadable {
+            detail: detail.clone(),
+        }),
+        None => Some(Why::NoHeartbeat),
+    }
+}
+
+/// What the session is doing.
+///
+/// `MenuOrEditor` is one value and not two, and it is not `unknown`: the
+/// axis knows the game is at one of the two, and nothing measured on this
+/// build tells them apart. The value's name holds the indeterminacy rather
+/// than picking.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Activity {
+    Loading,
+    Mission { name: String },
+    MenuOrEditor,
+    Unknown { why: Why },
+}
+
+impl fmt::Display for Activity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Loading => f.write_str("loading"),
+            Self::Mission { name } => write!(f, "in a mission, {name}"),
+            Self::MenuOrEditor => f.write_str(
+                "at the main menu or in the mission editor (not distinguished on this build)",
+            ),
+            Self::Unknown { why } => write!(f, "{why}"),
+        }
+    }
+}
+
+/// What the session is doing, from the heartbeat verdict and then the
+/// `mission_name` read — in that order, and never the other way.
+///
+/// The phase decides first and the read only sharpens it. That order is
+/// the whole of why a load costs no round trip: a load is read off a file
+/// already on the disk, and nothing answers during one anyway.
+///
+/// At the menu the answer is `menu-or-editor` **whatever `mission_name`
+/// says**. What `DCS.getMissionName()` gives at the menu — nothing, or
+/// still the last mission flown — has never been measured, so a name there
+/// is not evidence about anything and certainly not evidence against a
+/// phase that is measured.
+///
+/// On the export host no read is possible at all, for every phase word it
+/// writes and `sim` included: the two hosts' vocabularies overlap on that
+/// word, and `DCS` is nil on export, so an answer to the `mission_name`
+/// read cannot have come from there. Keying this arm on the word rather
+/// than on the host would make a mission out of a read that could not
+/// exist.
+#[must_use]
+pub fn activity_of(beat: Option<&Beat>, mission_name: Option<&crate::reads::Answer>) -> Activity {
+    if let Some(why) = unusable(beat) {
+        return Activity::Unknown { why };
+    }
+    let Some(Beat::Ours { host, phase, .. }) = beat else {
+        // `unusable` returned `None`, which it does for `Ours` alone.
+        return Activity::Unknown {
+            why: Why::NoHeartbeat,
+        };
+    };
+    match host {
+        Host::Export => Activity::Unknown {
+            why: Why::NoReadPossible { host: host.clone() },
+        },
+        Host::Other(_) => Activity::Unknown {
+            why: Why::PhaseUnrecognised {
+                host: host.clone(),
+                phase: phase.to_string(),
+            },
+        },
+        Host::Hook => match phase {
+            Phase::Load => Activity::Loading,
+            Phase::Menu => Activity::MenuOrEditor,
+            Phase::Sim | Phase::Paused => named_mission(phase, mission_name),
+            // The hook host's vocabulary does not hold these two; a
+            // heartbeat that writes one is saying something this build
+            // has no map for.
+            Phase::Loaded | Phase::Stopped | Phase::Unrecognised(_) => Activity::Unknown {
+                why: Why::PhaseUnrecognised {
+                    host: host.clone(),
+                    phase: phase.to_string(),
+                },
+            },
+        },
+    }
+}
+
+/// The mission the `mission_name` read names, where the phase already
+/// says the session is in one.
+fn named_mission(phase: &Phase, mission_name: Option<&crate::reads::Answer>) -> Activity {
+    use crate::reads::Answer;
+    let unknown = |why| Activity::Unknown { why };
+    match mission_name {
+        Some(Answer::Value { lua_type, value }) if lua_type == "string" => match value {
+            Some(name) if !name.is_empty() => Activity::Mission { name: name.clone() },
+            // The phase says a mission and the read says there is no
+            // name. Both facts are printed: the disagreement is itself
+            // the finding.
+            Some(_) => unknown(Why::Disagrees {
+                facts: vec![
+                    Fact::new("phase", phase.to_string()),
+                    Fact::new("mission_name", "the empty string"),
+                ],
+            }),
+            None => unknown(Why::WrongType {
+                lua_type: lua_type.clone(),
+                value: None,
+            }),
+        },
+        Some(Answer::Value { lua_type, value }) => unknown(Why::WrongType {
+            lua_type: lua_type.clone(),
+            value: value.clone(),
+        }),
+        // Alone: an errored read decides its axis and no other fact gets
+        // a say, the phase included.
+        Some(Answer::Raised { message }) => unknown(Why::Errored {
+            message: message.clone(),
+        }),
+        Some(Answer::Malformed { body }) => unknown(Why::Malformed { body: body.clone() }),
+        Some(Answer::Unanswered { why }) => unknown(Why::Unanswered { why: why.clone() }),
+        Some(Answer::NotSent { why }) => unknown(Why::NotSent { why: *why }),
+        None => unknown(Why::Unanswered {
+            why: crate::reads::Unanswered::Unyielded,
+        }),
+    }
+}
+
 /// The facts, one after another, for a line that prints all of them.
 fn joined(facts: &[Fact]) -> String {
     facts
@@ -299,6 +510,42 @@ fn joined(facts: &[Fact]) -> String {
 mod game_state {
     use super::*;
     use crate::reads;
+
+    /// A heartbeat verdict for this session on `host`, with the phase
+    /// word as the host would write it.
+    fn ours(host: Host, phase: &str, armed: bool) -> Beat {
+        let parsed = phase_of(&host, phase);
+        Beat::Ours {
+            host,
+            phase: parsed,
+            armed,
+            last_callback: None,
+            callbacks: Vec::new(),
+        }
+    }
+
+    /// A read that answered with the string `s`.
+    fn said(s: &str) -> reads::Answer {
+        reads::Answer::Value {
+            lua_type: "string".to_owned(),
+            value: Some(s.to_owned()),
+        }
+    }
+
+    /// A read that answered with the boolean `b`.
+    fn told(b: bool) -> reads::Answer {
+        reads::Answer::Value {
+            lua_type: "boolean".to_owned(),
+            value: Some(b.to_string()),
+        }
+    }
+
+    /// A read that threw inside its own `pcall`.
+    fn raised() -> reads::Answer {
+        reads::Answer::Raised {
+            message: "attempt to call a nil value".to_owned(),
+        }
+    }
 
     #[test]
     fn every_phase_word_the_two_hosts_use_parses() {
@@ -364,6 +611,272 @@ mod game_state {
         // decides a load here and the word which skips the reads window
         // cannot come to be spelt differently.
         assert_eq!(phase_of(&Host::Hook, PHASE_LOAD), Phase::Load);
+    }
+
+    #[test]
+    fn a_load_phase_is_loading() {
+        assert_eq!(
+            activity_of(Some(&ours(Host::Hook, "load", true)), None),
+            Activity::Loading
+        );
+    }
+
+    #[test]
+    fn a_load_phase_needs_no_mission_name_at_all() {
+        // The phase is read off a file already on the disk, so the answer
+        // is the same whatever the read says or does not say — which is
+        // what makes a load cost no round trip.
+        let beat = ours(Host::Hook, "load", true);
+        for name in [
+            None,
+            Some(said("Caucasus TvT")),
+            Some(said("")),
+            Some(raised()),
+        ] {
+            assert_eq!(
+                activity_of(Some(&beat), name.as_ref()),
+                Activity::Loading,
+                "a load was decided by the mission_name read"
+            );
+        }
+    }
+
+    #[test]
+    fn a_sim_phase_with_a_named_mission_is_a_mission() {
+        assert_eq!(
+            activity_of(
+                Some(&ours(Host::Hook, "sim", true)),
+                Some(&said("Caucasus TvT"))
+            ),
+            Activity::Mission {
+                name: "Caucasus TvT".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_paused_phase_with_a_named_mission_is_a_mission() {
+        assert_eq!(
+            activity_of(
+                Some(&ours(Host::Hook, "paused", true)),
+                Some(&said("Caucasus TvT"))
+            ),
+            Activity::Mission {
+                name: "Caucasus TvT".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn a_sim_phase_with_an_empty_mission_name_is_unknown_and_shows_both() {
+        let got = activity_of(Some(&ours(Host::Hook, "sim", true)), Some(&said("")));
+        let Activity::Unknown {
+            why: Why::Disagrees { facts },
+        } = &got
+        else {
+            panic!("wanted a disagreement, got {got:?}");
+        };
+        assert_eq!(facts.len(), 2, "both facts are shown: {facts:?}");
+        let said = got.to_string();
+        assert!(said.contains("phase said sim"), "{said}");
+        assert!(said.contains("mission_name said"), "{said}");
+    }
+
+    #[test]
+    fn a_sim_phase_with_an_errored_mission_name_is_unknown_naming_the_error_alone() {
+        // Alone: no phase beside it, no gate, nothing. An errored read
+        // decides its axis and no other fact gets a say.
+        let got = activity_of(Some(&ours(Host::Hook, "sim", true)), Some(&raised()));
+        assert_eq!(
+            got,
+            Activity::Unknown {
+                why: Why::Errored {
+                    message: "attempt to call a nil value".to_owned()
+                }
+            }
+        );
+        assert_eq!(got.to_string(), "unknown: attempt to call a nil value");
+    }
+
+    #[test]
+    fn a_sim_phase_with_an_unanswered_mission_name_is_unknown_and_not_errored() {
+        let answer = reads::Answer::Unanswered {
+            why: reads::Unanswered::Unyielded,
+        };
+        let got = activity_of(Some(&ours(Host::Hook, "sim", true)), Some(&answer));
+        assert_eq!(
+            got,
+            Activity::Unknown {
+                why: Why::Unanswered {
+                    why: reads::Unanswered::Unyielded
+                }
+            },
+            "a read that got no answer was read as one that raised"
+        );
+    }
+
+    #[test]
+    fn a_sim_phase_with_a_non_string_mission_name_is_unknown_naming_the_type() {
+        let got = activity_of(Some(&ours(Host::Hook, "sim", true)), Some(&told(true)));
+        assert_eq!(
+            got,
+            Activity::Unknown {
+                why: Why::WrongType {
+                    lua_type: "boolean".to_owned(),
+                    value: Some("true".to_owned()),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn a_mission_name_at_the_menu_is_never_evidence_against_menu_or_editor() {
+        // What `DCS.getMissionName()` gives at the menu has never been
+        // measured — nothing, or the last mission flown — so a name there
+        // is not evidence about anything.
+        let beat = ours(Host::Hook, "menu", true);
+        for name in [
+            None,
+            Some(said("Caucasus TvT")),
+            Some(said("")),
+            Some(raised()),
+            Some(told(false)),
+        ] {
+            assert_eq!(
+                activity_of(Some(&beat), name.as_ref()),
+                Activity::MenuOrEditor,
+                "the menu was argued out of by the mission_name read"
+            );
+        }
+    }
+
+    #[test]
+    fn the_export_hosts_sim_admits_no_read_and_is_never_a_mission() {
+        // `sim` is a word in both hosts' vocabularies, and on the export
+        // host `DCS` is nil, so no read is possible there at all. An arm
+        // keyed on the word rather than the host would make a mission out
+        // of an answer that could not have come from that host.
+        for word in ["loaded", "sim", "stopped"] {
+            let got = activity_of(
+                Some(&ours(Host::Export, word, true)),
+                Some(&said("Caucasus TvT")),
+            );
+            assert_eq!(
+                got,
+                Activity::Unknown {
+                    why: Why::NoReadPossible { host: Host::Export }
+                },
+                "the export host's {word} was read as {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn another_sessions_heartbeat_is_never_this_sessions_phase() {
+        // The purest form of an axis filled from evidence that is not its
+        // own: another install writing into the same output directory
+        // would otherwise make this session's activity definite.
+        let b = crate::testing::Sandbox::new();
+        let mut s =
+            crate::standin::Standin::open(&b.join("dcs"), "hook").expect("the stand-in opens");
+        s.phase = "sim".to_owned();
+        s.armed = true;
+        s.beat(std::time::SystemTime::now()).expect("a beat lands");
+        let hb = crate::readers::Heartbeat::read(&s.output().join("heartbeat.txt"))
+            .expect("the heartbeat reads");
+
+        let mine = Beat::verdict(&hb, &s.stamp, &Host::Hook);
+        assert_eq!(
+            activity_of(Some(&mine), Some(&said("Caucasus TvT"))),
+            Activity::Mission {
+                name: "Caucasus TvT".to_owned()
+            },
+            "the positive control: this session's own beat does decide"
+        );
+
+        let theirs = Beat::verdict(&hb, "1757160000-31244", &Host::Hook);
+        assert_eq!(
+            theirs,
+            Beat::Foreign {
+                saw: s.stamp.clone(),
+                wanted: "1757160000-31244".to_owned(),
+            }
+        );
+        assert_eq!(
+            activity_of(Some(&theirs), Some(&said("Caucasus TvT"))),
+            Activity::Unknown {
+                why: Why::ForeignHeartbeat {
+                    saw: s.stamp.clone(),
+                    wanted: "1757160000-31244".to_owned(),
+                }
+            },
+            "another session's phase was read as this session's"
+        );
+    }
+
+    #[test]
+    fn a_heartbeat_from_the_other_host_is_not_this_directorys() {
+        let b = crate::testing::Sandbox::new();
+        let mut s =
+            crate::standin::Standin::open(&b.join("dcs"), "export").expect("the stand-in opens");
+        s.phase = "sim".to_owned();
+        s.beat(std::time::SystemTime::now()).expect("a beat lands");
+        let hb = crate::readers::Heartbeat::read(&s.output().join("heartbeat.txt"))
+            .expect("the heartbeat reads");
+        let got = Beat::verdict(&hb, &s.stamp, &Host::Hook);
+        assert_eq!(
+            got,
+            Beat::WrongHost {
+                saw: "export".to_owned(),
+                wanted: "hook".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn an_unrecognised_phase_is_unknown_carrying_the_word() {
+        let got = activity_of(Some(&ours(Host::Hook, "briefing", true)), None);
+        assert_eq!(
+            got,
+            Activity::Unknown {
+                why: Why::PhaseUnrecognised {
+                    host: Host::Hook,
+                    phase: "an unrecognised phase: briefing".to_owned(),
+                }
+            }
+        );
+        assert!(got.to_string().contains("briefing"), "{got}");
+    }
+
+    #[test]
+    fn no_heartbeat_is_unknown_and_not_the_menu() {
+        // Nothing on the disk is not the same as a session at the menu,
+        // and the difference is the whole of what the reason is for.
+        let got = activity_of(None, Some(&said("Caucasus TvT")));
+        assert_eq!(
+            got,
+            Activity::Unknown {
+                why: Why::NoHeartbeat
+            }
+        );
+        assert_ne!(got, Activity::MenuOrEditor);
+    }
+
+    #[test]
+    fn a_heartbeat_that_would_not_parse_is_its_own_reason() {
+        let beat = Beat::Unreadable {
+            detail: "no blank line before the bytes ran out".to_owned(),
+        };
+        let got = activity_of(Some(&beat), None);
+        assert_eq!(
+            got,
+            Activity::Unknown {
+                why: Why::HeartbeatUnreadable {
+                    detail: "no blank line before the bytes ran out".to_owned()
+                }
+            },
+            "an unreadable heartbeat was taken for an absent one"
+        );
     }
 
     #[test]
