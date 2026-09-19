@@ -137,6 +137,21 @@ selected() {
 rows=$(index)
 [ -n "$rows" ] || die "the inventory holds no controls: $inventory"
 
+# A control with no `reddens:` would pass everything. The REDDENED verdict is a
+# `grep -qF` for that string in what the command printed, and `grep -qF ""`
+# matches any line at all — so a bullet left out, or misspelt so that the
+# reader above never sees it, turns every failure into a healthy red, including
+# one from a mutation that never compiled. An empty `command:` is milder and
+# refused here too, because a row that names no command is not a control.
+# Refused rather than assumed, the same as a missing inventory.
+while IFS="$US" read -r id kind cmd reddens controls reason; do
+    [ "$kind" = in ] || continue
+    [ -n "$cmd" ] || die "$id: the entry carries no command: line"
+    [ -n "$reddens" ] || die "$id: the entry carries no reddens: line"
+done <<EOF
+$rows
+EOF
+
 if [ "$list" -eq 1 ]; then
     printf '%s\n' "$rows" | while IFS="$US" read -r id kind cmd reddens controls reason; do
         selected "$id" || continue

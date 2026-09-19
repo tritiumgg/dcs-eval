@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=27
+CASES=28
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -139,6 +139,26 @@ check 'a trailing slash selects a group and nothing else' \
 out=$(sh "$runner" --inventory "$sandbox/nosuch.md" --list 2>&1) && got=0 || got=$?
 check 'a missing inventory is refused, not assumed empty' \
     2 "$got" "no inventory at" "$out"
+
+# An entry with no `reddens:` would pass on any failure at all, because the
+# REDDENED verdict greps for that string and an empty one matches everything.
+# The command below fails with a line naming nothing this entry watches.
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/no-reddens
+
+- command: `sh -c 'echo "FAIL  fixture: something else entirely"; exit 1'`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+case "$out" in *REDDENED*) got=97 ;; esac
+check 'an entry with no reddens line is refused, not read as a red control' \
+    2 "$got" "carries no reddens: line" "$out"
 
 # --- applying and putting back ----------------------------------------------
 
