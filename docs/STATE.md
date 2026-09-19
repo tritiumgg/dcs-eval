@@ -41,9 +41,8 @@ and `unknown (tier 2 off)` when off; the mutation is any axis filled from
 another's evidence, reddening a no-default-arm check.
 
 **An agent verifies** it here, and nothing in it sees DCS. T35 leaves it
-`Answer`'s five arms with `Unanswered`'s status and stage as fields, `Probe`'s
-three answers, a `ping` that says why it left no envelope, and the stand-in's
-`script`, which stages the `gui` probe the carrier check refuses.
+`Answer`'s five arms, `Unanswered`'s status and stage as fields, `Probe`'s
+three answers, a `ping` that says why it left no envelope, and `script`.
 
 ## After that
 
