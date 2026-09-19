@@ -837,10 +837,18 @@ pub fn session_of(
         // itself unknown" would state the evidence falsely in the first
         // two — the headline says `loading` in the same line — and would
         // hide from a reader which of the three they have.
+        //
+        // The first two reasons are both gate-shaped and quote what the
+        // gate said, because that is all this arm looked at. Saying
+        // instead that the read was never sent would be a finding about
+        // a probe this arm never consulted: during a load nothing is
+        // sent, but a caller handing this function a load and an
+        // answered probe would be told the probe does not exist.
         Activity::Loading => {
             return SessionAxis::Unknown {
-                why: Why::NotSent {
-                    why: crate::reads::NotSent::Loading,
+                why: Why::OutsideMission {
+                    gate: "activity",
+                    said: "loading".to_owned(),
                 },
             };
         }
@@ -2239,7 +2247,19 @@ mod game_state {
                 assert_eq!(i == j, one.to_string() == other.to_string(), "{one}");
             }
         }
-        assert_eq!(all[0].to_string(), "unknown (the session is loading)");
+        // Every one of the three was handed a probe that answered, so
+        // none of them may say a read was withheld: each reason quotes
+        // the gate, which is the only thing these arms looked at.
+        assert_eq!(
+            all[0].to_string(),
+            "unknown: activity said loading, and this is answered only in a mission"
+        );
+        for one in &all {
+            assert!(
+                !one.to_string().contains("loading)"),
+                "the probe answered and the reason says it was never sent: {one}"
+            );
+        }
     }
 
     #[test]
