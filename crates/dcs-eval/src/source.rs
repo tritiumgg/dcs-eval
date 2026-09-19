@@ -573,9 +573,7 @@ end
     /// published, so the ceiling comes off a handshake rather than out of a
     /// constant.
     struct Scene {
-        /// Held, not read: dropping it takes the fixtures with it, so the
-        /// scene has to outlive every path below.
-        _b: Sandbox,
+        b: Sandbox,
         project: Real,
         h: Handshake,
     }
@@ -592,13 +590,18 @@ end
         let h =
             Handshake::from_bytes(Path::new("executor.txt"), &bytes).expect("the handshake reads");
         Scene {
-            _b: b,
+            b,
             project: real(&project),
             h,
         }
     }
 
     impl Scene {
+        /// The box itself, which the Lua driver writes its own files into.
+        fn b(&self) -> &Sandbox {
+            &self.b
+        }
+
         fn roots(&self) -> Roots {
             Roots::new(std::slice::from_ref(&self.project), &[], None).expect("the roots resolve")
         }
@@ -883,5 +886,91 @@ end
         crate::testing::junction(admitted.path().as_path(), &elsewhere);
         let err = read(&admitted).expect_err("a swapped leaf is not read");
         assert!(matches!(err.kind, Refusal::Open(_)), "{err:?}");
+    }
+
+    // ---- the control ------------------------------------------------------
+
+    /// The fixture the whole task rests on: a byte-order mark, a shebang and
+    /// CRLF endings, raising on its own line 47.
+    ///
+    /// The directory is named so the resolved path is comfortably past the
+    /// abbreviation threshold wherever the box landed, rather than relying
+    /// on the temp directory being long enough.
+    fn line47(dir: &Path) -> PathBuf {
+        let deep = dir.join("a-directory-named-to-put-the-path-past-the-abbreviation");
+        fs::create_dir_all(&deep).expect("the fixture directory is made");
+        let mut bytes = BOM.to_vec();
+        bytes.extend_from_slice(b"#!/usr/bin/env lua\r\n");
+        for line in 2..=46 {
+            bytes.extend_from_slice(format!("-- filler on line {line}\r\n").as_bytes());
+        }
+        bytes.extend_from_slice(b"error('boom on line47')\r\n");
+        let path = deep.join("line47.lua");
+        fs::write(&path, &bytes).expect("the fixture is written");
+        path
+    }
+
+    /// The fixture, admitted and read, with the bytes it was built from.
+    fn line47_source(s: &Scene) -> (Source, Vec<u8>) {
+        let path = line47(s.project.as_path());
+        let raw = fs::read(&path).expect("the fixture reads");
+        let real = real(&path);
+        let headers = s.headers(&real);
+        let refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        let admitted = check(&s.roots(), &s.h, &refs, &real).expect("the fixture is admitted");
+        (read(&admitted).expect("the fixture reads"), raw)
+    }
+
+    #[test]
+    fn a_bom_shebang_crlf_file_raises_on_line_forty_seven() {
+        let s = scene();
+        let (source, _) = line47_source(&s);
+        let path = &source.chunkname()[1..];
+        // Two guards first, so a fixture that has stopped exercising the
+        // case fails rather than passes quietly.
+        assert!(
+            path.len() > RUNTIME_IDSIZE - RESERVE,
+            "the path is past the abbreviation threshold: {path}"
+        );
+        let (kind, msg) = lua(s.b(), source.body(), source.chunkname());
+        assert_eq!(kind, "run", "it compiles and then raises: {msg}");
+        assert!(msg.starts_with("..."), "the name is abbreviated: {msg}");
+        assert_eq!(
+            msg,
+            format!(
+                "{}:47: boom on line47",
+                chunkid(source.chunkname(), RUNTIME_IDSIZE)
+            )
+        );
+    }
+
+    #[test]
+    fn the_record_of_the_line_47_run_carries_its_provenance() {
+        let s = scene();
+        let (source, raw) = line47_source(&s);
+        assert_eq!(source.bom().to_string(), "stripped");
+        assert_eq!(source.shebang().to_string(), "blanked");
+        assert_eq!(
+            source.body().len(),
+            raw.len() - BOM.len() - "#!/usr/bin/env lua".len(),
+            "the mark and the shebang's text, and nothing else"
+        );
+        let hex = source.sha256_hex();
+        assert_eq!(hex.len(), 64);
+        assert_eq!(hex, sha256::hex(&sha256::digest(source.body())));
+    }
+
+    #[test]
+    fn the_line_47_file_still_fails_on_line_one_unblanked() {
+        // Why the two rules exist at all: the same bytes straight off the
+        // disk do not compile, and the error is on line 1.
+        let s = scene();
+        let (source, raw) = line47_source(&s);
+        let (kind, msg) = lua(s.b(), &raw, source.chunkname());
+        assert_eq!(kind, "compile", "the raw file will not compile: {msg}");
+        assert!(msg.contains(":1:"), "and it fails on line 1: {msg}");
     }
 }
