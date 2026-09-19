@@ -14,8 +14,9 @@
 //! because nothing served from here needs ED's own file as a chunk — an
 //! agent that wants one runs `dofile` in a one-line chunk and lets DCS read
 //! it. Anything else must lie under a root the caller allowed. Then the file
-//! is stated, and its size plus the bytes of the request's own header block
-//! must not exceed the request ceiling the handshake published.
+//! is stated, which has to say a regular file, and its size plus the bytes
+//! of the request's own header block must not exceed the request ceiling the
+//! handshake published.
 //!
 //! The caller supplies the roots: this is a library with no start-up, no
 //! argument vector and no launch directory to fall back on, and decision
@@ -175,7 +176,8 @@ impl Admitted {
 /// the handshake, which is why this takes one rather than a number a caller
 /// could have invented.
 ///
-/// The order is judge, frame, stat, compare. Nothing that could disclose the
+/// The order is judge, frame, stat, compare, and the one stat answers twice:
+/// what the path names and how long it is. Nothing that could disclose the
 /// file runs before the judgement, and the framer's own refusal is raised
 /// before the stat because a request that cannot be written is not a
 /// question about this file at all.
@@ -191,12 +193,35 @@ pub fn check(
         kind: Refusal::Frame(source),
     })?;
     let header_bytes = block.len() as u64;
-    let size = fs::metadata(real.as_path())
-        .map_err(|source| FileRefusal {
+    let stat = fs::metadata(real.as_path()).map_err(|source| FileRefusal {
+        path: real.clone(),
+        kind: Refusal::Stat(source),
+    })?;
+    // The same stat says what the path names, and that answer belongs on
+    // this side of the split for the reason the size does: it is knowable
+    // without reading a byte. A directory admitted here would be a
+    // judgement that something can be sent as a chunk handed to a reader
+    // that can only fail to open it, and the failure would arrive as the
+    // operating system's own words about a path this module had already
+    // said yes to — a refusal owed by the guard, paid by whoever came
+    // next. Anything that is neither a regular file nor a directory gets
+    // its own answer rather than being folded into one of them: on this
+    // host that is a device, a pipe or a socket, none of which has a size a
+    // stat can be believed about or an end a read is sure to reach, so the
+    // ceiling above would be measuring nothing. A link is not a third
+    // answer, because `real` is resolved and the stat follows what is left.
+    let file_type = stat.file_type();
+    if !file_type.is_file() {
+        return Err(FileRefusal {
             path: real.clone(),
-            kind: Refusal::Stat(source),
-        })?
-        .len();
+            kind: if file_type.is_dir() {
+                Refusal::Directory
+            } else {
+                Refusal::NotAFile
+            },
+        });
+    }
+    let size = stat.len();
     // The sum, never the limit less the header block: a header block at or
     // past the limit makes that subtraction saturate to nothing and then
     // admits an empty file whose framed request is already over.
@@ -256,6 +281,12 @@ pub enum Refusal {
     /// The file could not be stated. Not an answer about containment: that
     /// was settled before this ran.
     Stat(io::Error),
+    /// A directory. Under an allowed root and within the ceiling, since a
+    /// directory stats at no length, and still not a chunk.
+    Directory,
+    /// Neither a regular file nor a directory, so nothing whose length the
+    /// stat settles and nothing a read is sure to reach the end of.
+    NotAFile,
 }
 
 impl FileRefusal {
@@ -279,6 +310,13 @@ impl FileRefusal {
             ),
             Refusal::Frame(source) => format!("the request's headers were refused: {source}"),
             Refusal::Stat(source) => format!("could not be stated: {source}"),
+            Refusal::Directory => {
+                "is a directory, and a directory is not a chunk to evaluate".to_owned()
+            }
+            Refusal::NotAFile => {
+                "is neither a file nor a directory, and only a file is evaluated from here"
+                    .to_owned()
+            }
         }
     }
 }
@@ -756,6 +794,37 @@ mod file_refusals {
             "is not under any allowed root",
             "a failed stat is not a verdict about the roots"
         );
+    }
+
+    // ---- what the path names ----------------------------------------------
+
+    #[test]
+    fn refuses_a_directory_under_an_allowed_root() {
+        // A directory passes containment and stats at no length, so the
+        // ceiling has nothing to refuse it with. The stat that measured it
+        // is what knows better.
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let real = real(&s.project.as_path().join("subdir"));
+        fs::create_dir_all(real.as_path()).expect("the directory is made");
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("a directory is not a chunk");
+        assert!(matches!(err.kind, Refusal::Directory), "{err}");
+        assert_eq!(
+            err.reason(),
+            "is a directory, and a directory is not a chunk to evaluate"
+        );
+        assert!(err.to_string().starts_with(&real.to_string()), "{err}");
+    }
+
+    #[test]
+    fn admits_an_ordinary_file_under_the_same_root() {
+        // The other half of the pair: the rule is about what the path
+        // names, not about the root it is under.
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let real = file(&s.project.as_path().join("ordinary.lua"), b"return 1\n");
+        let ok = check(&s.roots(), &h, HEADERS, &real).expect("an ordinary file is admitted");
+        assert_eq!(ok.size(), 9, "the size is what the stat said");
     }
 
     #[test]
