@@ -64,7 +64,7 @@ and, in the same section:
 
 The reader hashes the bytes it is about to send, refuses locally what the wire
 would refuse remotely, and renders a chunkname the way the interpreter renders
-it rather than the way the documents describe it. Six readings:
+it rather than the way the documents describe it. Seven readings:
 
 1. **The hash is over what is sent, not over the file as it sits on disk.**
    §4.1 decides it: the record answers "what ran", and what ran is the body
@@ -125,6 +125,21 @@ it rather than the way the documents describe it. Six readings:
    whole, and a user recognises their own spelling, so the backslash form is
    what goes in `chunkname` and in the record. The drift from the example is
    recorded here rather than discovered later.
+
+7. **The ceiling is re-measured against the bytes as they were read, before
+   either rule shortens them.** The refusal answers "did the file change
+   under us", not "would the body still fit", so the comparison is the raw
+   length against the admitted size plus its headroom. The consequence is
+   deliberate and worth stating, because it can refuse a request that would
+   have fitted: a file admitted with no headroom that gains a three-byte
+   byte-order mark between the stat and the read is refused, although the
+   body actually sent — the mark stripped — is exactly the length that was
+   admitted. Re-measuring after the two rules would instead send bytes that
+   no stat ever saw and no ceiling was computed for, on the strength of a
+   subtraction the reader did for itself; a file that grew is a file whose
+   judgement is stale, and the honest answer is to check it again. A test
+   drives that very fixture, so moving the comparison past the two rules
+   fails rather than passes quietly.
 
 Rejected:
 

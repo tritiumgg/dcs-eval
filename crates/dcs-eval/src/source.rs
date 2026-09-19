@@ -967,6 +967,49 @@ end
     }
 
     #[test]
+    fn a_file_at_the_ceiling_that_gains_only_a_bom_is_refused_on_the_raw_bytes() {
+        // The ceiling is re-measured on the bytes as they were read, so a
+        // file with no headroom that grew by a mark is refused although the
+        // body it would send — the mark stripped — is the length that was
+        // admitted. The choice is deliberate: what is being asked is
+        // whether the file changed, not whether the reader could make it
+        // fit. This fixture is what makes moving the comparison past the
+        // two rules fail rather than pass quietly.
+        let s = scene();
+        let path = s.project.as_path().join("at-the-ceiling.lua");
+        fs::write(&path, b"x").expect("a placeholder so the path resolves");
+        let real = real(&path);
+        let headers = s.headers(&real);
+        let refs: Vec<(&str, &str)> = headers
+            .iter()
+            .map(|(n, v)| (n.as_str(), v.as_str()))
+            .collect();
+        let block = protocol::frame(&refs, b"")
+            .expect("the headers frame")
+            .len() as u64;
+        let size = s.h.max_request_bytes - block;
+        fs::write(&path, vec![b'-'; size as usize]).expect("the fixture is written");
+        let admitted = check(&s.roots(), &s.h, &refs, &real).expect("exactly at the ceiling");
+        assert_eq!(admitted.headroom(), 0, "nothing is left over");
+
+        let mut grown = BOM.to_vec();
+        grown.extend_from_slice(&vec![b'-'; size as usize]);
+        fs::write(&path, &grown).expect("the mark arrives");
+        let err = read(&admitted).expect_err("the raw bytes are past the ceiling");
+        assert!(
+            matches!(
+                err.kind,
+                Refusal::Grew {
+                    read,
+                    admitted: was,
+                    headroom: 0,
+                } if read == size + BOM.len() as u64 && was == size
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
     fn a_file_removed_between_the_check_and_the_read_is_refused() {
         let s = scene();
         let admitted = s.admit("vanishing.lua", b"return 1\n");
