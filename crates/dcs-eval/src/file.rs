@@ -331,6 +331,11 @@ pub enum Refusal {
     /// rather than sent, because the far end caps the header and this
     /// crate's framer caps no value at any length.
     Name(crate::source::NameTooLong),
+    /// The leaf is a link or a junction now, and was not when the path was
+    /// resolved. The resolver follows what is there at the time, so this is
+    /// something put in the way since — refused rather than followed,
+    /// because nothing judged where it leads.
+    Relinked,
     /// The file could not be opened, although the stat had answered about
     /// it. Between the two somebody may have removed it, replaced it, or
     /// taken a hold that denies this process's reads.
@@ -377,6 +382,11 @@ impl FileRefusal {
             }
             Refusal::NotAFile => {
                 "is neither a file nor a directory, and only a file is evaluated from here"
+                    .to_owned()
+            }
+            Refusal::Relinked => {
+                "became a link after it was resolved, and where a link leads is not what was \
+                 judged"
                     .to_owned()
             }
             Refusal::Name(source) => source.to_string(),

@@ -319,13 +319,48 @@ pub fn read(admitted: &Admitted) -> Result<Source, FileRefusal> {
 
 const BOM: &[u8] = &[0xEF, 0xBB, 0xBF];
 
-/// Open the admitted path.
+/// Open the admitted path and judge the handle rather than the path.
+///
+/// `check` resolved the path and then judged it, and a leaf that did not
+/// exist at the resolve had nothing of its own to follow; anything put there
+/// since is a leaf that judgement never saw. So the open refuses to follow a
+/// reparse point, and what comes back is asked what it is: a link, a
+/// directory or something that is neither is refused on the handle, in the
+/// same words the stat would have used for the last two.
+///
+/// This does not prove it is the *same* file — that wants an identity the
+/// standard library does not expose — and decision record 0015 says so.
 fn open(admitted: &Admitted) -> Result<fs::File, FileRefusal> {
-    fs::File::open(admitted.path().as_path()).map_err(|source| FileRefusal {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    let refusal = |kind| FileRefusal {
         path: admitted.path().clone(),
-        kind: Refusal::Open(source),
-    })
+        kind,
+    };
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(FILE_FLAG_OPEN_REPARSE_POINT)
+        .open(admitted.path().as_path())
+        .map_err(|source| refusal(Refusal::Open(source)))?;
+    let file_type = file
+        .metadata()
+        .map_err(|source| refusal(Refusal::Stat(source)))?
+        .file_type();
+    if file_type.is_symlink() {
+        return Err(refusal(Refusal::Relinked));
+    }
+    if file_type.is_dir() {
+        return Err(refusal(Refusal::Directory));
+    }
+    if !file_type.is_file() {
+        return Err(refusal(Refusal::NotAFile));
+    }
+    Ok(file)
 }
+
+/// Open what the name points at and not what it points to. Standard
+/// library, not a new declared symbol, so ADR 0011's set is untouched.
+const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
 
 /// The largest index at or below `at` that begins a character, so a cut
 /// through a multi-byte path does not panic. Lua counts bytes and does not
@@ -824,6 +859,29 @@ end
         let admitted = s.admit("vanishing.lua", b"return 1\n");
         fs::remove_file(admitted.path().as_path()).expect("the file goes");
         let err = read(&admitted).expect_err("there is nothing to open");
+        assert!(matches!(err.kind, Refusal::Open(_)), "{err:?}");
+    }
+
+    #[test]
+    fn a_leaf_swapped_for_a_junction_is_refused_on_the_open() {
+        // A directory junction, not a file symlink: a symlink here needs
+        // elevation this build does not run with, so the `Relinked` arm is
+        // unproven and decision record 0015 says so.
+        //
+        // The refusal observed on this host is the open's own — the flag
+        // that stops the junction being followed leaves a handle this open
+        // cannot have, and Windows answers "Access is denied." The
+        // assertion is on what was seen rather than on what was hoped for;
+        // what it holds either way is the thing that matters, that a leaf
+        // swapped between the judgement and the read does not come back as
+        // bytes.
+        let s = scene();
+        let admitted = s.admit("swapped.lua", b"return 1\n");
+        let elsewhere = s.project.as_path().join("elsewhere");
+        fs::create_dir_all(&elsewhere).expect("somewhere to point at");
+        fs::remove_file(admitted.path().as_path()).expect("the file goes");
+        crate::testing::junction(admitted.path().as_path(), &elsewhere);
+        let err = read(&admitted).expect_err("a swapped leaf is not read");
         assert!(matches!(err.kind, Refusal::Open(_)), "{err:?}");
     }
 }
