@@ -126,6 +126,12 @@ pub(crate) fn settle(
     // One expression, shared by both paths, and the whole of the poll.
     let nap = left.min(pace.poll);
 
+    // The first watch opens here, which is after this pass's look at the
+    // directory. Windows records nothing for a handle until the first
+    // `ReadDirectoryChangesW`, so a change landing in the gap between
+    // that look and this arm is reported by neither and is the poll's to
+    // find. The gap is microseconds wide; a test that puts the poll out
+    // of reach is accepting it rather than covering it.
     if changes.is_none() && pace.open && tally.deaf == 0 {
         match Changes::open(res) {
             Ok(observer) => {
