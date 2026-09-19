@@ -3022,6 +3022,289 @@ mod game_state {
         }
     }
 
+    /// One way to spoil the evidence [`maximal`] laid out.
+    type Spoil = Box<dyn Fn(&mut Evidence)>;
+
+    /// The answer `key`'s read came back with, in place of the good one.
+    fn setting(key: &'static str, answer: reads::Answer) -> Spoil {
+        Box::new(move |e: &mut Evidence| {
+            for (read, slot) in &mut e.answers {
+                if read.key() == key {
+                    *slot = answer.clone();
+                }
+            }
+        })
+    }
+
+    /// `key`'s read left out of the window's answers altogether.
+    fn dropping(key: &'static str) -> Spoil {
+        Box::new(move |e: &mut Evidence| e.answers.retain(|(read, _)| read.key() != key))
+    }
+
+    /// Every way one read's answer can fail to decide its axis, with the
+    /// reason that axis must then carry.
+    ///
+    /// One row per arm of the match over an answer, and the reason the
+    /// sweep loops over these rather than spoiling each axis once. An arm
+    /// no row reaches is a line that can be changed to fill the axis from
+    /// somewhere else with nothing red — which is exactly the mutation
+    /// this whole table exists to catch, so leaving six arms in seven
+    /// unreached would have made the table look stronger than it was.
+    ///
+    /// `lua_type` is the type this axis is made of. An answer carrying
+    /// that type with no value is the arm where the read answered what
+    /// was asked and this side could not read it; an answer of another
+    /// type is a different arm, and both are here.
+    fn spoiled(key: &'static str, lua_type: &'static str) -> Vec<(Spoil, Why)> {
+        let raised = "attempt to call a nil value";
+        let body = b"not the read grammar".to_vec();
+        let window = reads::Unanswered::Window {
+            detail: "no window".to_owned(),
+        };
+        vec![
+            (
+                setting(
+                    key,
+                    reads::Answer::Raised {
+                        message: raised.to_owned(),
+                    },
+                ),
+                Why::Errored {
+                    message: raised.to_owned(),
+                },
+            ),
+            (
+                setting(key, reads::Answer::Malformed { body: body.clone() }),
+                Why::Malformed { body },
+            ),
+            (
+                setting(
+                    key,
+                    reads::Answer::Unanswered {
+                        why: window.clone(),
+                    },
+                ),
+                Why::Unanswered { why: window },
+            ),
+            (
+                setting(
+                    key,
+                    reads::Answer::NotSent {
+                        why: reads::NotSent::TierTwoOff,
+                    },
+                ),
+                Why::NotSent {
+                    why: reads::NotSent::TierTwoOff,
+                },
+            ),
+            (
+                setting(
+                    key,
+                    reads::Answer::NotSent {
+                        why: reads::NotSent::Loading,
+                    },
+                ),
+                Why::NotSent {
+                    why: reads::NotSent::Loading,
+                },
+            ),
+            (
+                setting(
+                    key,
+                    reads::Answer::Value {
+                        lua_type: lua_type.to_owned(),
+                        value: None,
+                    },
+                ),
+                Why::WrongType {
+                    lua_type: lua_type.to_owned(),
+                    value: None,
+                },
+            ),
+            (
+                setting(
+                    key,
+                    reads::Answer::Value {
+                        lua_type: "number".to_owned(),
+                        value: Some("7".to_owned()),
+                    },
+                ),
+                Why::WrongType {
+                    lua_type: "number".to_owned(),
+                    value: Some("7".to_owned()),
+                },
+            ),
+            (
+                dropping(key),
+                Why::Unanswered {
+                    why: reads::Unanswered::Unyielded,
+                },
+            ),
+        ]
+    }
+
+    /// The whole sweep: every axis paired with every way its own
+    /// evidence can fail, and the reason it must then carry.
+    fn spoilers() -> Vec<(&'static str, Spoil, Why)> {
+        let mut rows: Vec<(&'static str, Spoil, Why)> = Vec::new();
+
+        // The handshake and the process probe, which is all `process`
+        // is made of.
+        rows.push((
+            "process",
+            Box::new(|e: &mut Evidence| e.process = None),
+            Why::NotProbed,
+        ));
+        rows.push((
+            "process",
+            Box::new(|e: &mut Evidence| {
+                e.process = Some(crate::status::Process::Undecided {
+                    why: "access is denied".to_owned(),
+                });
+            }),
+            Why::Unreadable {
+                path: std::path::PathBuf::from("the process id"),
+                detail: "access is denied".to_owned(),
+            },
+        ));
+        rows.push((
+            "process",
+            Box::new(|e: &mut Evidence| {
+                e.handshake = Found::Unreadable {
+                    path: std::path::PathBuf::from("executor.txt"),
+                    detail: "no blank line".to_owned(),
+                };
+            }),
+            Why::Unreadable {
+                path: std::path::PathBuf::from("executor.txt"),
+                detail: "no blank line".to_owned(),
+            },
+        ));
+
+        // The ping. Its other outcomes are verdicts the wait already
+        // reached — waking, stalled, superseded — and those are values
+        // rather than unknowns, so this sweep has nothing to say about
+        // them; the tests beside it do.
+        for why in [
+            reads::Unanswered::Window {
+                detail: "no window".to_owned(),
+            },
+            reads::Unanswered::Pending {
+                id: "7".to_owned(),
+                phase: "sim".to_owned(),
+                flag: None,
+            },
+            reads::Unanswered::Dead { id: "7".to_owned() },
+            reads::Unanswered::NotOk {
+                status: "bad-request".to_owned(),
+                stage: None,
+                detail: "no key".to_owned(),
+            },
+            reads::Unanswered::Unyielded,
+        ] {
+            let carried = why.clone();
+            rows.push((
+                "bridge",
+                Box::new(move |e: &mut Evidence| e.ping = Some(Err(carried.clone()))),
+                Why::Unanswered { why },
+            ));
+        }
+
+        // The reads each axis is made of.
+        for (axis, key, lua_type) in [
+            ("activity", "mission_name", "string"),
+            ("pause", "pause", "boolean"),
+            ("track", "track", "boolean"),
+            ("session", "multiplayer", "boolean"),
+        ] {
+            for (spoil, why) in spoiled(key, lua_type) {
+                rows.push((axis, spoil, why));
+            }
+        }
+
+        // `server` is reached only where `multiplayer` answered true, so
+        // its rows say so first. Both reads are this axis's own.
+        for (spoil, why) in spoiled("server", "boolean") {
+            rows.push((
+                "session",
+                Box::new(move |e: &mut Evidence| {
+                    setting("multiplayer", told(true))(e);
+                    spoil(e);
+                }),
+                why,
+            ));
+        }
+
+        // The phase says a mission and the read names none: activity's
+        // own two facts, disagreeing.
+        rows.push((
+            "activity",
+            setting("mission_name", said("")),
+            Why::Disagrees {
+                facts: vec![
+                    Fact::new("phase", "sim"),
+                    Fact::new("mission_name", "the empty string"),
+                ],
+            },
+        ));
+
+        // The reachability probe. `refused` is left out because it is a
+        // value — `client` — and every other refusal word is unknown
+        // naming itself, which is what `unsupported` stands for here.
+        for (probe, why) in [
+            (
+                Some(reads::Probe::Malformed {
+                    body: b"not the probe's word".to_vec(),
+                }),
+                Why::Malformed {
+                    body: b"not the probe's word".to_vec(),
+                },
+            ),
+            (
+                Some(reads::Probe::Unanswered {
+                    why: reads::Unanswered::NotOk {
+                        status: "unsupported".to_owned(),
+                        stage: None,
+                        detail: "eval is off".to_owned(),
+                    },
+                }),
+                Why::Unanswered {
+                    why: reads::Unanswered::NotOk {
+                        status: "unsupported".to_owned(),
+                        stage: None,
+                        detail: "eval is off".to_owned(),
+                    },
+                },
+            ),
+            (
+                Some(reads::Probe::Unanswered {
+                    why: reads::Unanswered::Window {
+                        detail: "no window".to_owned(),
+                    },
+                }),
+                Why::Unanswered {
+                    why: reads::Unanswered::Window {
+                        detail: "no window".to_owned(),
+                    },
+                },
+            ),
+            (
+                None,
+                Why::Unanswered {
+                    why: reads::Unanswered::Unyielded,
+                },
+            ),
+        ] {
+            rows.push((
+                "session",
+                Box::new(move |e: &mut Evidence| e.probe.clone_from(&probe)),
+                why,
+            ));
+        }
+
+        rows
+    }
+
     #[test]
     fn every_axis_is_decided_by_its_own_evidence() {
         // The no-default-arm sweep. For each axis: withhold or spoil its
@@ -3050,84 +3333,7 @@ mod game_state {
         assert_eq!(whole.session, SessionAxis::Single);
         assert_eq!(whole.track, Track::Live);
 
-        type Spoil = fn(&mut Evidence);
-        let rows: Vec<(&str, Spoil, Why)> = vec![
-            (
-                "process",
-                (|e: &mut Evidence| e.process = None) as Spoil,
-                Why::NotProbed,
-            ),
-            (
-                "bridge",
-                |e: &mut Evidence| {
-                    e.ping = Some(Err(reads::Unanswered::Window {
-                        detail: "no window".to_owned(),
-                    }));
-                },
-                Why::Unanswered {
-                    why: reads::Unanswered::Window {
-                        detail: "no window".to_owned(),
-                    },
-                },
-            ),
-            (
-                "activity",
-                |e: &mut Evidence| {
-                    for (read, answer) in &mut e.answers {
-                        if read.key() == "mission_name" {
-                            *answer = reads::Answer::Raised {
-                                message: "attempt to call a nil value".to_owned(),
-                            };
-                        }
-                    }
-                },
-                Why::Errored {
-                    message: "attempt to call a nil value".to_owned(),
-                },
-            ),
-            (
-                "pause",
-                |e: &mut Evidence| {
-                    for (read, answer) in &mut e.answers {
-                        if read.key() == "pause" {
-                            *answer = reads::Answer::Raised {
-                                message: "attempt to call a nil value".to_owned(),
-                            };
-                        }
-                    }
-                },
-                Why::Errored {
-                    message: "attempt to call a nil value".to_owned(),
-                },
-            ),
-            (
-                "session",
-                |e: &mut Evidence| {
-                    e.probe = Some(reads::Probe::Malformed {
-                        body: b"not the probe's word".to_vec(),
-                    });
-                },
-                Why::Malformed {
-                    body: b"not the probe's word".to_vec(),
-                },
-            ),
-            (
-                "track",
-                |e: &mut Evidence| {
-                    for (read, answer) in &mut e.answers {
-                        if read.key() == "track" {
-                            *answer = reads::Answer::Raised {
-                                message: "attempt to call a nil value".to_owned(),
-                            };
-                        }
-                    }
-                },
-                Why::Errored {
-                    message: "attempt to call a nil value".to_owned(),
-                },
-            ),
-        ];
-
+        let rows = spoilers();
         for (name, spoil, wanted) in rows {
             let mut evidence = maximal(&s);
             spoil(&mut evidence);
