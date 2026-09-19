@@ -247,6 +247,11 @@ pub enum Why {
     /// it. Kept apart from a probe that could not decide, which is a
     /// probe that ran.
     NotProbed,
+    /// The probe ran and could not decide, carrying what stopped it. Its
+    /// own arm rather than [`Self::Unreadable`]'s, because nothing here
+    /// is a file: a reader that destructures `Unreadable` to name the
+    /// path it could not read would get a phrase where a path belongs.
+    Undecided { detail: String },
 }
 
 impl fmt::Display for Why {
@@ -309,6 +314,9 @@ impl fmt::Display for Why {
                 "unknown: {gate} said {said}, and this is answered only in a mission"
             ),
             Self::NotProbed => f.write_str("unknown: the process id was never probed"),
+            Self::Undecided { detail } => {
+                write!(f, "unknown: the process id would not read, {detail}")
+            }
         }
     }
 }
@@ -1055,8 +1063,7 @@ pub fn process_of(found: &Found, probe: Option<&crate::status::Process>) -> Proc
             Some(crate::status::Process::Running) => ProcessAxis::Running,
             Some(crate::status::Process::Exited) => ProcessAxis::Gone,
             Some(crate::status::Process::Undecided { why }) => ProcessAxis::Unknown {
-                why: Why::Unreadable {
-                    path: std::path::PathBuf::from("the process id"),
+                why: Why::Undecided {
                     detail: why.clone(),
                 },
             },
@@ -3203,8 +3210,7 @@ mod game_state {
                     why: "access is denied".to_owned(),
                 });
             }),
-            Why::Unreadable {
-                path: std::path::PathBuf::from("the process id"),
+            Why::Undecided {
                 detail: "access is denied".to_owned(),
             },
         ));
@@ -3698,6 +3704,9 @@ mod game_state {
                 said: "menu-or-editor".to_owned(),
             },
             Why::NotProbed,
+            Why::Undecided {
+                detail: "access is denied".to_owned(),
+            },
         ]
     }
 
