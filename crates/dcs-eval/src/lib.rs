@@ -17,6 +17,7 @@ pub mod readers;
 // wrapper. Decision record 0011 is why they are declared here rather than
 // taken from a crate.
 pub mod sys;
+pub mod wait;
 
 // The stand-in is a test double: the crate's own tests always have it, and
 // another crate's tests get it through the `standin` feature. A user's
