@@ -22,8 +22,12 @@
 //! record 0014 says why that departs from a server that has all three.
 
 use std::fmt;
+use std::fs;
+use std::io;
 
 use crate::paths::{self, PathError, Real};
+use crate::protocol::{self, FrameError};
+use crate::readers::Handshake;
 
 /// The roots a file path is judged against: the directories a caller
 /// allowed, the `Config` inside the write directory, and the install.
@@ -106,6 +110,83 @@ impl Roots {
     }
 }
 
+/// A file that may be read, and what was learned about it without reading
+/// it.
+///
+/// `size` is what the stat said and nothing more: the file may have grown
+/// since, and whoever reads the bytes owns that gap. `headroom` is
+/// `max_request_bytes` less the header block less `size` — the bytes a
+/// reader still has in hand once this file's bytes are in the envelope —
+/// defined here once so nobody has to derive it a second time.
+#[derive(Clone, Debug)]
+pub struct Admitted {
+    pub path: Real,
+    pub size: u64,
+    pub headroom: u64,
+}
+
+/// Whether `real` may be read and would fit, deciding both before anything
+/// opens it.
+///
+/// The parameter is a [`Real`] rather than a path because only
+/// [`paths::resolve`] can make one: a short spelling and a junction are
+/// exactly how a path outside a root wears a permitted name, so a
+/// containment check that cannot be handed an unresolved path is a stronger
+/// guarantee than a rule written in a comment. It also means the caller has
+/// the resolved path in hand before it builds `headers`, which matters
+/// because one of those headers names the resolved path and its bytes are
+/// among the ones counted here.
+///
+/// `headers` is the exact set the caller will send, and the count is taken
+/// by framing them with an empty body rather than estimated: the executor
+/// stats the whole request file, so every header line and the blank line
+/// ending the block counts against the ceiling. The ceiling itself comes off
+/// the handshake, which is why this takes one rather than a number a caller
+/// could have invented.
+///
+/// The order is judge, frame, stat, compare. Nothing that could disclose the
+/// file runs before the judgement, and the framer's own refusal is raised
+/// before the stat because a request that cannot be written is not a
+/// question about this file at all.
+pub fn check(
+    roots: &Roots,
+    h: &Handshake,
+    headers: &[(&str, &str)],
+    real: &Real,
+) -> Result<Admitted, FileRefusal> {
+    roots.judge(real)?;
+    let block = protocol::frame(headers, b"").map_err(|source| FileRefusal {
+        path: real.clone(),
+        kind: Refusal::Frame(source),
+    })?;
+    let header_bytes = block.len() as u64;
+    let size = fs::metadata(real.as_path())
+        .map_err(|source| FileRefusal {
+            path: real.clone(),
+            kind: Refusal::Stat(source),
+        })?
+        .len();
+    // The sum, never the limit less the header block: a header block at or
+    // past the limit makes that subtraction saturate to nothing and then
+    // admits an empty file whose framed request is already over.
+    let total = size.saturating_add(header_bytes);
+    if total > h.max_request_bytes {
+        return Err(FileRefusal {
+            path: real.clone(),
+            kind: Refusal::Oversize {
+                size,
+                header_bytes,
+                limit: h.max_request_bytes,
+            },
+        });
+    }
+    Ok(Admitted {
+        path: real.clone(),
+        size,
+        headroom: h.max_request_bytes - total,
+    })
+}
+
 /// A path that will not be read, and why. `Display` is `<path>: <reason>`,
 /// the shape every refusal in this client takes.
 ///
@@ -131,6 +212,19 @@ pub enum Refusal {
     /// Under no allowed root. The same words whether the path is there or
     /// not.
     OutsideEveryRoot,
+    /// Too big for one request. Every figure here comes off the stat and
+    /// the handshake; none of them was derived from a byte of the file.
+    Oversize {
+        size: u64,
+        header_bytes: u64,
+        limit: u64,
+    },
+    /// The request's own headers could not be written, so there was no
+    /// point asking how big the file is.
+    Frame(FrameError),
+    /// The file could not be stated. Not an answer about containment: that
+    /// was settled before this ran.
+    Stat(io::Error),
 }
 
 impl FileRefusal {
@@ -143,6 +237,17 @@ impl FileRefusal {
             ),
             Refusal::Install { install } => format!("is inside the install, {install}"),
             Refusal::OutsideEveryRoot => "is not under any allowed root".to_owned(),
+            Refusal::Oversize {
+                size,
+                header_bytes,
+                limit,
+            } => format!(
+                "is {size} bytes and the request's headers are {header_bytes} more, over the \
+                 {limit}-byte limit the handshake published; split the file, or dofile it from a \
+                 one-line chunk in a state that has io"
+            ),
+            Refusal::Frame(source) => format!("the request's headers were refused: {source}"),
+            Refusal::Stat(source) => format!("could not be stated: {source}"),
         }
     }
 }
@@ -158,10 +263,11 @@ impl std::error::Error for FileRefusal {}
 #[cfg(test)]
 mod file_refusals {
     use super::*;
-    use crate::testing::{Sandbox, held, junction, real, short_name};
+    use crate::standin::Standin;
+    use crate::testing::{Sandbox, held, junction, real, short_name, slurp, with};
 
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     /// A directory under the box, made, and resolved.
     fn dir(b: &Sandbox, name: &str) -> Real {
@@ -429,5 +535,173 @@ mod file_refusals {
         // The paths differ, so it is the reason that has to match; the
         // whole messages never could.
         assert_eq!(a.reason(), b.reason(), "existence is not disclosed");
+    }
+
+    // ---- the ceiling ------------------------------------------------------
+
+    /// A handshake from the stand-in's own bytes. The ceiling has to come
+    /// off one of these rather than out of a constant, which is why every
+    /// test below needs a session to have published.
+    fn handshake_bytes(b: &Sandbox) -> Vec<u8> {
+        let root = b.path.join("session");
+        fs::create_dir_all(&root).expect("the session root");
+        let s = Standin::open(&root, "hook").expect("the session opens");
+        s.handshake().expect("the handshake publishes");
+        slurp(&s.output().join("executor.txt"))
+    }
+
+    fn handshake(bytes: &[u8]) -> Handshake {
+        Handshake::from_bytes(Path::new("executor.txt"), bytes).expect("the handshake reads")
+    }
+
+    /// A plausible header set for a request. What is in it does not matter;
+    /// how many bytes it frames to does.
+    const HEADERS: &[(&str, &str)] = &[("op", "eval"), ("state", "hook")];
+
+    fn block_len(headers: &[(&str, &str)]) -> u64 {
+        protocol::frame(headers, b"")
+            .expect("the headers frame")
+            .len() as u64
+    }
+
+    /// A file of exactly `size` bytes under the allowed root, resolved.
+    fn sized(s: &Box_, name: &str, size: u64) -> Real {
+        file(
+            &s.project.as_path().join(name),
+            &vec![b'x'; size as usize][..],
+        )
+    }
+
+    #[test]
+    fn refuses_a_file_one_byte_over_the_file_ceiling_naming_the_limit_and_the_size() {
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let header_bytes = block_len(HEADERS);
+        let size = h.max_request_bytes - header_bytes + 1;
+        let real = sized(&s, "big.lua", size);
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("one byte over");
+        assert!(
+            matches!(err.kind, Refusal::Oversize { .. }),
+            "over the ceiling: {err}"
+        );
+        let line = err.to_string();
+        assert!(line.contains(&size.to_string()), "names the size: {line}");
+        assert!(
+            line.contains(&h.max_request_bytes.to_string()),
+            "names the limit: {line}"
+        );
+    }
+
+    #[test]
+    fn admits_a_file_exactly_at_the_file_ceiling() {
+        // The file's ceiling is the request ceiling less the header block,
+        // and such a file frames to exactly the request ceiling, which the
+        // executor's own `size > MAX_REQUEST_BYTES` accepts.
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let header_bytes = block_len(HEADERS);
+        let size = h.max_request_bytes - header_bytes;
+        let real = sized(&s, "exact.lua", size);
+        let ok = check(&s.roots(), &h, HEADERS, &real).expect("exactly at the ceiling");
+        assert_eq!(ok.size, size, "the size is what the stat said");
+        assert_eq!(ok.headroom, 0, "and nothing is left over");
+    }
+
+    #[test]
+    fn the_header_block_counts_toward_the_ceiling() {
+        // One file, two header sets one byte apart. The executor stats the
+        // whole request file, so the envelope's own bytes are part of what
+        // has to fit.
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let short: &[(&str, &str)] = &[("op", "eval"), ("state", "hook")];
+        let long: &[(&str, &str)] = &[("op", "eval"), ("state", "hooks")];
+        assert_eq!(
+            block_len(long),
+            block_len(short) + 1,
+            "the two blocks differ by one byte"
+        );
+        let size = h.max_request_bytes - block_len(long) + 1;
+        let real = sized(&s, "edge.lua", size);
+        let roots = s.roots();
+        check(&roots, &h, short, &real).expect("it fits under the shorter block");
+        let err = check(&roots, &h, long, &real).expect_err("and not under the longer one");
+        assert!(matches!(err.kind, Refusal::Oversize { .. }), "{err}");
+    }
+
+    #[test]
+    fn the_ceiling_is_the_handshakes_own_and_not_the_default() {
+        let s = scene();
+        let h = handshake(&with(&handshake_bytes(&s.b), "max_request_bytes", "1024"));
+        assert_eq!(h.max_request_bytes, 1024, "the session says 1024");
+        let real = sized(&s, "two-thousand.lua", 2_000);
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("over this session's ceiling");
+        let line = err.to_string();
+        assert!(line.contains("1024"), "the session's figure: {line}");
+        assert!(line.contains("2000"), "and the file's: {line}");
+    }
+
+    #[test]
+    fn a_header_block_at_the_limit_refuses_even_an_empty_file() {
+        // The case the limit-less-the-header spelling gets wrong: that
+        // subtraction saturates to nothing and then admits a file whose
+        // framed request is already over.
+        let s = scene();
+        let header_bytes = block_len(HEADERS);
+        let limit = (header_bytes - 1).to_string();
+        let h = handshake(&with(&handshake_bytes(&s.b), "max_request_bytes", &limit));
+        let real = sized(&s, "empty.lua", 0);
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("the headers alone are over");
+        assert!(matches!(err.kind, Refusal::Oversize { .. }), "{err}");
+    }
+
+    #[test]
+    fn refuses_headers_the_framer_would_refuse_before_the_stat() {
+        // The path is one that is not there, so an implementation that
+        // stated first would answer about the stat instead.
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let real = real(&s.project.as_path().join("absent.lua"));
+        let bad: &[(&str, &str)] = &[("op", "eval\nstate: hook")];
+        let err = check(&s.roots(), &h, bad, &real).expect_err("the framer refuses");
+        assert!(matches!(err.kind, Refusal::Frame(_)), "{err}");
+    }
+
+    #[test]
+    fn refuses_a_chunkname_carrying_a_byte_past_ascii_before_the_stat() {
+        // A resolved path with a byte past ASCII cannot go on the wire at
+        // all, and that is settled before the file is asked about.
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let real = real(&s.project.as_path().join("absent.lua"));
+        let bad: &[(&str, &str)] = &[("chunkname", "@C:\\Users\\Ünter\\x.lua")];
+        let err = check(&s.roots(), &h, bad, &real).expect_err("the value is not ASCII");
+        assert!(matches!(err.kind, Refusal::Frame(_)), "{err}");
+    }
+
+    #[test]
+    fn a_stat_that_fails_is_named_and_is_not_a_containment_answer() {
+        let s = scene();
+        let h = handshake(&handshake_bytes(&s.b));
+        let real = real(&s.project.as_path().join("absent.lua"));
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("nothing to state");
+        assert!(matches!(err.kind, Refusal::Stat(_)), "{err}");
+        assert_ne!(
+            err.reason(),
+            "is not under any allowed root",
+            "a failed stat is not a verdict about the roots"
+        );
+    }
+
+    #[test]
+    fn the_oversize_refusal_offers_the_two_ways_out() {
+        let s = scene();
+        let h = handshake(&with(&handshake_bytes(&s.b), "max_request_bytes", "1024"));
+        let real = sized(&s, "too-big.lua", 2_000);
+        let line = check(&s.roots(), &h, HEADERS, &real)
+            .expect_err("over the ceiling")
+            .to_string();
+        assert!(line.contains("split the file"), "{line}");
+        assert!(line.contains("dofile"), "{line}");
     }
 }
