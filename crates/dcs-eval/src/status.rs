@@ -378,6 +378,26 @@ pub fn process_of(pid: u32, saw: sys::Liveness) -> (Process, Option<Problem>) {
     }
 }
 
+/// What one of the two reported-only paths is worth saying, if anything.
+///
+/// These two are written down so a client can say what the executor saw,
+/// and one the filesystem would not own is reported here rather than
+/// refusing the file that named it: a handshake naming a temp directory
+/// nothing resolves is the finding, and refusing the file would hide the
+/// finding behind the fault it describes. The judgement is the reader's
+/// own [`Diagnostic::problem`]: a path the executor said plainly it could
+/// not read is no finding, and one that resolved is none either.
+fn unresolved(name: &'static str, d: &Diagnostic) -> Option<Problem> {
+    match d {
+        Diagnostic::Unresolved { named, why } => Some(Problem::Unresolved {
+            name,
+            named: named.clone(),
+            why: why.clone(),
+        }),
+        Diagnostic::Absent | Diagnostic::Real(_) => None,
+    }
+}
+
 /// Whether two resolved paths are the same directory.
 ///
 /// Mutual containment rather than `==`. A `Real`'s equality is byte-exact
@@ -496,6 +516,19 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
     let session = Session::addressed(&handshake);
     let (process, gone) = process_of(session.pid(), sys::liveness(session.pid()));
     problems.extend(gone);
+    problems.extend(unresolved("lfs_tempdir", &handshake.lfs_tempdir));
+    problems.extend(unresolved("install_guard", &handshake.install_guard));
+    let tempdir = tempdir_of(&handshake.lfs_tempdir);
+    // Only a disagreement between two paths that both resolved is worth
+    // reporting. Absent is the executor saying its own read did not
+    // answer, and undecided is a path one side or the other could not
+    // resolve — which is somebody's finding, but not this one.
+    if let Agreement::Differ { executor, client } = &tempdir {
+        problems.push(Problem::TempdirDisagrees {
+            executor: executor.clone(),
+            client: client.clone(),
+        });
+    }
 
     // The file is read before its stamp is looked at. A stamp is something
     // only a file this reader understood has, so one that is both another
@@ -534,7 +567,7 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
             // and nothing here removes one.
             arm_file: handshake.arm.as_path().exists(),
             app_version: measured_against(handshake.app_version.as_deref(), MEASURED_ON),
-            tempdir: tempdir_of(&handshake.lfs_tempdir),
+            tempdir,
             beat,
         }),
         problems,
@@ -890,6 +923,81 @@ mod tests {
         );
         assert_eq!(beat.phase, "simulation");
         assert_eq!(beat.ticks, 99);
+    }
+
+    #[test]
+    fn a_diagnostic_path_that_would_not_resolve_is_reported_not_refused() {
+        for name in ["lfs_tempdir", "install_guard"] {
+            let b = Sandbox::new();
+            let s = live(&b);
+            // A relative spelling: the resolver refuses one outright,
+            // because the drive it would land on is an accident of where
+            // the client was started.
+            respell(&s.output().join("executor.txt"), name, "tmp\\somewhere");
+            let report = status(s.output());
+            assert!(
+                report.session.is_some(),
+                "{name} is reported and never used, so a path that will not resolve is a finding \
+                 rather than a reason to refuse the file"
+            );
+            assert!(
+                report.problems.iter().any(|p| matches!(
+                    p,
+                    Problem::Unresolved { name: n, named, .. } if *n == name && named == "tmp\\somewhere"
+                )),
+                "{name}: saw {:?}",
+                report.problems
+            );
+        }
+    }
+
+    #[test]
+    fn lfs_tempdir_disagreeing_with_this_clients_temp_directory_is_a_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let elsewhere = "C:\\not-this-hosts-temp-directory";
+        respell(&s.output().join("executor.txt"), "lfs_tempdir", elsewhere);
+        let report = status(s.output());
+        let client = paths::resolve(&std::env::temp_dir()).expect("this host has a temp directory");
+        assert!(
+            report.problems.contains(&Problem::TempdirDisagrees {
+                executor: real(Path::new(elsewhere)),
+                client: client.clone(),
+            }),
+            "saw {:?}",
+            report.problems
+        );
+        assert_eq!(
+            report.session.expect("the session reports").tempdir,
+            Agreement::Differ {
+                executor: real(Path::new(elsewhere)),
+                client,
+            },
+            "the field is the report and the problem is what it is worth saying"
+        );
+    }
+
+    #[test]
+    fn a_tempdir_this_client_cannot_resolve_is_undecided_and_not_an_accusation() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        respell(&s.output().join("executor.txt"), "lfs_tempdir", "tmp");
+        let report = status(s.output());
+        assert!(
+            !report
+                .problems
+                .iter()
+                .any(|p| matches!(p, Problem::TempdirDisagrees { .. })),
+            "a path that would not resolve is not two directories disagreeing: {:?}",
+            report.problems
+        );
+        match report.session.expect("the session reports").tempdir {
+            Agreement::Undecided { why } => assert!(
+                !why.is_empty(),
+                "the resolver's own words, and no culprit named"
+            ),
+            other => panic!("saw {other:?}, wanted Undecided"),
+        }
     }
 
     #[test]
