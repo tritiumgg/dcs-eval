@@ -496,6 +496,169 @@ fn named_mission(phase: &Phase, mission_name: Option<&crate::reads::Answer>) -> 
     }
 }
 
+/// Whether the simulation clock is stopped.
+///
+/// One fact and not two: a mission paused and a simulation paused are the
+/// same stopped clock, and the game menu that stops it in single player is
+/// a callback in the `ui` record rather than a state here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Pause {
+    Paused,
+    Running,
+    /// Outside a mission, where the question does not arise.
+    NotApplicable,
+    Unknown {
+        why: Why,
+    },
+}
+
+impl fmt::Display for Pause {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            // The basis is in the same line as the value, because the
+            // read and the callback phase can disagree and a reader has
+            // to know which one they are looking at.
+            Self::Paused => f.write_str("paused (read)"),
+            Self::Running => f.write_str("running (read)"),
+            Self::NotApplicable => f.write_str("n/a"),
+            Self::Unknown { why } => write!(f, "{why}"),
+        }
+    }
+}
+
+/// The pause axis: the value the read decided, the callback phase beside
+/// it, and a note where the two disagree.
+///
+/// The phase is shown whether or not it agrees. A value with no phase
+/// beside it would leave a reader unable to see the disagreement at all,
+/// and the disagreement is the interesting part.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PauseAxis {
+    pub value: Pause,
+    pub phase_callback: Option<Phase>,
+    /// `Some` only where the read and the phase disagree, saying what the
+    /// phase said. It is a note and never a resolution.
+    pub note: Option<String>,
+}
+
+impl fmt::Display for PauseAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.value)?;
+        if let Some(phase) = &self.phase_callback {
+            write!(f, ", phase_callback {phase}")?;
+        }
+        if let Some(note) = &self.note {
+            write!(f, " — {note}")?;
+        }
+        Ok(())
+    }
+}
+
+/// Whether the clock is stopped, from the `getPause` read, gated on being
+/// in a mission at all.
+///
+/// **The read wins and the disagreement is reported, in both directions.**
+/// Where the read says paused and the callback phase says `sim`, or the
+/// read says running and the phase says `paused`, the value is the read's
+/// and the note says what the phase said. It is never resolved in the
+/// callback's favour: DCS can begin a mission already paused without
+/// firing either callback and can resume with no preceding pause, and this
+/// executor's phase reports `sim` for a mission that began paused. Nothing
+/// on this build has measured any of that, which is another reason not to
+/// let the phase overrule a read.
+///
+/// The gate is `activity`, and it only ever selects among this axis's own
+/// values: outside a mission the question does not arise, and where
+/// `activity` is itself unknown this axis is unknown naming the gate.
+/// `activity` never supplies a pause value — decision record 0018.
+#[must_use]
+pub fn pause_of(
+    activity: &Activity,
+    beat: Option<&Beat>,
+    pause: Option<&crate::reads::Answer>,
+) -> PauseAxis {
+    use crate::reads::Answer;
+    let phase = match beat {
+        Some(Beat::Ours { phase, .. }) => Some(phase.clone()),
+        Some(Beat::Foreign { .. } | Beat::WrongHost { .. } | Beat::Unreadable { .. }) | None => {
+            None
+        }
+    };
+    let settled = |value| PauseAxis {
+        value,
+        phase_callback: phase.clone(),
+        note: None,
+    };
+    match activity {
+        Activity::Loading | Activity::MenuOrEditor => return settled(Pause::NotApplicable),
+        Activity::Unknown { .. } => {
+            return settled(Pause::Unknown {
+                why: Why::GateUnknown { gate: "activity" },
+            });
+        }
+        Activity::Mission { .. } => {}
+    }
+    let value = match pause {
+        Some(Answer::Value { lua_type, value }) if lua_type == "boolean" => {
+            match value.as_deref() {
+                Some("true") => Pause::Paused,
+                Some("false") => Pause::Running,
+                Some(other) => Pause::Unknown {
+                    why: Why::WrongType {
+                        lua_type: lua_type.clone(),
+                        value: Some(other.to_owned()),
+                    },
+                },
+                None => Pause::Unknown {
+                    why: Why::WrongType {
+                        lua_type: lua_type.clone(),
+                        value: None,
+                    },
+                },
+            }
+        }
+        Some(Answer::Value { lua_type, value }) => Pause::Unknown {
+            why: Why::WrongType {
+                lua_type: lua_type.clone(),
+                value: value.clone(),
+            },
+        },
+        // The error and nothing else. The phase is sitting right there
+        // and it is `activity`'s evidence, not this axis's.
+        Some(Answer::Raised { message }) => Pause::Unknown {
+            why: Why::Errored {
+                message: message.clone(),
+            },
+        },
+        Some(Answer::Malformed { body }) => Pause::Unknown {
+            why: Why::Malformed { body: body.clone() },
+        },
+        Some(Answer::Unanswered { why }) => Pause::Unknown {
+            why: Why::Unanswered { why: why.clone() },
+        },
+        Some(Answer::NotSent { why }) => Pause::Unknown {
+            why: Why::NotSent { why: *why },
+        },
+        None => Pause::Unknown {
+            why: Why::Unanswered {
+                why: crate::reads::Unanswered::Unyielded,
+            },
+        },
+    };
+    let note = if matches!(value, Pause::Paused) && matches!(phase, Some(Phase::Sim)) {
+        Some("the callback phase says sim".to_owned())
+    } else if matches!(value, Pause::Running) && matches!(phase, Some(Phase::Paused)) {
+        Some("the callback phase says paused".to_owned())
+    } else {
+        None
+    };
+    PauseAxis {
+        value,
+        phase_callback: phase,
+        note,
+    }
+}
+
 /// The facts, one after another, for a line that prints all of them.
 fn joined(facts: &[Fact]) -> String {
     facts
@@ -876,6 +1039,179 @@ mod game_state {
                 }
             },
             "an unreadable heartbeat was taken for an absent one"
+        );
+    }
+
+    /// A session in a mission whose phase word is `phase`, and the
+    /// activity that goes with it.
+    fn in_mission(phase: &str) -> (Beat, Activity) {
+        let beat = ours(Host::Hook, phase, true);
+        let activity = activity_of(Some(&beat), Some(&said("Caucasus TvT")));
+        assert_eq!(
+            activity,
+            Activity::Mission {
+                name: "Caucasus TvT".to_owned()
+            },
+            "the fixture is not in a mission"
+        );
+        (beat, activity)
+    }
+
+    #[test]
+    fn a_true_read_is_paused() {
+        let (beat, activity) = in_mission("paused");
+        let got = pause_of(&activity, Some(&beat), Some(&told(true)));
+        assert_eq!(got.value, Pause::Paused);
+        assert!(got.to_string().starts_with("paused (read)"), "{got}");
+    }
+
+    #[test]
+    fn a_false_read_is_running() {
+        let (beat, activity) = in_mission("sim");
+        let got = pause_of(&activity, Some(&beat), Some(&told(false)));
+        assert_eq!(got.value, Pause::Running);
+    }
+
+    #[test]
+    fn a_paused_read_against_a_sim_phase_is_paused_read_with_the_phase_noted() {
+        let (beat, activity) = in_mission("sim");
+        let got = pause_of(&activity, Some(&beat), Some(&told(true)));
+        assert_eq!(got.value, Pause::Paused, "the read did not win");
+        assert_eq!(got.phase_callback, Some(Phase::Sim));
+        let note = got.note.as_deref().expect("a disagreement is noted");
+        assert!(
+            note.contains("sim"),
+            "the note does not say what the phase said: {note}"
+        );
+    }
+
+    #[test]
+    fn a_running_read_against_a_paused_phase_is_running_with_the_phase_noted() {
+        let (beat, activity) = in_mission("paused");
+        let got = pause_of(&activity, Some(&beat), Some(&told(false)));
+        assert_eq!(got.value, Pause::Running, "the read did not win");
+        assert_eq!(got.phase_callback, Some(Phase::Paused));
+        assert!(got.note.is_some(), "the disagreement was not noted");
+    }
+
+    #[test]
+    fn the_phase_never_resolves_the_disagreement_in_its_own_favour() {
+        // Both directions, because a resolution that only ran one way
+        // would leave the other test green. DCS can begin a mission
+        // already paused without firing either callback, and can resume
+        // with no preceding pause.
+        for (phase, read, wanted) in [
+            ("sim", true, Pause::Paused),
+            ("paused", false, Pause::Running),
+        ] {
+            let (beat, activity) = in_mission(phase);
+            let got = pause_of(&activity, Some(&beat), Some(&told(read)));
+            assert_eq!(
+                got.value, wanted,
+                "the {phase} phase overruled a read of {read}"
+            );
+            assert!(got.note.is_some(), "and said nothing about disagreeing");
+        }
+    }
+
+    #[test]
+    fn an_agreeing_phase_leaves_no_note_and_is_still_shown() {
+        for (phase, read, wanted) in [("paused", true, Phase::Paused), ("sim", false, Phase::Sim)] {
+            let (beat, activity) = in_mission(phase);
+            let got = pause_of(&activity, Some(&beat), Some(&told(read)));
+            assert_eq!(got.note, None, "an agreement was noted as a disagreement");
+            assert_eq!(
+                got.phase_callback,
+                Some(wanted),
+                "the phase is shown whether or not it agrees"
+            );
+        }
+    }
+
+    #[test]
+    fn pause_is_n_a_at_the_menu() {
+        let beat = ours(Host::Hook, "menu", true);
+        let activity = activity_of(Some(&beat), None);
+        let got = pause_of(&activity, Some(&beat), Some(&told(true)));
+        assert_eq!(
+            got.value,
+            Pause::NotApplicable,
+            "the question does not arise outside a mission"
+        );
+    }
+
+    #[test]
+    fn pause_is_n_a_during_a_load() {
+        let beat = ours(Host::Hook, "load", true);
+        let activity = activity_of(Some(&beat), None);
+        let got = pause_of(&activity, Some(&beat), None);
+        assert_eq!(got.value, Pause::NotApplicable);
+    }
+
+    #[test]
+    fn pause_is_unknown_naming_the_gate_where_activity_is_unknown() {
+        // The gate selects among this axis's own values and never
+        // supplies one: `activity` unknown makes `pause` unknown, and
+        // says which gate it was.
+        let got = pause_of(
+            &Activity::Unknown {
+                why: Why::NoHeartbeat,
+            },
+            None,
+            Some(&told(true)),
+        );
+        assert_eq!(
+            got.value,
+            Pause::Unknown {
+                why: Why::GateUnknown { gate: "activity" }
+            }
+        );
+    }
+
+    #[test]
+    fn an_errored_pause_read_is_unknown_naming_the_error() {
+        let (beat, activity) = in_mission("paused");
+        let got = pause_of(&activity, Some(&beat), Some(&raised()));
+        assert_eq!(
+            got.value,
+            Pause::Unknown {
+                why: Why::Errored {
+                    message: "attempt to call a nil value".to_owned()
+                }
+            },
+            "the getPause read raised, so pause is unknown and the phase is not an answer"
+        );
+    }
+
+    #[test]
+    fn a_non_boolean_pause_read_is_unknown_naming_the_type() {
+        let (beat, activity) = in_mission("sim");
+        let got = pause_of(&activity, Some(&beat), Some(&said("yes")));
+        assert_eq!(
+            got.value,
+            Pause::Unknown {
+                why: Why::WrongType {
+                    lua_type: "string".to_owned(),
+                    value: Some("yes".to_owned()),
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn an_unanswered_pause_read_is_unknown_and_not_errored() {
+        let (beat, activity) = in_mission("sim");
+        let answer = reads::Answer::Unanswered {
+            why: reads::Unanswered::Unyielded,
+        };
+        let got = pause_of(&activity, Some(&beat), Some(&answer));
+        assert_eq!(
+            got.value,
+            Pause::Unknown {
+                why: Why::Unanswered {
+                    why: reads::Unanswered::Unyielded
+                }
+            }
         );
     }
 
