@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=32
+CASES=33
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -711,6 +711,36 @@ out=$(run_) && got=0 || got=$?
 tree_intact || got=98
 check 'a control that could not be performed comes off the coverage figure' \
     1 "$got" "1 of 2 in-scope controls performed, 1 unperformed" "$out"
+
+# So does a control whose mutation never built. It reached no verdict about
+# the check either, and the argument that keeps UNPERFORMED off the figure is
+# the same one word for word.
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/applies
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+
+### fixture/will-not-build
+
+- command: `sh -c 'if grep -q three beta.txt; then echo "error[E0425]: cannot find value"; exit 101; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit beta.txt
+- beta two
++ beta three
+```
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+check 'a mutation that never built comes off the coverage figure too' \
+    1 "$got" "1 of 2 in-scope controls performed, 0 unperformed, 1 inconclusive" "$out"
 
 # --- the gate that stops the inventory judging its own coverage -------------
 #

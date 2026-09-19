@@ -498,6 +498,9 @@ performed=0
 # In controls rather than entries, because the coverage line counts controls:
 # performed and unperformed_c together are the in-scope figure.
 unperformed_c=0
+# Controls whose mutation was applied but reached no verdict: it would not
+# build, or the command was killed. Neither performed nor unperformed.
+inconclusive_c=0
 failures=0
 
 report() {
@@ -528,21 +531,26 @@ while IFS="$US" read -r id kind cmd reddens controls reason; do
         continue
     fi
 
-    # Counted here and nowhere earlier: a control is performed when its
-    # mutation is in the tree and its command has been run under it. Counting
-    # at the top of the loop would let the coverage line claim a control the
-    # run reported UNPERFORMED — overstating exactly the figure it is for.
-    performed=$((performed + controls))
     run_command "$cmd"
     failed=$(failing_checks)
     restore_all || exit 2
 
+    # A control counts toward the coverage figure in the arm that reached a
+    # verdict about it, and nowhere earlier. Its mutation being in the tree is
+    # not enough: a mutation that never built and one that was killed part-way
+    # say nothing about whether the check still watches what it used to, so
+    # counting either would overstate exactly the figure the line is for —
+    # the same reason UNPERFORMED is kept out of it. STAYED-GREEN and
+    # REDDENED-ELSEWHERE do count: the run learned something about the check,
+    # and what it learned is a failure this run reports.
     if [ "$rc" -eq 0 ]; then
         report STAYED-GREEN "$id" "$cmd" "the command exited 0; the mutation applied and nothing noticed"
+        performed=$((performed + controls))
         green=$((green + 1))
         failures=$((failures + 1))
     elif [ "$rc" -eq 124 ]; then
         report TIMEOUT "$id" "$cmd" "killed after ${timeout_s}s"
+        inconclusive_c=$((inconclusive_c + controls))
         failures=$((failures + 1))
     elif [ -z "$failed" ] || load_failed; then
         if [ -z "$failed" ]; then
@@ -554,14 +562,17 @@ while IFS="$US" read -r id kind cmd reddens controls reason; do
         fi
         report BUILD-FAILED "$id" "$cmd" \
             "$notbuilt; a mutation that will not build proves nothing" "$said"
+        inconclusive_c=$((inconclusive_c + controls))
         failures=$((failures + 1))
     elif printf '%s\n' "$failed" | grep -qF "$reddens"; then
         report REDDENED "$id" "$cmd" "$(printf '%s\n' "$failed" | head -4 | tr '\n' '|')"
+        performed=$((performed + controls))
         reddened=$((reddened + 1))
     else
         report REDDENED-ELSEWHERE "$id" "$cmd" \
             "recorded: $reddens" \
             "went red instead: $(printf '%s\n' "$failed" | head -4 | tr '\n' '|')"
+        performed=$((performed + controls))
         failures=$((failures + 1))
     fi
 done < "$work/todo"
@@ -588,8 +599,8 @@ printf '\n'
 # reader take the whole total for something a tool checked.
 printf 'coverage: %s of %s controls swept, %s out of scope (counted by hand off the plan)\n' \
     "$performed" "$((in_total + out_total))" "$out_total"
-printf '          %s of %s in-scope controls performed, %s unperformed\n' \
-    "$performed" "$in_total" "$unperformed_c"
+printf '          %s of %s in-scope controls performed, %s unperformed, %s inconclusive\n' \
+    "$performed" "$in_total" "$unperformed_c" "$inconclusive_c"
 printf '%s\n' "$rows" | while IFS="$US" read -r id kind cmd reddens controls reason; do
     [ "$kind" = out ] || continue
     printf '          %s not swept: %s controls, %s\n' "$id" "$controls" "$reason"
