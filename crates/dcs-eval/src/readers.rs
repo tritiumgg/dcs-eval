@@ -22,9 +22,11 @@
 //! time, which the filesystem keeps in a form that does not move.
 
 use std::fmt;
-use std::io;
+use std::fs::File;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::time::{Duration, SystemTime};
 
 use crate::paths::{self, PathError, Real};
 use crate::protocol::{self, Headers, PROTOCOL, ParseError};
@@ -341,6 +343,81 @@ impl Handshake {
     }
 }
 
+/// `<output>\heartbeat.txt`, rewritten while the executor ticks: whether it
+/// is armed, what phase it is in, how far its tick counter has gone, and
+/// when the file was last written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Heartbeat {
+    pub host: String,
+    pub stamp: String,
+    pub transport: Real,
+    pub phase: String,
+    /// Whether the session is answering requests. Refused rather than
+    /// defaulted where the file does not say, because every outcome a wait
+    /// decides later turns on this one value and a live executor read as a
+    /// dormant one is the wrong answer given quietly.
+    pub armed: bool,
+    /// Local wall clock of the last arm or disarm, display only.
+    pub since: String,
+    pub ticks: u64,
+    /// `<name>@<tick>` of the last callback other than the frame, or none
+    /// where none has fired yet. An empty value is a value: it says the
+    /// session has seen no callback, not that the file is short a header.
+    pub last_callback: Option<String>,
+    pub callbacks: Vec<String>,
+    /// When the file was last written, taken from the filesystem rather
+    /// than from anything in the file.
+    pub modified: SystemTime,
+}
+
+impl Heartbeat {
+    /// The heartbeat at `path`, with the modification time taken off the
+    /// same handle the bytes came from, so the time and the bytes belong to
+    /// one file rather than to two stats either side of a rewrite.
+    pub fn read(path: &Path) -> Result<Self, ReadError> {
+        let disk = |why| ReadError::at(path, ReadErrorKind::Disk(why));
+        let mut file = File::open(path).map_err(disk)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(disk)?;
+        let modified = file
+            .metadata()
+            .and_then(|meta| meta.modified())
+            .map_err(disk)?;
+        Self::from_bytes(path, &bytes, modified)
+    }
+
+    /// The heartbeat in `bytes`, written at `modified`.
+    pub fn from_bytes(path: &Path, bytes: &[u8], modified: SystemTime) -> Result<Self, ReadError> {
+        let h = envelope(path, bytes)?;
+        Self::fields(&h, modified).map_err(|kind| ReadError::at(path, kind))
+    }
+
+    /// How old the file is at `now`. A time in the future — a clock that
+    /// has been put back, or a session on another machine's — is no age at
+    /// all rather than an error: the caller asked how stale this is, and
+    /// the honest answer to a file written in the future is "not".
+    pub fn age(&self, now: SystemTime) -> Duration {
+        now.duration_since(self.modified).unwrap_or(Duration::ZERO)
+    }
+
+    fn fields(h: &Headers, modified: SystemTime) -> Result<Self, ReadErrorKind> {
+        protocol_is_ours(h)?;
+        let last = required(h, "last_callback")?;
+        Ok(Self {
+            host: required(h, "host")?.to_owned(),
+            stamp: required(h, "stamp")?.to_owned(),
+            transport: path(h, "transport")?,
+            phase: required(h, "phase")?.to_owned(),
+            armed: one_of(h, "armed", "yes", "no")?,
+            since: required(h, "since")?.to_owned(),
+            ticks: number(h, "ticks")?,
+            last_callback: (!last.is_empty()).then(|| last.to_owned()),
+            callbacks: list(required(h, "callbacks")?),
+            modified,
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -649,6 +726,223 @@ mod tests {
             at(&bytes),
             "a field a later executor grows is stepped over"
         );
+    }
+
+    // ---- the heartbeat ----------------------------------------------------
+
+    /// A session that has beaten at `at`, and the bytes it wrote.
+    fn beaten(b: &Sandbox, at: SystemTime) -> (Standin, Vec<u8>) {
+        let s = Standin::open(&b.path, "hook").expect("the session opens");
+        s.beat(at).expect("the beat publishes");
+        let bytes = slurp(&s.output().join("heartbeat.txt"));
+        (s, bytes)
+    }
+
+    fn beat_at(bytes: &[u8], at: SystemTime) -> Heartbeat {
+        Heartbeat::from_bytes(Path::new("heartbeat.txt"), bytes, at).expect("the heartbeat reads")
+    }
+
+    fn beat_refused(bytes: &[u8]) -> String {
+        Heartbeat::from_bytes(Path::new("heartbeat.txt"), bytes, SystemTime::UNIX_EPOCH)
+            .expect_err("the heartbeat is refused")
+            .to_string()
+    }
+
+    /// Every header of the heartbeat, in the executor's order.
+    const BEAT: [&str; 10] = [
+        "protocol",
+        "host",
+        "stamp",
+        "transport",
+        "phase",
+        "armed",
+        "since",
+        "ticks",
+        "last_callback",
+        "callbacks",
+    ];
+
+    #[test]
+    fn heartbeat_reads_every_field_the_stand_in_publishes() {
+        let b = Sandbox::new();
+        let now = SystemTime::now();
+        let (mut s, _) = beaten(&b, now);
+        s.armed = true;
+        s.phase = "mission".to_owned();
+        s.tick = 41;
+        s.last_callback = "onMissionLoadEnd@12".to_owned();
+        s.callbacks = vec![
+            "onMissionLoadEnd".to_owned(),
+            "onSimulationStart".to_owned(),
+        ];
+        s.beat(now).expect("the beat publishes");
+        let path = s.output().join("heartbeat.txt");
+        let h = Heartbeat::read(&path).expect("the heartbeat reads");
+        assert_eq!(h.host, "hook");
+        assert_eq!(h.stamp, s.stamp);
+        assert_eq!(h.transport, real(s.session()));
+        assert_eq!(h.phase, "mission");
+        assert!(h.armed);
+        assert_eq!(h.since, s.since);
+        assert_eq!(h.ticks, 41);
+        assert_eq!(h.last_callback.as_deref(), Some("onMissionLoadEnd@12"));
+        assert_eq!(h.callbacks, ["onMissionLoadEnd", "onSimulationStart"]);
+        let bytes = slurp(&path);
+        assert_eq!(
+            beat_at(&bytes, h.modified),
+            h,
+            "off the disk and off the bytes alike"
+        );
+    }
+
+    #[test]
+    fn heartbeat_age_comes_from_the_mtime_while_since_is_display_only() {
+        let b = Sandbox::new();
+        let now = SystemTime::now();
+        let then = now - Duration::from_secs(30);
+        let mut s = Standin::open(&b.path, "hook").expect("the session opens");
+        // A wall clock an hour out of step with the file, which is what
+        // `os.date` writes where a zone moved under it.
+        s.since = "2026-09-19 10:03:07".to_owned();
+        s.beat(then).expect("the beat publishes");
+        let h = Heartbeat::read(&s.output().join("heartbeat.txt")).expect("the heartbeat reads");
+        let age = h.age(now);
+        assert!(
+            age >= Duration::from_secs(30),
+            "the age is taken from the file, not from the read: wanted at \
+             least 30s, saw {age:?}"
+        );
+        assert!(
+            age < Duration::from_secs(120),
+            "and is not an invention: {age:?}"
+        );
+        assert_eq!(
+            h.since, "2026-09-19 10:03:07",
+            "and `since` comes back as it was written, never parsed"
+        );
+        // A file written in the future is no age at all.
+        assert_eq!(h.age(then - Duration::from_secs(60)), Duration::ZERO);
+    }
+
+    #[test]
+    fn heartbeat_refuses_an_absent_header_naming_it() {
+        let b = Sandbox::new();
+        let (_s, bytes) = beaten(&b, SystemTime::now());
+        for name in BEAT {
+            let why = beat_refused(&without(&bytes, name));
+            assert!(
+                why.ends_with(&format!("{name}: absent")),
+                "{name}: an absent header is refused, not defaulted — the \
+                 heartbeat said: {why}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_refuses_an_armed_that_is_neither_yes_nor_no() {
+        let b = Sandbox::new();
+        let (_s, bytes) = beaten(&b, SystemTime::now());
+        for saw in ["YES", "Yes", "true", "1", ""] {
+            let why = beat_refused(&with(&bytes, "armed", saw));
+            assert!(
+                why.ends_with(&format!("armed: {saw} is neither yes nor no")),
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_refuses_a_protocol_that_is_not_two() {
+        let b = Sandbox::new();
+        let (_s, bytes) = beaten(&b, SystemTime::now());
+        for saw in ["3", "2.0", ""] {
+            let why = beat_refused(&with(&bytes, "protocol", saw));
+            assert!(
+                why.ends_with(&format!("protocol: {saw}, and this client speaks 2")),
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_refuses_ticks_that_are_not_a_number() {
+        let b = Sandbox::new();
+        let (_s, bytes) = beaten(&b, SystemTime::now());
+        for saw in ["lots", "-1", "12.0", ""] {
+            let why = beat_refused(&with(&bytes, "ticks", saw));
+            assert!(
+                why.ends_with(&format!("ticks: {saw} is not a number")),
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn heartbeat_refuses_a_value_past_ascii_naming_the_header() {
+        let b = Sandbox::new();
+        let (_s, bytes) = beaten(&b, SystemTime::now());
+        let why = beat_refused(&past_ascii(&framed(&lines(&bytes)), "transport"));
+        assert!(why.contains("transport: "), "{why}");
+        assert!(why.contains("not ASCII"), "{why}");
+    }
+
+    #[test]
+    fn heartbeat_reads_an_empty_last_callback_and_no_callbacks_as_none() {
+        let b = Sandbox::new();
+        let (_s, bytes) = beaten(&b, SystemTime::now());
+        let h = beat_at(&bytes, SystemTime::now());
+        assert_eq!(h.last_callback, None, "none has fired");
+        assert!(
+            h.callbacks.is_empty(),
+            "and the list is empty, not one blank"
+        );
+        let one = beat_at(
+            &with(&bytes, "callbacks", "onShowGameMenu"),
+            SystemTime::now(),
+        );
+        assert_eq!(one.callbacks, ["onShowGameMenu"]);
+    }
+
+    #[test]
+    fn heartbeat_keeps_reading_past_a_header_it_does_not_know() {
+        let b = Sandbox::new();
+        let (_s, bytes) = beaten(&b, SystemTime::now());
+        let at = SystemTime::now();
+        let mut lines = lines(&bytes);
+        lines.push(("queued".to_owned(), "0".to_owned()));
+        lines.push(("answered".to_owned(), "9".to_owned()));
+        assert_eq!(
+            beat_at(&framed(&lines), at),
+            beat_at(&bytes, at),
+            "a field a later executor grows is stepped over"
+        );
+    }
+
+    #[test]
+    fn a_file_that_is_not_there_is_refused_naming_the_path() {
+        let b = Sandbox::new();
+        let gone = b.join("executor.txt");
+        let why = Handshake::read(&gone)
+            .expect_err("there is no handshake")
+            .to_string();
+        assert!(why.starts_with(&format!("{}: ", gone.display())), "{why}");
+        let gone = b.join("heartbeat.txt");
+        let why = Heartbeat::read(&gone)
+            .expect_err("there is no heartbeat")
+            .to_string();
+        assert!(why.starts_with(&format!("{}: ", gone.display())), "{why}");
+    }
+
+    #[test]
+    fn an_envelope_without_a_blank_line_is_refused_as_the_parser_refuses_it() {
+        let b = Sandbox::new();
+        let (_s, handshake) = published(&b);
+        let cut = &handshake[..handshake.len() - 2];
+        let why = refused(cut);
+        assert!(why.contains("the headers never end"), "{why}");
+        let (_s, beat) = beaten(&Sandbox::new(), SystemTime::now());
+        let why = beat_refused(&beat[..beat.len() - 2]);
+        assert!(why.contains("the headers never end"), "{why}");
     }
 
     #[test]
