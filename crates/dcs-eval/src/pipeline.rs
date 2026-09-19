@@ -902,7 +902,14 @@ mod tests {
             "the one nothing answered"
         );
         for (at, item) in got.iter().enumerate().skip(1) {
-            assert!(matches!(item, Ok(Outcome::Reply(_))), "{at}: {item:?}");
+            // One `upto` covers every head, so the 750 ms the quiet one
+            // needs is also all the answered ones get. A `pending` here
+            // means the ticker thread was not scheduled inside it — the
+            // window is not the subject of that failure.
+            assert!(
+                matches!(item, Ok(Outcome::Reply(_))),
+                "{at}: {item:?} — a pending here is a starved ticker, not a held slot"
+            );
         }
         assert_eq!(
             entries(s.req()),
