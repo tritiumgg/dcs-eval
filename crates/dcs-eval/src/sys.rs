@@ -110,6 +110,16 @@ pub enum Liveness {
 /// answers `ERROR_INVALID_PARAMETER` where no process has the id, which is
 /// the one refusal that means gone; every other refusal, access denied
 /// among them, means the id is somebody's and this probe may not ask.
+///
+/// A process id is not a name, and this is the limit of what the answer is
+/// worth. Windows issues the number again once the process holding it has
+/// gone, so a probe of an id whose process exited a while ago may open
+/// whatever unrelated process now holds it and answer `Running` about that
+/// one — confidently, with nothing in the verdict to say it is about a
+/// different process than the caller meant. The id is only as good as
+/// whatever else bounds how long ago it was issued: held across a restart
+/// of the thing that issued it, it is a question this call cannot answer
+/// and does not know it cannot.
 pub fn liveness(pid: u32) -> Liveness {
     let process = match Process::open(pid) {
         Ok(process) => process,
