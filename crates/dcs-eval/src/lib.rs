@@ -31,6 +31,12 @@ pub mod status;
 pub mod sys;
 pub mod wait;
 
+// How a wait sleeps: the event-driven watch over the reply directory, and
+// the poll that runs beside it whatever the watch reports. Private,
+// because it is `wait`'s own pacing and nothing outside the crate names
+// it.
+mod watch;
+
 // The stand-in is a test double: the crate's own tests always have it, and
 // another crate's tests get it through the `standin` feature. A user's
 // binary never links it.

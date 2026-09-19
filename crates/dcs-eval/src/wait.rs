@@ -20,7 +20,8 @@ use std::time::{Duration, Instant, SystemTime};
 use crate::protocol::{self, Envelope, ParseError};
 use crate::publish::{Sent, is_id};
 use crate::readers::{Handshake, Heartbeat, ReadError, ReadErrorKind};
-use crate::sys;
+use crate::sys::{self, Changes};
+use crate::watch::{self, Pace, Tally};
 
 /// One executor session, as a client addressed it. The stamp is the whole
 /// identity: the session directory and the two files are where that
@@ -426,25 +427,6 @@ fn this_sessions_heartbeat(s: &Session) -> Result<Option<Heartbeat>, WaitError> 
     }
 }
 
-/// How often a wait looks again. The fallback the specification keeps for
-/// a watch that reports nothing, which is what this is today: a watch on
-/// the reply directory is unreliable on some filesystems and the failure
-/// would be silent, so the poll stays whatever else is added beside it.
-const POLL: Duration = Duration::from_millis(25);
-
-/// Wait for something to happen in the reply directory, for at most
-/// `upto`.
-///
-/// The whole of the loop's sleeping is here, behind one function, so that
-/// an event-driven watch can take the directory without anything in the
-/// table, in `decide` or in `collect` knowing the difference: it would
-/// return early on an event and fall back to this same sleep when it
-/// reports nothing.
-fn settle(res: &Path, upto: Duration) {
-    let _ = res;
-    std::thread::sleep(upto.min(POLL));
-}
-
 /// The instant `upto` from `now`, or the furthest one this clock can name
 /// where `upto` reaches past the end of it.
 ///
@@ -476,9 +458,34 @@ fn latest(now: Instant, upto: Duration) -> Instant {
 /// back — running out of time is never a failure, and the table is read at
 /// least once however little time there was.
 pub fn wait(s: &Session, sent: &Sent, upto: Duration) -> Result<Outcome, WaitError> {
+    wait_paced(s, sent, upto, &Pace::default(), &mut Tally::default())
+}
+
+/// The wait, with the pacing named and what it did counted.
+///
+/// The watch lives in this function's own local and nowhere else. That is
+/// what makes "no handle is held once `wait` returns" a property of where
+/// the value sits rather than a rule somebody has to remember: there is no
+/// public constructor for one, no way to hand one in, and every path out
+/// of here — a reply, a deadline, a terminal outcome, a `?` on a file that
+/// would not read, a panic — drops the local, and dropping it cancels the
+/// pending read and waits for the cancellation before the buffer goes.
+pub(crate) fn wait_paced(
+    s: &Session,
+    sent: &Sent,
+    upto: Duration,
+    pace: &Pace,
+    tally: &mut Tally,
+) -> Result<Outcome, WaitError> {
     let deadline = latest(Instant::now(), upto);
+    let mut changes: Option<Changes> = None;
     loop {
         let now = Instant::now();
+        // Before the look, so that a change landing afterwards signals
+        // rather than being missed in the gap between the two. On the
+        // first pass there is nothing open yet and the look is the whole
+        // of it, which is the first look this wait always did.
+        watch::arm_if_needed(&mut changes, tally);
         if let Collected::Reply(envelope) = collect(s, sent.id())? {
             return Ok(Outcome::Reply(envelope));
         }
@@ -490,7 +497,7 @@ pub fn wait(s: &Session, sent: &Sent, upto: Duration) -> Result<Outcome, WaitErr
         if left.is_zero() {
             return Ok(outcome);
         }
-        settle(s.res(), left);
+        watch::settle(&mut changes, s.res(), left, pace, tally);
     }
 }
 
