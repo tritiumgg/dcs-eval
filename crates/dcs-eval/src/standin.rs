@@ -518,6 +518,83 @@ impl Standin {
         }
     }
 
+    /// The handshake, `<output>/executor.txt`: the twenty-seven headers the
+    /// executor writes at load, in its order, naming this session's own
+    /// paths. Every one is written on every load there — `ALLOW_EVAL`
+    /// moves the values of `eval` and `ops` and never their presence — so
+    /// every one is written here too.
+    ///
+    /// The four fields the executor writes as the literal `ABSENT` where
+    /// its read did not answer are given present values instead, so what a
+    /// client reads off this side exercises the resolving path; a fixture
+    /// wanting `ABSENT` builds it by hand.
+    pub fn handshake(&self) -> Result<(), String> {
+        let path = |p: &Path| p.display().to_string();
+        let transport = path(&self.session);
+        let req = path(&self.req);
+        let res = path(&self.res);
+        let arm = path(&self.arm);
+        let output = path(&self.output);
+        let tempdir = path(&self.output.join("tmp"));
+        let guard = path(&self.output.join("install_guard.txt"));
+        let states = self.states();
+        let headers = [
+            ("executor", "dcs-eval"),
+            ("protocol", PROTOCOL),
+            ("host", self.host.as_str()),
+            ("stamp", self.stamp.as_str()),
+            ("pid", "4242"),
+            ("started", "2026-09-19 11:03:07"),
+            ("transport", transport.as_str()),
+            ("req", req.as_str()),
+            ("res", res.as_str()),
+            ("arm", arm.as_str()),
+            ("output", output.as_str()),
+            ("eval", "allowed"),
+            ("ops", "ping,eval"),
+            ("states", states),
+            ("namespace", "DcsEval"),
+            ("source", "DcsEvalExecutor.lua"),
+            ("lfs_tempdir", tempdir.as_str()),
+            ("transport_source", "fallback: beside the output"),
+            ("install_guard", guard.as_str()),
+            ("tick_budget_ms", "8"),
+            ("instruction_budget", "1000000"),
+            ("instruction_ceiling", "50000000"),
+            ("probe_every", "8"),
+            ("quiet_s", "3"),
+            ("app_version", "2.9.10.1234"),
+            ("max_request_bytes", "262144"),
+            ("max_result_bytes", "65536"),
+        ];
+        let bytes = encode(&headers, b"")?;
+        self.land(&self.output.join("executor.txt"), &bytes)
+    }
+
+    /// The `states` header for this host, as the executor declares them.
+    fn states(&self) -> &'static str {
+        if self.host == "export" {
+            EXPORT_STATES
+        } else {
+            HOOK_STATES
+        }
+    }
+
+    /// One file published the way this side publishes every file: written
+    /// beside itself as `.tmp` and renamed over, so a reader never meets a
+    /// half-written one.
+    fn land(&self, path: &Path, bytes: &[u8]) -> Result<(), String> {
+        let mut name = path.file_name().unwrap_or_default().to_owned();
+        name.push(".tmp");
+        let tmp = path.with_file_name(name);
+        let written = File::create(&tmp).and_then(|mut file| file.write_all(bytes));
+        let landed = written.and_then(|()| fs::rename(&tmp, path));
+        landed.map_err(|why| {
+            let _ = fs::remove_file(&tmp);
+            format!("{}: {why}", path.display())
+        })
+    }
+
     /// A reply to `id`: the eight headers the executor puts first, in its
     /// order, then `headers`, then `body`, encoded this side's way and
     /// published as `<res>/<id>.res` through `<id>.res.tmp` beside it. The
@@ -847,6 +924,73 @@ mod tests {
             opened(&Sandbox::new(), "other").phase,
             "loaded",
             "the executor's branch: menu on hook, loaded on anything else"
+        );
+    }
+
+    /// The twenty-seven handshake headers, in the order the executor's
+    /// `handshake` writes them. `app_version` sits between `quiet_s` and
+    /// the two byte limits, which is where the writer puts it and not
+    /// where the specification's table would suggest.
+    const HANDSHAKE: [&str; 27] = [
+        "executor",
+        "protocol",
+        "host",
+        "stamp",
+        "pid",
+        "started",
+        "transport",
+        "req",
+        "res",
+        "arm",
+        "output",
+        "eval",
+        "ops",
+        "states",
+        "namespace",
+        "source",
+        "lfs_tempdir",
+        "transport_source",
+        "install_guard",
+        "tick_budget_ms",
+        "instruction_budget",
+        "instruction_ceiling",
+        "probe_every",
+        "quiet_s",
+        "app_version",
+        "max_request_bytes",
+        "max_result_bytes",
+    ];
+
+    #[test]
+    fn the_handshake_lands_whole_under_the_output() {
+        let b = Sandbox::new();
+        let s = opened(&b, "hook");
+        s.handshake().expect("the handshake publishes");
+        assert_eq!(
+            entries(s.output()),
+            "executor.txt rpc",
+            "under its final name and no .tmp left behind"
+        );
+        let (headers, body) = decoded(&slurp(&s.output().join("executor.txt")));
+        let names: Vec<&str> = headers.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, HANDSHAKE, "every header, in the writer's order");
+        assert!(body.is_empty(), "the handshake carries no body");
+        let field = |name: &str| header(&headers, name).expect(name).to_owned();
+        assert_eq!(field("executor"), "dcs-eval");
+        assert_eq!(field("protocol"), "2");
+        assert_eq!(field("host"), "hook");
+        assert_eq!(field("stamp"), s.stamp);
+        assert_eq!(field("transport"), s.session().display().to_string());
+        assert_eq!(field("req"), s.req().display().to_string());
+        assert_eq!(field("res"), s.res().display().to_string());
+        assert_eq!(field("arm"), s.arm().display().to_string());
+        assert_eq!(field("output"), s.output().display().to_string());
+        assert_eq!(field("transport_source"), "fallback: beside the output");
+        assert_eq!(field("states"), HOOK_STATES);
+        assert_eq!(
+            opened(&Sandbox::new(), "export").states(),
+            EXPORT_STATES,
+            "and the other host's states"
         );
     }
 
