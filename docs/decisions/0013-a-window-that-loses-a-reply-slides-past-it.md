@@ -89,7 +89,18 @@ refilled.
   and there is nothing to retry against: the same unreadable file will fail
   the same way for ever. The error is yielded once and the iterator returns
   nothing afterwards for good, so a caller looping over it terminates instead
-  of receiving an unbounded stream of identical errors.
+  of receiving an unbounded stream of identical errors. The window it had
+  published is handed back rather than drained in front of the error, which is
+  the one place this differs from the spent counter below: there the requests
+  on the disk can still be waited on and yielded, and here the same unreadable
+  session would fail every one of them in turn, so draining would cost the
+  caller W copies of one error and tell it nothing. So the ids are named
+  instead of yielded — `in_flight()` is every request published and not yet
+  yielded — and a caller whose session reads again collects them by name. The
+  rule both branches keep is the same one: no request reaches the disk without
+  its id reaching the caller, because a published request will run, and a
+  caller that cannot name one can neither collect it nor retry it without
+  running it twice.
 - **A counter with no id left is reported behind the window it already
   filled, once, and ends the drain.** A `<seq>` is ten digits and a client
   that has spent all ten thousand million of them can mint no name the
@@ -119,6 +130,11 @@ Alternatives rejected:
   the window: requests already on the disk are never waited on, never yielded
   and their ids never reach the caller, which cannot collect what it cannot
   name.
+- *End the drain on an unreadable session and forget the window.* The same
+  objection as reporting an exhausted counter in front of the window, arriving
+  by a different road: the requests are on the disk of a session that was
+  alive when they landed and will run, and a caller that never learns their
+  ids can neither collect them nor retry them safely.
 - *Keep re-waiting a head whose `wait` errored.* Unbounded; each re-wait is
   another `upto` and nothing bounds the loop, so the caller gets a hang rather
   than an error.

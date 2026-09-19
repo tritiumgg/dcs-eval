@@ -76,7 +76,10 @@ pub enum PipeError {
     /// of the W published.
     Send(SendError),
     /// The session could not be read. It ends the drain: the same
-    /// unreadable file would fail the same way for ever.
+    /// unreadable file would fail the same way for ever. The window it
+    /// had published is left where it was and named by
+    /// [`Pipeline::in_flight`], because a request on the disk will run
+    /// whether or not the client can read the answer.
     Wait(WaitError),
 }
 
@@ -238,6 +241,28 @@ impl Pipeline {
         self.specs.into()
     }
 
+    /// The ids of every request published and not yet yielded, front of
+    /// the window first.
+    ///
+    /// A drain ended by a session that would not read leaves its window
+    /// lying on the disk. Those requests were published into a live
+    /// session and will run, so a caller can neither retry them — that
+    /// would run them twice — nor forget them, and it can do neither
+    /// without their names. These are the names, and `collect` takes one
+    /// once the session reads again. Record 0013 says why an unreadable
+    /// session hands its window back rather than draining it in front of
+    /// the error, as a spent counter does.
+    #[must_use]
+    pub fn in_flight(&self) -> Vec<String> {
+        self.flight
+            .iter()
+            .filter_map(|slot| match slot {
+                Slot::Sent(sent) => Some(sent.id().to_owned()),
+                Slot::Refused(_) => None,
+            })
+            .collect()
+    }
+
     /// How many requests are on the disk right now. A refused slot is not
     /// one of them, which is what keeps a refusal from costing the window
     /// a place.
@@ -311,6 +336,10 @@ impl Pipeline {
             Ok(Collected::Reply(envelope)) => Some(Ok(Outcome::Reply(envelope))),
             Ok(_) => Some(Ok(gone.about(sent.id()))),
             Err(err) => {
+                // Put it back before ending. It is still on the disk and
+                // the caller is owed its name, which it would lose if
+                // the slot were consumed by the read that failed.
+                self.flight.push_front(Slot::Sent(sent));
                 self.done = true;
                 Some(Err(PipeError::Wait(err.into())))
             }
@@ -986,5 +1015,88 @@ mod tests {
         );
         assert!(p.next().is_none(), "the drain ends there");
         assert!(p.next().is_none(), "and stays ended");
+    }
+
+    #[test]
+    fn the_window_an_unreadable_session_left_behind_is_still_nameable() {
+        // Three requests reach the disk and then the handshake goes, so
+        // the drain ends on its first head. Those three will run: they
+        // were published into a session that was alive when they landed,
+        // and a caller that cannot name them can neither collect them
+        // later nor retry them without running them twice. So the ids
+        // stay, the head that failed to read included.
+        let b = Sandbox::new();
+        let (s, h) = ticking(&b);
+        let specs = pings(&s, 3);
+        let minter = Minter::seeded(11);
+        let tag = minter.tag().to_owned();
+        let mut p = Pipeline::over_with(&h, minter, specs, 3, UPTO);
+        fs::remove_file(s.output().join("executor.txt")).expect("the handshake goes");
+        let first = p.next().expect("one item");
+        assert!(
+            matches!(first, Err(PipeError::Wait(_))),
+            "{:?}",
+            first.map(|o| o.id().to_owned())
+        );
+        let published: Vec<String> = (1..=3).map(|n| format!("{n:010}-{tag}")).collect();
+        assert_eq!(
+            p.in_flight(),
+            published,
+            "every id still on the disk comes back"
+        );
+        assert_eq!(
+            entries(s.req()),
+            published
+                .iter()
+                .map(|id| format!("{id}.req"))
+                .collect::<Vec<_>>()
+                .join(" "),
+            "and they are the ones lying there"
+        );
+        assert_eq!(p.unsent(), 0, "nothing was left unpublished to retry");
+    }
+
+    #[test]
+    fn a_neighbour_that_cannot_be_collected_keeps_its_name() {
+        // The other end of the same rule, on the terminal path: the
+        // window is dead, the neighbours are being collected one at a
+        // time, and one of them has a reply on the disk that will not
+        // parse. The neighbour whose collect failed is not spent by the
+        // failure — its request is on the disk like the rest and it comes
+        // back with them.
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let specs = pings(&s, 3);
+        let minter = Minter::seeded(11);
+        let tag = minter.tag().to_owned();
+        let res = s.res().to_owned();
+        let mut p = Pipeline::over_with(&h, minter, specs, 3, UPTO);
+        let head = std::thread::scope(|scope| {
+            scope.spawn(|| restart_under(&mut s, |listed| listed.clear(), 0));
+            p.next().expect("the terminal head")
+        });
+        assert!(
+            matches!(head, Ok(Outcome::Superseded { .. })),
+            "{:?}",
+            head.map(|o| o.id().to_owned())
+        );
+        fs::write(
+            res.join(format!("0000000002-{tag}.res")),
+            b"not an envelope",
+        )
+        .expect("a reply that will not parse");
+        let next = p.next().expect("an item for the first neighbour");
+        assert!(
+            matches!(next, Err(PipeError::Wait(_))),
+            "{:?}",
+            next.map(|o| o.id().to_owned())
+        );
+        assert_eq!(
+            p.in_flight(),
+            (2..=3)
+                .map(|n| format!("{n:010}-{tag}"))
+                .collect::<Vec<_>>(),
+            "both neighbours are still nameable"
+        );
     }
 }
