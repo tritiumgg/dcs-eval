@@ -659,6 +659,273 @@ pub fn pause_of(
     }
 }
 
+/// What kind of session this is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionAxis {
+    /// Joined to somebody else's server.
+    Client,
+    /// Reachable, with tier 2 off. Hosting from the client is
+    /// indistinguishable from single player by reachability alone, so the
+    /// value names both and says what would separate them.
+    SingleOrHost,
+    Single,
+    Host,
+    Unknown {
+        why: Why,
+    },
+}
+
+impl fmt::Display for SessionAxis {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Client => f.write_str("a client joined to a server (gui refused)"),
+            Self::SingleOrHost => f.write_str("single player or host (tier 2 off)"),
+            Self::Single => f.write_str("single player (tier 2)"),
+            Self::Host => f.write_str("hosting (tier 2)"),
+            Self::Unknown { why } => write!(f, "{why}"),
+        }
+    }
+}
+
+/// Whether a track is playing back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Track {
+    Replay,
+    Live,
+    Unknown { why: Why },
+}
+
+impl fmt::Display for Track {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Replay => f.write_str("a track playing back (tier 2)"),
+            Self::Live => f.write_str("live (tier 2)"),
+            Self::Unknown { why } => write!(f, "{why}"),
+        }
+    }
+}
+
+/// The boolean a read answered, or why there is none.
+///
+/// Every arm is written out so that a read which raised, one that was
+/// never sent and one that answered the wrong type stay three reasons.
+fn bool_of(answer: Option<&crate::reads::Answer>) -> Result<bool, Why> {
+    use crate::reads::Answer;
+    match answer {
+        Some(Answer::Value { lua_type, value }) if lua_type == "boolean" => {
+            match value.as_deref() {
+                Some("true") => Ok(true),
+                Some("false") => Ok(false),
+                Some(other) => Err(Why::WrongType {
+                    lua_type: lua_type.clone(),
+                    value: Some(other.to_owned()),
+                }),
+                None => Err(Why::WrongType {
+                    lua_type: lua_type.clone(),
+                    value: None,
+                }),
+            }
+        }
+        Some(Answer::Value { lua_type, value }) => Err(Why::WrongType {
+            lua_type: lua_type.clone(),
+            value: value.clone(),
+        }),
+        Some(Answer::Raised { message }) => Err(Why::Errored {
+            message: message.clone(),
+        }),
+        Some(Answer::Malformed { body }) => Err(Why::Malformed { body: body.clone() }),
+        Some(Answer::Unanswered { why }) => Err(Why::Unanswered { why: why.clone() }),
+        Some(Answer::NotSent { why }) => Err(Why::NotSent { why: *why }),
+        None => Err(Why::Unanswered {
+            why: crate::reads::Unanswered::Unyielded,
+        }),
+    }
+}
+
+/// The status a probe that did not answer `ok` came back with, where it
+/// was a reply that said something rather than no reply at all.
+///
+/// The status is read off the arm as a field, never off a formatted
+/// sentence: `refused` has exactly one meaning on the wire — the state
+/// could not be reached — and every other word means something else.
+fn refusal_word(probe: &crate::reads::Probe) -> Option<&str> {
+    match probe {
+        crate::reads::Probe::Unanswered {
+            why: crate::reads::Unanswered::NotOk { status, .. },
+        } => Some(status),
+        crate::reads::Probe::Unanswered { .. }
+        | crate::reads::Probe::Reachable
+        | crate::reads::Probe::Malformed { .. } => None,
+    }
+}
+
+/// What kind of session this is, from the `gui` reachability probe and
+/// then the tier-2 reads, gated on being in a mission.
+///
+/// **The probe is read first, and the tier-2 mapping is reached only where
+/// the probe was reachable.** Without that ordering written down, a
+/// `refused` probe with `isMultiplayer` true and `isServer` false has two
+/// rows of the vocabulary claiming it at once. Both are this axis's own
+/// evidence, so reading one before the other borrows nothing.
+///
+/// A probe that came back `refused` means one thing and one thing only:
+/// `net.dostring_in` returned nil for that state. On a client joined to a
+/// server that happens for every state while `hook` still answers, which
+/// is what makes it evidence. Every other refusal word — `unsupported`
+/// where eval is off, `bad-request`, a refusal at the mission hop,
+/// `oversize`, `budget` — is a different finding and is unknown naming
+/// itself, never `client`.
+///
+/// A `refused` probe at the menu is the second of the vocabulary's two
+/// disagreement examples, and **it lands here and leaves `activity:
+/// menu-or-editor` definite**. The probe is this axis's evidence; using it
+/// to unknown `activity` would be exactly the borrowing decision record
+/// 0018 forbids, however strong the instinct to unknown both.
+#[must_use]
+pub fn session_of(
+    activity: &Activity,
+    probe: Option<&crate::reads::Probe>,
+    tiers: crate::reads::Tiers,
+    multiplayer: Option<&crate::reads::Answer>,
+    server: Option<&crate::reads::Answer>,
+) -> SessionAxis {
+    use crate::reads::Probe;
+    let refused = probe.and_then(refusal_word) == Some("refused");
+    match activity {
+        Activity::MenuOrEditor if refused => {
+            return SessionAxis::Unknown {
+                why: Why::Disagrees {
+                    facts: vec![
+                        Fact::new("activity", "menu-or-editor"),
+                        Fact::new("the gui probe", "refused, where the menu answers"),
+                    ],
+                },
+            };
+        }
+        Activity::MenuOrEditor | Activity::Loading | Activity::Unknown { .. } => {
+            return SessionAxis::Unknown {
+                why: Why::GateUnknown { gate: "activity" },
+            };
+        }
+        Activity::Mission { .. } => {}
+    }
+    match probe {
+        // `refused` is the one refusal word that says the state could
+        // not be reached, which is what makes it evidence about the
+        // session rather than about the request.
+        Some(_) if refused => SessionAxis::Client,
+        Some(Probe::Unanswered { why }) => SessionAxis::Unknown {
+            why: Why::Unanswered { why: why.clone() },
+        },
+        Some(Probe::Malformed { body }) => SessionAxis::Unknown {
+            why: Why::Malformed { body: body.clone() },
+        },
+        Some(Probe::Reachable) => reachable_session(tiers, multiplayer, server),
+        None => SessionAxis::Unknown {
+            why: Why::Unanswered {
+                why: crate::reads::Unanswered::Unyielded,
+            },
+        },
+    }
+}
+
+/// What the tier-2 reads say, where the `gui` state answered the probe.
+///
+/// `isMultiplayer` true with `isServer` false is a combination the
+/// vocabulary maps to nothing, so it is unknown naming both reads.
+/// Agreeing with the probe there would be a guess wearing a
+/// corroboration: the probe already said what it had to say, and this is
+/// a second reading that does not fit.
+fn reachable_session(
+    tiers: crate::reads::Tiers,
+    multiplayer: Option<&crate::reads::Answer>,
+    server: Option<&crate::reads::Answer>,
+) -> SessionAxis {
+    if !tiers.tier_two() {
+        return SessionAxis::SingleOrHost;
+    }
+    let multi = match bool_of(multiplayer) {
+        Ok(multi) => multi,
+        Err(why) => return SessionAxis::Unknown { why },
+    };
+    if !multi {
+        return SessionAxis::Single;
+    }
+    let serving = match bool_of(server) {
+        Ok(serving) => serving,
+        Err(why) => return SessionAxis::Unknown { why },
+    };
+    if serving {
+        SessionAxis::Host
+    } else {
+        SessionAxis::Unknown {
+            why: Why::Unmapped {
+                facts: vec![
+                    Fact::new("multiplayer", "true"),
+                    Fact::new("server", "false"),
+                ],
+            },
+        }
+    }
+}
+
+/// Whether a track is playing, from the tier-2 read alone.
+///
+/// No gate: the vocabulary gives this row none. With tier 2 off the read
+/// is never sent, and the answer says so in the one line that tells an
+/// agent the answer is purchasable and how.
+#[must_use]
+pub fn track_of(track: Option<&crate::reads::Answer>) -> Track {
+    use crate::reads::Answer;
+    match track {
+        Some(Answer::Value { lua_type, value }) if lua_type == "boolean" => {
+            match value.as_deref() {
+                Some("true") => Track::Replay,
+                Some("false") => Track::Live,
+                Some(other) => Track::Unknown {
+                    why: Why::WrongType {
+                        lua_type: lua_type.clone(),
+                        value: Some(other.to_owned()),
+                    },
+                },
+                None => Track::Unknown {
+                    why: Why::WrongType {
+                        lua_type: lua_type.clone(),
+                        value: None,
+                    },
+                },
+            }
+        }
+        Some(Answer::Value { lua_type, value }) => Track::Unknown {
+            why: Why::WrongType {
+                lua_type: lua_type.clone(),
+                value: value.clone(),
+            },
+        },
+        Some(Answer::Raised { message }) => Track::Unknown {
+            why: Why::Errored {
+                message: message.clone(),
+            },
+        },
+        Some(Answer::Malformed { body }) => Track::Unknown {
+            why: Why::Malformed { body: body.clone() },
+        },
+        Some(Answer::Unanswered { why }) => Track::Unknown {
+            why: Why::Unanswered { why: why.clone() },
+        },
+        // Which unknown this is matters: tier 2 off is purchasable and
+        // the rest are not.
+        Some(Answer::NotSent { why }) => Track::Unknown {
+            why: Why::NotSent { why: *why },
+        },
+        None => Track::Unknown {
+            why: Why::Unanswered {
+                why: crate::reads::Unanswered::Unyielded,
+            },
+        },
+    }
+}
+
 /// The facts, one after another, for a line that prints all of them.
 fn joined(facts: &[Fact]) -> String {
     facts
@@ -1213,6 +1480,281 @@ mod game_state {
                 }
             }
         );
+    }
+
+    /// A probe that came back with the refusal word `status`.
+    fn refused_with(status: &str) -> reads::Probe {
+        reads::Probe::Unanswered {
+            why: reads::Unanswered::NotOk {
+                status: status.to_owned(),
+                stage: Some("eval".to_owned()),
+                detail: "no".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn a_refused_gui_probe_in_a_mission_is_session_client() {
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&refused_with("refused")),
+            reads::Tiers::default(),
+            None,
+            None,
+        );
+        assert_eq!(got, SessionAxis::Client);
+    }
+
+    #[test]
+    fn a_refused_probe_wins_over_the_tier_two_reads() {
+        // Two rows of the vocabulary claim this one at once, and the
+        // order is written down: the probe is read first.
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&refused_with("refused")),
+            reads::Tiers::with_tier_two(),
+            Some(&told(true)),
+            Some(&told(false)),
+        );
+        assert_eq!(
+            got,
+            SessionAxis::Client,
+            "the tier-2 reads overruled the probe"
+        );
+    }
+
+    #[test]
+    fn a_reachable_probe_with_tier_two_off_is_single_or_host() {
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&reads::Probe::Reachable),
+            reads::Tiers::default(),
+            None,
+            None,
+        );
+        assert_eq!(got, SessionAxis::SingleOrHost);
+        assert!(got.to_string().contains("tier 2 off"), "{got}");
+    }
+
+    #[test]
+    fn an_invalid_state_probe_is_unknown_and_not_client() {
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&refused_with("invalid-state")),
+            reads::Tiers::default(),
+            None,
+            None,
+        );
+        assert_ne!(got, SessionAxis::Client);
+        assert!(
+            got.to_string().contains("invalid-state"),
+            "the word was lost: {got}"
+        );
+    }
+
+    #[test]
+    fn a_refusal_that_is_not_the_probes_is_unknown_and_not_client() {
+        // `unsupported` where eval is off, a bad request, a refusal at
+        // the mission hop: each says something about the request and
+        // nothing about whether this session is a client.
+        let (_, activity) = in_mission("sim");
+        for word in ["unsupported", "bad-request", "oversize", "budget"] {
+            let got = session_of(
+                &activity,
+                Some(&refused_with(word)),
+                reads::Tiers::default(),
+                None,
+                None,
+            );
+            assert_ne!(got, SessionAxis::Client, "{word} was read as a client");
+            assert!(got.to_string().contains(word), "{word} was lost: {got}");
+        }
+    }
+
+    #[test]
+    fn a_refused_probe_at_the_menu_is_unknown_and_the_facts_disagree() {
+        let beat = ours(Host::Hook, "menu", true);
+        let activity = activity_of(Some(&beat), None);
+        let got = session_of(
+            &activity,
+            Some(&refused_with("refused")),
+            reads::Tiers::default(),
+            None,
+            None,
+        );
+        let SessionAxis::Unknown {
+            why: Why::Disagrees { facts },
+        } = &got
+        else {
+            panic!("wanted a disagreement, got {got:?}");
+        };
+        assert_eq!(facts.len(), 2, "both facts are shown: {facts:?}");
+        assert!(got.to_string().contains("the facts disagree"), "{got}");
+    }
+
+    #[test]
+    fn a_refused_probe_at_the_menu_leaves_activity_alone() {
+        // The probe is this axis's evidence. Unknowning `activity` with
+        // it would be filling one axis from another's evidence, however
+        // strong the instinct to unknown both.
+        let beat = ours(Host::Hook, "menu", true);
+        let activity = activity_of(Some(&beat), None);
+        assert_eq!(activity, Activity::MenuOrEditor);
+        let _ = session_of(
+            &activity,
+            Some(&refused_with("refused")),
+            reads::Tiers::default(),
+            None,
+            None,
+        );
+        assert_eq!(
+            activity_of(Some(&beat), None),
+            Activity::MenuOrEditor,
+            "the probe moved the activity axis"
+        );
+    }
+
+    #[test]
+    fn session_outside_a_mission_is_unknown_naming_the_gate() {
+        let beat = ours(Host::Hook, "load", true);
+        let activity = activity_of(Some(&beat), None);
+        let got = session_of(
+            &activity,
+            Some(&reads::Probe::Reachable),
+            reads::Tiers::default(),
+            None,
+            None,
+        );
+        assert_eq!(
+            got,
+            SessionAxis::Unknown {
+                why: Why::GateUnknown { gate: "activity" }
+            }
+        );
+    }
+
+    #[test]
+    fn tier_two_on_maps_multiplayer_false_to_single() {
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&reads::Probe::Reachable),
+            reads::Tiers::with_tier_two(),
+            Some(&told(false)),
+            Some(&told(false)),
+        );
+        assert_eq!(got, SessionAxis::Single);
+    }
+
+    #[test]
+    fn tier_two_on_maps_multiplayer_and_server_to_host() {
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&reads::Probe::Reachable),
+            reads::Tiers::with_tier_two(),
+            Some(&told(true)),
+            Some(&told(true)),
+        );
+        assert_eq!(got, SessionAxis::Host);
+    }
+
+    #[test]
+    fn a_combination_the_document_does_not_map_is_unknown_naming_both_reads() {
+        // Multiplayer and not the server, with the gui state answering.
+        // The vocabulary maps it to nothing; agreeing with the probe
+        // here would be a guess wearing a corroboration.
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&reads::Probe::Reachable),
+            reads::Tiers::with_tier_two(),
+            Some(&told(true)),
+            Some(&told(false)),
+        );
+        assert_eq!(
+            got,
+            SessionAxis::Unknown {
+                why: Why::Unmapped {
+                    facts: vec![
+                        Fact::new("multiplayer", "true"),
+                        Fact::new("server", "false"),
+                    ]
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn an_errored_tier_two_read_is_unknown_naming_the_error() {
+        let (_, activity) = in_mission("sim");
+        for (multi, server) in [(raised(), told(true)), (told(true), raised())] {
+            let got = session_of(
+                &activity,
+                Some(&reads::Probe::Reachable),
+                reads::Tiers::with_tier_two(),
+                Some(&multi),
+                Some(&server),
+            );
+            assert_eq!(
+                got,
+                SessionAxis::Unknown {
+                    why: Why::Errored {
+                        message: "attempt to call a nil value".to_owned()
+                    }
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn track_is_unknown_tier_2_off_when_the_switch_is_off() {
+        // What a gather hands back for a tier-2 read with the switch off,
+        // taken from the gather's own arm rather than composed here.
+        let answer = reads::Answer::NotSent {
+            why: reads::NotSent::TierTwoOff,
+        };
+        let got = track_of(Some(&answer));
+        assert_eq!(
+            got,
+            Track::Unknown {
+                why: Why::NotSent {
+                    why: reads::NotSent::TierTwoOff
+                }
+            }
+        );
+        assert_eq!(got.to_string(), "unknown (tier 2 off)");
+    }
+
+    #[test]
+    fn track_reads_replay_and_live_when_the_switch_is_on() {
+        assert_eq!(track_of(Some(&told(true))), Track::Replay);
+        assert_eq!(track_of(Some(&told(false))), Track::Live);
+    }
+
+    #[test]
+    fn an_errored_track_read_is_unknown_naming_the_error() {
+        assert_eq!(
+            track_of(Some(&raised())),
+            Track::Unknown {
+                why: Why::Errored {
+                    message: "attempt to call a nil value".to_owned()
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn track_takes_no_gate_from_any_other_axis() {
+        // The vocabulary gives this row no gate, so nothing but the read
+        // reaches it: the same answer whatever the session is doing. The
+        // signature is the check — there is nowhere to put an activity.
+        let answer = told(true);
+        assert_eq!(track_of(Some(&answer)), Track::Replay);
     }
 
     #[test]
