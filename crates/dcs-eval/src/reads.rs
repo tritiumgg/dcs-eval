@@ -507,20 +507,26 @@ impl std::error::Error for Refused {}
 /// reads — a window is one quiet period whatever is in it — and a caller
 /// that took them separately would pay for two. What either one *means*
 /// is not decided here: the ping comes back as the envelope it was, and
-/// the probe as an answer, for whoever maps them onto an axis.
+/// the probe as its own answer, for whoever maps them onto an axis.
 #[derive(Debug)]
 pub struct Readings {
     entries: Vec<(&'static Read, Answer)>,
-    ping: Option<Envelope>,
+    ping: Option<Result<Envelope, Unanswered>>,
     probe: Option<Probe>,
 }
 
 impl Readings {
-    /// The ping's reply, where one came back. It carries the fresh
-    /// `phase`, `tick` and callback headers.
+    /// The ping's reply, where one came back, and otherwise why none
+    /// did. An `ok` reply carries the fresh `phase`, `tick` and callback
+    /// headers.
+    ///
+    /// The reason survives rather than collapsing to the `None` a load
+    /// gives, because a window that was never opened and a session that
+    /// refused the ping are different findings and the axis built on
+    /// this one must not confuse them.
     #[must_use]
-    pub fn ping(&self) -> Option<&Envelope> {
-        self.ping.as_ref()
+    pub fn ping(&self) -> Option<Result<&Envelope, &Unanswered>> {
+        self.ping.as_ref().map(|r| r.as_ref())
     }
 
     /// What the reachability probe came to, where one was sent.
@@ -733,12 +739,7 @@ pub fn gather(
     ));
     let depth = specs.len().max(1);
     let mut items = publish_reads(h, specs, depth, upto)?.into_iter();
-    let ping = match items.next() {
-        Some(Ok(Outcome::Reply(envelope))) if envelope.headers.get("status") == Some("ok") => {
-            Some(envelope)
-        }
-        _ => None,
-    };
+    let ping = Some(items.next().map_or(Err(Unanswered::Unyielded), replied));
     for r in &reads {
         let answer = items.next().map_or(
             Answer::Unanswered {
@@ -1684,9 +1685,35 @@ mod game_reads {
         let (mut s, h) = ticking(&b);
         let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
         assert_eq!(s.tick, 1, "the session answered over {} ticks", s.tick);
-        let ping = readings.ping().expect("the ping answered");
+        let ping = readings
+            .ping()
+            .expect("a ping was sent")
+            .expect("the ping answered");
         assert_eq!(ping.body, b"pong");
         assert!(readings.probe().is_some(), "the probe answered");
+    }
+
+    #[test]
+    fn a_ping_that_left_no_envelope_says_why_and_does_not_look_like_a_load() {
+        // A window that was never opened and a session that did not
+        // answer the ping both leave no envelope, and only one of them is
+        // a fact about the session. The stamp is bent so the fence
+        // answers every request in the window, the ping included.
+        let b = Sandbox::new();
+        let (mut s, mut h) = ticking(&b);
+        h.stamp.push_str("-not-this-session");
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let Some(Err(why)) = readings.ping() else {
+            panic!("wanted a ping that says why, got {:?}", readings.ping());
+        };
+        assert!(
+            matches!(why, Unanswered::Superseded { .. }),
+            "the fence answers a bent stamp on the stamp alone: {why:?}"
+        );
+        // The other half of the distinction, from the branch that sends
+        // no ping at all.
+        let loaded = gather(&h, "load", Tiers::default(), UPTO).expect("not refused");
+        assert!(loaded.ping().is_none(), "a load asks nothing");
     }
 
     #[test]
