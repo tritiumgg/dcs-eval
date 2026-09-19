@@ -204,6 +204,22 @@ take_copy() {
     printf '%s%s%s\n' "$1" "$US" "$copy" >> "$work/manifest"
 }
 
+# The one line that puts a file back, on its own so that it can be read, and
+# substituted by the test that proves what the alternative costs. It is a copy
+# and never `git checkout -- <file>`: checkout restores the committed content,
+# so an uncommitted edit that had nothing to do with the sweep would be thrown
+# away by a runner whose whole promise is to leave the tree as it found it.
+#
+# The copy is deliberately not `cp -p`. Preserving the original timestamp puts
+# the restored file *older* than the artefacts cargo built from the mutated
+# one, so cargo calls its own output fresh and the next control — and whoever
+# runs the tests next — is testing a binary compiled from code that no longer
+# exists on disk. The content is what `cmp` vouches for; the timestamp has to
+# say the file just changed, because it just did.
+put_back() {
+    cp "$1" "$2" 2>/dev/null
+}
+
 # Put every copied file back and prove it went back. The manifest is the
 # authority, not the loop that mutated: a control that failed halfway restores
 # exactly what it had taken, in the same way as one that succeeded.
@@ -215,7 +231,7 @@ restore_all() {
         tries=0
         # A test process that has not fully exited can still hold the file on
         # Windows, so a failing copy is retried briefly before it is believed.
-        while ! cp -p "$copy" "$root/$path" 2>/dev/null; do
+        while ! put_back "$copy" "$root/$path"; do
             tries=$((tries + 1))
             [ "$tries" -ge 15 ] && break
             sleep 0.2
@@ -364,26 +380,163 @@ apply_control() {
     return 0
 }
 
-# --- the run ----------------------------------------------------------------
+# --- running the command, and what counts as red ----------------------------
 
-failures=0
+command -v timeout >/dev/null 2>&1 ||
+    die "no timeout on PATH; a control that hangs would hang the sweep with a mutated file in the tree"
+
+# Run one control's command from the repository root, capturing everything it
+# said. Sets `rc`; 124 is the timeout's own.
+run_command() {
+    if timeout -k 10 "$timeout_s" sh -c "cd \"$root\" && $1" > "$work/out.log" 2>&1
+    then rc=0
+    else rc=$?
+    fi
+}
+
+# The failing checks in what a command printed, in the two dialects this build
+# speaks: the Rust harness names one line per failed test, and the Lua harness
+# names the suite and the check it stopped at.
+#
+# An empty result is the point of this function. A Rust mutation that does not
+# compile exits non-zero with no test having run, and a Lua one that is a
+# syntax error prints no failing check either. Reading a non-zero exit as
+# evidence would be the sweep manufacturing the very thing it exists to
+# observe, so a non-zero exit with nothing here is BUILD-FAILED, never red.
+failing_checks() {
+    awk '/^test .* \.\.\. FAILED$/ || /^FAIL  / { print }' "$work/out.log"
+}
+
+# --- the run ----------------------------------------------------------------
 
 printf '%s\n' "$rows" | grep -v "${US}out${US}" > "$work/todo" || true
 
+# One baseline per distinct command, before anything is mutated, so a command
+# that was already failing is reported as such rather than counted as a red
+# this sweep produced.
+: > "$work/baselines"
 while IFS="$US" read -r id kind cmd reddens controls reason; do
     selected "$id" || continue
-    note_breadcrumb "$id"
-    if apply_control "$id"; then
-        printf 'APPLIED       %s\n' "$id"
+    grep -qF "$cmd$US" "$work/baselines" && continue
+    run_command "$cmd"
+    if [ "$rc" -eq 0 ]; then
+        printf '%s%s\n' "$cmd" "$US" >> "$work/baselines"
     else
-        printf 'UNPERFORMED   %s\n' "$id"
-        printf '              %s\n' "$unperformed"
+        printf '%s%sERROR  the command is red before any mutation (exit %s): %s\n' \
+            "$cmd" "$US" "$rc" "$(failing_checks | head -1)" >> "$work/baselines"
+    fi
+done < "$work/todo"
+
+baseline_of() {
+    awk -v us="$US" -v want="$1" '
+        { i = index($0, us); if (substr($0, 1, i - 1) == want) { print substr($0, i + 1); exit } }
+    ' "$work/baselines"
+}
+
+# The tree is photographed after the baselines and before the first mutation.
+# A command's first run can leave fixtures, caches or stray output behind, and
+# those are not damage — they are already there in both photographs this way.
+in_repo=0
+if git -C "$root" rev-parse --git-dir >/dev/null 2>&1; then
+    in_repo=1
+    git -C "$root" status --porcelain > "$work/snap.before"
+fi
+
+reddened=0
+green=0
+unperformed_n=0
+performed=0
+failures=0
+
+report() {
+    printf '%-13s %s\n' "$1" "$2"
+    shift 2
+    for line in "$@"; do printf '              %s\n' "$line"; done
+}
+
+while IFS="$US" read -r id kind cmd reddens controls reason; do
+    selected "$id" || continue
+    performed=$((performed + controls))
+    note_breadcrumb "$id"
+
+    base=$(baseline_of "$cmd")
+    if [ -n "$base" ]; then
+        report UNPERFORMED "$id" "$base"
+        unperformed_n=$((unperformed_n + 1))
+        failures=$((failures + 1))
+        continue
+    fi
+
+    if ! apply_control "$id"; then
+        report UNPERFORMED "$id" "$unperformed"
+        unperformed_n=$((unperformed_n + 1))
+        failures=$((failures + 1))
+        restore_all || exit 2
+        continue
+    fi
+
+    run_command "$cmd"
+    failed=$(failing_checks)
+    restore_all || exit 2
+
+    if [ "$rc" -eq 0 ]; then
+        report STAYED-GREEN "$id" "$cmd" "the command exited 0; the mutation applied and nothing noticed"
+        green=$((green + 1))
+        failures=$((failures + 1))
+    elif [ "$rc" -eq 124 ]; then
+        report TIMEOUT "$id" "$cmd" "killed after ${timeout_s}s"
+        failures=$((failures + 1))
+    elif [ -z "$failed" ]; then
+        report BUILD-FAILED "$id" "$cmd" \
+            "exit $rc with no failing check named; a mutation that will not build proves nothing" \
+            "$(head -3 "$work/out.log" | tr '\n' ' ')"
+        failures=$((failures + 1))
+    elif printf '%s\n' "$failed" | grep -qF "$reddens"; then
+        report REDDENED "$id" "$cmd" "$(printf '%s\n' "$failed" | head -4 | tr '\n' '|')"
+        reddened=$((reddened + 1))
+    else
+        report REDDENED-ELSEWHERE "$id" "$cmd" \
+            "recorded: $reddens" \
+            "went red instead: $(printf '%s\n' "$failed" | head -4 | tr '\n' '|')"
         failures=$((failures + 1))
     fi
-    restore_all || exit 2
 done < "$work/todo"
 
 note_breadcrumb
+
+# --- what was covered, and what was not -------------------------------------
+
+in_total=0
+out_total=0
+while IFS="$US" read -r id kind cmd reddens controls reason; do
+    if [ "$kind" = out ]; then
+        out_total=$((out_total + controls))
+    else
+        in_total=$((in_total + controls))
+    fi
+done <<EOF
+$rows
+EOF
+
+printf '\n'
+printf 'coverage: %s of %s controls swept, %s out of scope\n' \
+    "$performed" "$((in_total + out_total))" "$out_total"
+printf '          %s of %s in-scope controls performed\n' "$performed" "$in_total"
+printf '%s\n' "$rows" | while IFS="$US" read -r id kind cmd reddens controls reason; do
+    [ "$kind" = out ] || continue
+    printf '          %s not swept: %s controls, %s\n' "$id" "$controls" "$reason"
+done
+printf 'summary:  %s reddened, %s stayed green, %s unperformed, %s failures\n' \
+    "$reddened" "$green" "$unperformed_n" "$failures"
+
+if [ "$in_repo" -eq 1 ]; then
+    git -C "$root" status --porcelain > "$work/snap.after"
+    if ! cmp -s "$work/snap.before" "$work/snap.after"; then
+        printf '\nthe working tree is not as it was found:\n' >&2
+        diff "$work/snap.before" "$work/snap.after" >&2 || true
+        exit 2
+    fi
+fi
 
 [ "$failures" -eq 0 ] || exit 1
 exit 0

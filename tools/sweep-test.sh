@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=10
+CASES=24
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -142,10 +142,36 @@ check 'a missing inventory is refused, not assumed empty' \
 
 # --- applying and putting back ----------------------------------------------
 
-out=$(run_ --only fixture/applies) && got=0 || got=$?
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/applies
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+sleep 1
+touch "$sandbox/before-the-run"
+out=$(run_) && got=0 || got=$?
 tree_intact || got=98
-check 'a mutation that applies leaves the file byte-identical' \
-    0 "$got" "APPLIED       fixture/applies" "$out"
+check 'a control that still reddens passes, and its file comes back identical' \
+    0 "$got" "REDDENED      fixture/applies" "$out"
+
+# A restore that put the original timestamp back would leave the file older
+# than whatever was built from the mutated one, and cargo would call its own
+# output fresh — so the next control, and whoever runs the tests afterwards,
+# would be testing code that is no longer on disk.
+if [ -n "$(find "$tree/alpha.txt" -newer "$sandbox/before-the-run")" ]; then
+    got=0
+else
+    got=96
+fi
+check 'a restored file is stamped as having just changed, because it did' \
+    0 "$got" "REDDENED      fixture/applies" "$out"
 
 fresh_tree
 cat > "$sandbox/inventory.md" <<'EOF'
@@ -245,6 +271,294 @@ rm -f "$tree/.sweep-inflight"
 tree_intact || got=98
 check 'a leftover breadcrumb refuses the run before anything is touched' \
     2 "$got" "a previous run did not finish" "$out"
+
+# --- what the command said --------------------------------------------------
+
+# Every command below is a one-liner that reads the fixture file, so its
+# baseline run — before any mutation — is green and its mutated run is not.
+# A command that failed both ways would be a baseline error, which is its own
+# case further down.
+
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/unnoticed
+
+- command: `sh -c 'exit 0'`
+- reddens: `held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+check 'a mutation nothing notices is a failure, not a pass' \
+    1 "$got" "the command exited 0" "$out"
+
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/will-not-build
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "error[E0425]: cannot find value"; exit 101; fi; exit 0'`
+- reddens: `held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+case "$out" in *REDDENED*) got=97 ;; esac
+check 'a mutation that will not build is not evidence of a red control' \
+    1 "$got" "BUILD-FAILED  fixture/will-not-build" "$out"
+
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/moved-red
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "test other::tests::somewhere_else ... FAILED"; exit 1; fi; exit 0'`
+- reddens: `tests::the_one_recorded`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+check 'a red that has moved names both the record and what actually failed' \
+    1 "$got" "went red instead: test other::tests::somewhere_else ... FAILED" "$out"
+
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/already-red
+
+- command: `sh -c 'echo "FAIL  fixture: broken before anyone touched it"; exit 1'`
+- reddens: `held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+check 'a command already failing is reported, and nothing is mutated under it' \
+    1 "$got" "the command is red before any mutation" "$out"
+
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/slow
+
+- command: `sh -c 'if grep -q moved alpha.txt; then sleep 9; fi; exit 0'`
+- reddens: `held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+out=$(run_ --timeout 1) && got=0 || got=$?
+tree_intact || got=98
+check 'a command that will not finish is killed, and the file still comes back' \
+    1 "$got" "TIMEOUT       fixture/slow" "$out"
+
+# --- a restore that does not restore ----------------------------------------
+
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/wrecks-its-target
+
+- command: `sh -c 'if grep -q moved alpha.txt; then rm -f alpha.txt; mkdir alpha.txt; fi; exit 0'`
+- reddens: `held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+
+### fixture/never-reached
+
+- command: `sh -c 'exit 0'`
+- reddens: `held`
+
+```sweep-edit beta.txt
+- beta two
++ beta three
+```
+EOF
+out=$(run_) && got=0 || got=$?
+case "$out" in *never-reached*) got=97 ;; esac
+check 'a file that will not go back stops the run and keeps the copies' \
+    2 "$got" "copies kept at" "$out"
+
+# --- the tree the run was handed --------------------------------------------
+#
+# These want a real repository, because what they assert is what
+# `git status --porcelain` says before and against after. Signing is off for
+# the sandbox's own commits: they are fixtures, not history.
+
+repo="$sandbox/repo"
+mkdir -p "$repo"
+git -C "$repo" init -q
+git -C "$repo" config user.email fixture@example.invalid
+git -C "$repo" config user.name fixture
+git -C "$repo" config commit.gpgsign false
+git -C "$repo" config core.autocrlf false
+
+fresh_repo() {
+    cat > "$repo/alpha.txt" <<'EOF'
+first line
+the line that moves
+last line
+EOF
+    printf 'kept\n' > "$repo/unrelated.txt"
+    git -C "$repo" add alpha.txt unrelated.txt
+    git -C "$repo" commit -q -m fixture >/dev/null 2>&1 || true
+    # The uncommitted edit a git-checkout restore would throw away.
+    printf 'an edit nobody committed\n' >> "$repo/alpha.txt"
+}
+
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/in-a-repo
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+
+fresh_repo
+out=$(sh "$runner" --inventory "$sandbox/inventory.md" --root "$repo" 2>&1) && got=0 || got=$?
+grep -q 'an edit nobody committed' "$repo/alpha.txt" || got=98
+check 'a copy-based restore keeps an uncommitted edit the sweep never asked about' \
+    0 "$got" "REDDENED      fixture/in-a-repo" "$out"
+
+# The same sandbox against a runner whose one restore line is `git checkout`.
+sed 's|^    cp "\$1" "\$2" 2>/dev/null$|    git -C "$root" checkout -- "$2"|' \
+    tools/sweep.sh > "$sandbox/checkout.sh"
+if cmp -s tools/sweep.sh "$sandbox/checkout.sh"; then
+    fail=$((fail + 1))
+    printf 'FAIL  the restore line the git-checkout case substitutes has moved\n' >&2
+else
+    fresh_repo
+    out=$(sh "$sandbox/checkout.sh" --inventory "$sandbox/inventory.md" --root "$repo" 2>&1) \
+        && got=0 || got=$?
+    grep -q 'an edit nobody committed' "$repo/alpha.txt" && got=98
+    check 'a git-checkout restore loses the uncommitted edit and is caught' \
+        2 "$got" "alpha.txt differs from its copy" "$out"
+fi
+# That run kept its copies and its breadcrumb on purpose. The next case would
+# otherwise be refused by it, which is the breadcrumb working as intended.
+rm -f "$repo/.sweep-inflight"
+
+fresh_repo
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/collateral
+
+- command: `sh -c 'if grep -q moved alpha.txt; then rm -f unrelated.txt; echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+out=$(sh "$runner" --inventory "$sandbox/inventory.md" --root "$repo" 2>&1) && got=0 || got=$?
+check 'damage the copies cannot see is caught by the snapshot around the run' \
+    2 "$got" "the working tree is not as it was found" "$out"
+
+fresh_repo
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/leaves-a-file
+
+- command: `sh -c 'touch made-on-every-run.txt; if grep -q moved alpha.txt; then echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+rm -f "$repo/made-on-every-run.txt"
+out=$(sh "$runner" --inventory "$sandbox/inventory.md" --root "$repo" 2>&1) && got=0 || got=$?
+check 'a file the first run leaves behind is not read as damage' \
+    0 "$got" "REDDENED      fixture/leaves-a-file" "$out"
+rm -f "$repo/made-on-every-run.txt"
+
+# --- an interrupted run -----------------------------------------------------
+
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/interruptible
+
+- command: `sh -c 'if grep -q moved alpha.txt; then sleep 4; fi; exit 0'`
+- reddens: `held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+EOF
+# The runner is backgrounded directly rather than through the helper, so that
+# the signal reaches the shell holding the trap and not a wrapper around it.
+# A trap fires once the command in front of it returns, so the run ends when
+# the sleep does, not when the signal lands.
+sh "$runner" --inventory "$sandbox/inventory.md" --root "$tree" \
+    > "$sandbox/interrupt.log" 2>&1 &
+bg=$!
+sleep 2
+kill -TERM "$bg" 2>/dev/null || true
+wait "$bg" && got=0 || got=$?
+out=$(cat "$sandbox/interrupt.log")
+tree_intact || got=98
+[ -e "$tree/.sweep-inflight" ] && got=97
+check 'an interrupted run puts the file back and says how many' \
+    130 "$got" "interrupted: restored" "$out"
+
+# --- what the run says it covered -------------------------------------------
+
+fresh_tree
+cat > "$sandbox/inventory.md" <<'EOF'
+### fixture/applies
+
+- command: `sh -c 'if grep -q moved alpha.txt; then echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit alpha.txt
+- the line that moves
++ the line that moved
+```
+
+### fixture/second
+
+- command: `sh -c 'if grep -q three beta.txt; then echo "FAIL  fixture: held"; exit 1; fi; exit 0'`
+- reddens: `FAIL  fixture: held`
+
+```sweep-edit beta.txt
+- beta two
++ beta three
+```
+
+### out/not-reached
+
+- out-of-scope: nothing here is built yet.
+- controls: 5
+EOF
+out=$(run_) && got=0 || got=$?
+tree_intact || got=98
+check 'the run says how much of the whole it covered' \
+    0 "$got" "coverage: 2 of 7 controls swept, 5 out of scope" "$out"
+
+out=$(run_ --only fixture/applies) && got=0 || got=$?
+tree_intact || got=98
+check 'a filtered run cannot be read as a whole one' \
+    0 "$got" "1 of 2 in-scope controls performed" "$out"
 
 # --- the tally --------------------------------------------------------------
 
