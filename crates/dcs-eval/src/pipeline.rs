@@ -151,6 +151,18 @@ enum Slot {
     Refused(SendError),
 }
 
+/// The window depth to take where nothing better decides it, which is
+/// the depth the protocol names.
+///
+/// A window is opened with an explicit depth rather than this one: the
+/// number is a caller's judgement about how much of a frame it wants to
+/// fill and how much work it is willing to lose to a session that dies
+/// mid-window, and a default chosen inside the window would hide that
+/// question from the caller making it. What it must not do is make every
+/// caller invent a number of its own, so the one the protocol names
+/// lives here beside the window it describes.
+pub const DEFAULT_DEPTH: usize = 8;
+
 /// A window of requests over one session, drained by iterating it.
 ///
 /// Each `next()` publishes up to the window's depth, waits on the lowest
