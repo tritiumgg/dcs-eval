@@ -14,6 +14,18 @@
 //! text. A client that compares paths cannot be handed an unresolved one,
 //! which is the whole reason [`paths::Real`] exists.
 //!
+//! The paths divide in two, and the two are treated differently. The
+//! transport directories — `transport`, `req`, `res`, `arm`, `output` —
+//! are where a request is published and a reply is read, and one of them
+//! the filesystem will not own refuses the whole file: a client that went
+//! on would be about to write into a path nothing resolved. `lfs_tempdir`
+//! and `install_guard` are not used for anything; they are written down so
+//! a client can say what the executor saw. One of those that does not
+//! resolve is kept as a [`Diagnostic::Unresolved`], because a handshake
+//! naming such a path is exactly the finding a report of the session's
+//! problems is there to carry, and refusing the file would hide the
+//! finding behind the fault it describes.
+//!
 //! Two values look like times and are not. `started` and `since` are
 //! written with `os.date` off the local wall clock, with no zone and no
 //! marker for the hour that repeats every autumn, so an age computed from
@@ -213,14 +225,56 @@ fn maybe<'a>(headers: &'a Headers, name: &'static str) -> Result<Option<&'a str>
     Ok(if value == ABSENT { None } else { Some(value) })
 }
 
-/// The same, resolved where it is there.
-fn maybe_path(headers: &Headers, name: &'static str) -> Result<Option<Real>, ReadErrorKind> {
-    match maybe(headers, name)? {
-        None => Ok(None),
-        Some(value) => paths::resolve(Path::new(value))
-            .map(Some)
-            .map_err(|source| ReadErrorKind::Path { name, source }),
+/// One of the two paths the handshake names for reporting rather than for
+/// use. Three answers and no refusal: the executor's read did not answer,
+/// the filesystem owns it, or it named something the filesystem would not
+/// resolve — which is a finding, not a fault in the file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Diagnostic {
+    /// The literal `ABSENT`: the executor looked and got nothing.
+    Absent,
+    /// What the filesystem says the named path really is.
+    Real(Real),
+    /// The path as the file spelt it, and why it would not resolve, in the
+    /// words the resolver used.
+    Unresolved { named: String, why: String },
+}
+
+impl Diagnostic {
+    /// The resolved path, where there is one. A caller that means to
+    /// compare against a real path gets nothing for the other two arms,
+    /// which is the answer: there is no path here to compare.
+    pub fn real(&self) -> Option<&Real> {
+        match self {
+            Self::Real(path) => Some(path),
+            _ => None,
+        }
     }
+
+    /// What to report about this value, or nothing where there is nothing
+    /// to report. `Absent` is not a problem — the executor says plainly
+    /// that its read did not answer — while a path that would not resolve
+    /// is.
+    pub fn problem(&self) -> Option<&str> {
+        match self {
+            Self::Unresolved { why, .. } => Some(why),
+            _ => None,
+        }
+    }
+}
+
+/// A required header naming one of those two paths.
+fn diagnostic(headers: &Headers, name: &'static str) -> Result<Diagnostic, ReadErrorKind> {
+    let Some(value) = maybe(headers, name)? else {
+        return Ok(Diagnostic::Absent);
+    };
+    Ok(match paths::resolve(Path::new(value)) {
+        Ok(real) => Diagnostic::Real(real),
+        Err(source) => Diagnostic::Unresolved {
+            named: value.to_owned(),
+            why: ReadErrorKind::Path { name, source }.to_string(),
+        },
+    })
 }
 
 /// A comma-joined list as the executor concatenates one. An empty value is
@@ -274,9 +328,13 @@ pub struct Handshake {
     pub states: String,
     pub namespace: String,
     pub source: Option<String>,
-    pub lfs_tempdir: Option<Real>,
+    /// What `lfs.tempdir()` gave the executor. Reported, never used: see
+    /// the module note on why one that will not resolve is kept.
+    pub lfs_tempdir: Diagnostic,
     pub transport_source: String,
-    pub install_guard: Option<Real>,
+    /// The install the executor guarded its own writes against. Reported
+    /// on the same terms as `lfs_tempdir`.
+    pub install_guard: Diagnostic,
     pub tick_budget_ms: u64,
     pub instruction_budget: u64,
     pub instruction_ceiling: u64,
@@ -328,9 +386,9 @@ impl Handshake {
             states: required(h, "states")?.to_owned(),
             namespace: required(h, "namespace")?.to_owned(),
             source: maybe(h, "source")?.map(str::to_owned),
-            lfs_tempdir: maybe_path(h, "lfs_tempdir")?,
+            lfs_tempdir: diagnostic(h, "lfs_tempdir")?,
             transport_source: required(h, "transport_source")?.to_owned(),
-            install_guard: maybe_path(h, "install_guard")?,
+            install_guard: diagnostic(h, "install_guard")?,
             tick_budget_ms: number(h, "tick_budget_ms")?,
             instruction_budget: number(h, "instruction_budget")?,
             instruction_ceiling: number(h, "instruction_ceiling")?,
@@ -554,11 +612,14 @@ mod tests {
         assert!(h.states.starts_with("hook:carrier=local"));
         assert_eq!(h.namespace, "DcsEval");
         assert_eq!(h.source.as_deref(), Some("DcsEvalExecutor.lua"));
-        assert_eq!(h.lfs_tempdir, Some(real(&s.output().join("tmp"))));
+        assert_eq!(
+            h.lfs_tempdir,
+            Diagnostic::Real(real(&s.output().join("tmp")))
+        );
         assert_eq!(h.transport_source, "fallback: beside the output");
         assert_eq!(
             h.install_guard,
-            Some(real(&s.output().join("install_guard.txt")))
+            Diagnostic::Real(real(&s.output().join("install_guard.txt")))
         );
         assert_eq!(h.tick_budget_ms, 8);
         assert_eq!(h.instruction_budget, 1_000_000);
@@ -592,9 +653,12 @@ mod tests {
         }
         let h = at(&fixture);
         assert_eq!(h.source, None);
-        assert_eq!(h.lfs_tempdir, None);
-        assert_eq!(h.install_guard, None);
+        assert_eq!(h.lfs_tempdir, Diagnostic::Absent);
+        assert_eq!(h.install_guard, Diagnostic::Absent);
         assert_eq!(h.app_version, None);
+        // Nothing to report: the executor said plainly that it looked.
+        assert_eq!(h.lfs_tempdir.problem(), None);
+        assert_eq!(h.lfs_tempdir.real(), None);
         // The literal is a value; the header itself is still required.
         let why = refused(&without(&fixture, "source"));
         assert!(why.ends_with("source: absent"), "{why}");
@@ -624,14 +688,48 @@ mod tests {
     }
 
     #[test]
-    fn handshake_refuses_a_path_that_does_not_resolve_naming_the_header() {
+    fn handshake_refuses_a_transport_path_that_does_not_resolve_naming_the_header() {
         let b = Sandbox::new();
         let (_s, bytes) = published(&b);
-        let why = refused(&with(&bytes, "req", r"rpc\0000-1\req"));
-        assert!(why.contains("req: "), "{why}");
-        assert!(why.contains("is relative"), "{why}");
-        let why = refused(&with(&bytes, "lfs_tempdir", "tmp"));
-        assert!(why.contains("lfs_tempdir: "), "{why}");
+        // Every directory a request is published into or read out of: the
+        // client would be about to write there.
+        for name in ["transport", "req", "res", "arm", "output"] {
+            let why = refused(&with(&bytes, name, r"rpc\0000-1\req"));
+            assert!(why.contains(&format!("{name}: ")), "{why}");
+            assert!(why.contains("is relative"), "{why}");
+        }
+    }
+
+    #[test]
+    fn handshake_keeps_a_reported_path_that_does_not_resolve_rather_than_refusing() {
+        let b = Sandbox::new();
+        let (_s, bytes) = published(&b);
+        // Neither of these is a path the client uses, and a session whose
+        // executor named an unresolvable one is a session a report has
+        // something to say about — so the file still reads.
+        for name in ["lfs_tempdir", "install_guard"] {
+            let h = at(&with(&bytes, name, "tmp"));
+            let got = if name == "lfs_tempdir" {
+                &h.lfs_tempdir
+            } else {
+                &h.install_guard
+            };
+            let Diagnostic::Unresolved { named, why } = got else {
+                panic!("{name}: an unresolvable reported path is kept, not refused: {got:?}");
+            };
+            assert_eq!(named, "tmp", "kept as the file spelt it");
+            assert!(why.starts_with(&format!("{name}: ")), "{why}");
+            assert!(why.contains("is relative"), "{why}");
+            assert_eq!(
+                got.problem(),
+                Some(why.as_str()),
+                "and it is what a report would say"
+            );
+            assert_eq!(got.real(), None, "and there is no path to compare");
+        }
+        // The rest of the handshake reads as it did.
+        let one = at(&with(&bytes, "lfs_tempdir", "tmp"));
+        assert_eq!(one.transport, at(&bytes).transport);
     }
 
     #[test]
