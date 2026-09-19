@@ -506,7 +506,7 @@ impl Standin {
         Some(match op {
             "ping" => self.ping(),
             "eval" => self.eval(&headers, &body),
-            other => Answer::refusal("bad-request", format!("unknown op: {other}")),
+            other => Answer::refusal("bad-request", format!("unknown op: {}", excerpt(other))),
         })
     }
 
@@ -1565,9 +1565,22 @@ mod tests {
             &[("op", "nope"), ("for", &stamp)],
             b"",
         );
-        assert_eq!(s.tick().len(), 2, "every one is answered");
+        let wide = "n".repeat(100);
+        sent(
+            &s,
+            "0000000004-abcd",
+            &[("op", &wide), ("for", &stamp)],
+            b"",
+        );
+        assert_eq!(s.tick().len(), 3, "every one is answered");
         refused(&s, "0000000002-abcd", "bad-request", "unknown op: Ping");
         refused(&s, "0000000003-abcd", "bad-request", "unknown op: nope");
+        refused(
+            &s,
+            "0000000004-abcd",
+            "bad-request",
+            &format!("unknown op: {}...", "n".repeat(80)),
+        );
         assert_eq!(entries(s.req()), "", "each request is taken");
     }
 

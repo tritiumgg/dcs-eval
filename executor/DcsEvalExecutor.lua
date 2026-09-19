@@ -1709,7 +1709,7 @@ local function dispatch(req)
     end
     return reply(req.id, "error", { { "stage", "bridge" } }, tostring(ok))
   end
-  return reply(req.id, "bad-request", nil, "unknown op: " .. req.headers.op)
+  return reply(req.id, "bad-request", nil, "unknown op: " .. excerpt(req.headers.op))
 end
 
 -- The names of requests answered `error` because they were read and could

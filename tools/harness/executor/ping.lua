@@ -316,6 +316,7 @@ do
   request(E, "4-a.req", "op: nope\nfor: " .. E.stamp .. "\n\n")
   request(E, "4-b.req", "op: eval\nfor: " .. E.stamp .. "\nstate: nope\n\nreturn 1")
   request(E, "4-c.req", "op: Ping\nfor: " .. E.stamp .. "\n\n")
+  request(E, "4-d.req", "op: " .. string.rep("n", 100) .. "\nfor: " .. E.stamp .. "\n\n")
   host.callbacks.onSimulationFrame()
   t.eq(entries(env, E.req), "", "unknown: every request is taken")
   local order, v, body = read(E, "4-a")
@@ -330,6 +331,10 @@ do
   _, v, body = read(E, "4-c")
   t.eq(v.status, "bad-request", "case: an op is matched by its spelling")
   t.eq(body, "unknown op: Ping", "case: Ping is not ping")
+  _, v, body = read(E, "4-d")
+  t.eq(v.status, "bad-request", "long op: a hundred bytes is bad-request like any other")
+  t.eq(body, "unknown op: " .. string.rep("n", 80) .. "...",
+    "long op: the op it names is cut at eighty bytes and three dots")
   t.eq(E.raised, 0, "unknown: nothing raised")
 end
 
