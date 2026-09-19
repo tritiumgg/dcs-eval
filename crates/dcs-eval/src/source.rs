@@ -278,12 +278,21 @@ pub fn read(admitted: &Admitted) -> Result<Source, FileRefusal> {
         }
         None => DEFAULT_CHUNKNAME.to_owned(),
     };
-    let mut file = open(admitted)?;
+    let file = open(admitted)?;
+    // The read is capped rather than measured afterwards. The refusal below
+    // exists because the stat is not trusted, and a reader that buffers the
+    // whole file before applying it trusts the stat for exactly as long as
+    // it takes to allocate: a file replaced by an unbounded one between the
+    // check and here would be read whole to find out it was too big. One
+    // byte past the ceiling is all the refusal needs, so that is all that is
+    // taken.
+    let ceiling = admitted.size() + admitted.headroom();
     let mut bytes = Vec::with_capacity(admitted.size() as usize);
-    file.read_to_end(&mut bytes)
+    file.take(ceiling + 1)
+        .read_to_end(&mut bytes)
         .map_err(|source| refusal(Refusal::Read(source)))?;
     let read = bytes.len() as u64;
-    if read > admitted.size() + admitted.headroom() {
+    if read > ceiling {
         return Err(refusal(Refusal::Grew {
             read,
             admitted: admitted.size(),
@@ -955,7 +964,13 @@ end
         let err = read(&admitted).expect_err("it grew past the ceiling");
         let line = err.to_string();
         assert!(matches!(err.kind, Refusal::Grew { .. }), "{err:?}");
-        assert!(line.contains(&big.len().to_string()), "the read: {line}");
+        // The read figure is the ceiling and one byte, because that is where
+        // the reader stopped; the file's real length it never learnt.
+        let ceiling = admitted.size() + admitted.headroom();
+        assert!(
+            line.contains(&(ceiling + 1).to_string()),
+            "the read: {line}"
+        );
         assert!(
             line.contains(&admitted.size().to_string()),
             "the stat: {line}"
@@ -967,14 +982,36 @@ end
     }
 
     #[test]
+    fn a_file_that_grew_without_bound_is_refused_without_being_read_whole() {
+        // The one that matters: the refusal exists because the stat is not
+        // trusted, so the read cannot trust it either. Four megabytes is far
+        // enough past a 256 kB ceiling that a reader buffering the whole
+        // file shows in the figure it reports.
+        let s = scene();
+        let admitted = s.admit("ballooning.lua", b"return 1\n");
+        let huge = 4 * 1024 * 1024;
+        fs::write(admitted.path().as_path(), vec![b'x'; huge]).expect("the file balloons");
+        let err = read(&admitted).expect_err("it grew past the ceiling");
+        let ceiling = admitted.size() + admitted.headroom();
+        assert!(
+            matches!(err.kind, Refusal::Grew { read, .. } if read == ceiling + 1),
+            "the reader stopped one byte past the ceiling: {err:?}"
+        );
+        assert!(
+            (huge as u64) > ceiling + 1,
+            "the fixture is past where the reader stops"
+        );
+    }
+
+    #[test]
     fn a_file_at_the_ceiling_that_gains_only_a_bom_is_refused_on_the_raw_bytes() {
         // The ceiling is re-measured on the bytes as they were read, so a
-        // file with no headroom that grew by a mark is refused although the
-        // body it would send — the mark stripped — is the length that was
-        // admitted. The choice is deliberate: what is being asked is
-        // whether the file changed, not whether the reader could make it
-        // fit. This fixture is what makes moving the comparison past the
-        // two rules fail rather than pass quietly.
+        // file with no headroom that grew by a mark is refused although
+        // stripping the mark would bring it back under. The choice is
+        // deliberate: what is being asked is whether the file changed, not
+        // whether the reader could make it fit. This fixture is what makes
+        // moving the comparison past the two rules fail rather than pass
+        // quietly.
         let s = scene();
         let path = s.project.as_path().join("at-the-ceiling.lua");
         fs::write(&path, b"x").expect("a placeholder so the path resolves");
@@ -1003,7 +1040,7 @@ end
                     read,
                     admitted: was,
                     headroom: 0,
-                } if read == size + BOM.len() as u64 && was == size
+                } if read == size + 1 && was == size
             ),
             "{err:?}"
         );

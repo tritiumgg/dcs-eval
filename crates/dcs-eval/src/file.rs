@@ -368,6 +368,10 @@ pub enum Refusal {
     /// The file grew past the ceiling between the stat and the read. The
     /// figures are all three of them, because "too big" without the one it
     /// was measured against a moment ago reads as a contradiction.
+    ///
+    /// `read` is a floor and not the file's length: the reader stops one
+    /// byte past the ceiling, so a file that grew without bound is refused
+    /// without being buffered, and how far past it went is not known here.
     Grew {
         read: u64,
         admitted: u64,
@@ -420,8 +424,8 @@ impl FileRefusal {
                 admitted,
                 headroom,
             } => format!(
-                "was {admitted} bytes when it was checked, with {headroom} to spare, and read \
-                 {read}; it grew past the request ceiling while it was being read"
+                "was {admitted} bytes when it was checked, with {headroom} to spare, and read at \
+                 least {read}; it grew past the request ceiling while it was being read"
             ),
             Refusal::Empty { bom } => match bom {
                 crate::source::Bom::Stripped => {
