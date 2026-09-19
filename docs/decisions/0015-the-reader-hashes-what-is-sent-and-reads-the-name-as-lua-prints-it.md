@@ -85,8 +85,11 @@ it rather than the way the documents describe it. Six readings:
 3. **An empty body is refused here rather than sent.** §7.3 answers an empty
    body `bad-request`; a request that could only come back refused is not
    worth a round trip, and a local refusal can say *why* it is empty — zero
-   bytes, a byte-order mark and nothing else, or a `#` line with no
-   terminator behind it. A remote `bad-request` says none of those.
+   bytes, or a byte-order mark and nothing else. A remote `bad-request` says
+   neither. The mark is the only thing the refusal carries: a `#` line with
+   no terminator behind it is told the same as a zero-byte file, because the
+   distinction the reader could draw there is not worth a second field on the
+   variant.
 
 4. **A chunkname over 200 bytes is refused here too, for the same reason,
    and the name refused is the one the request carries.** §7.3 caps the header
