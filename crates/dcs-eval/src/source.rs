@@ -878,6 +878,13 @@ end
         // what it holds either way is the thing that matters, that a leaf
         // swapped between the judgement and the read does not come back as
         // bytes.
+        //
+        // It does not hold the flag: with the flag taken off, this stays
+        // green, because a junction followed leads to a directory and
+        // opening a directory as a file is refused just the same. So the
+        // flag's own contribution is unproven here, and what would prove it
+        // is a leaf swapped for a *file* symlink — which this box cannot
+        // make unelevated.
         let s = scene();
         let admitted = s.admit("swapped.lua", b"return 1\n");
         let elsewhere = s.project.as_path().join("elsewhere");
