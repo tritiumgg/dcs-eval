@@ -105,9 +105,20 @@ pub fn encode(headers: &[(&str, &str)], body: &[u8]) -> Result<Vec<u8>, String> 
 
 /// The start of a value for a message, as the executor excerpts one: the
 /// first 80 bytes and three dots where it is longer. Bytes, not characters,
-/// because the executor counts bytes and a header value is ASCII by the
-/// time either side reads it.
+/// because the executor counts bytes.
+///
+/// Every caller is handed a decoded header value, and a header value is
+/// ASCII by then: the decoder above refuses a byte over 127 before a
+/// request is ever dispatched, as the shipped executor's own decoder does.
+/// That is what keeps the slice below on a character boundary — the Lua
+/// would cut a multi-byte sequence in half and carry on, where this would
+/// panic — so a caller reaching it from anywhere else is a defect, and the
+/// assertion says so rather than leaving a slice index to say it.
 fn excerpt(value: &str) -> String {
+    debug_assert!(
+        value.is_ascii(),
+        "excerpt cuts on a byte, and only a decoded header value is ASCII"
+    );
     if value.len() > 80 {
         format!("{}...", &value[..80])
     } else {
