@@ -909,9 +909,20 @@ mod tests {
         );
     }
 
-    /// Short on purpose, and only where the timeout is the subject: a head
-    /// nothing will ever answer.
+    /// Short on purpose, and only where the timeout is the whole of the
+    /// subject: a head nothing will ever answer, and no other head beside
+    /// it.
     const SOON: Duration = Duration::from_millis(750);
+
+    /// The budget where one head is starved deliberately and the others
+    /// are meant to be answered. One `upto` covers every head, so the
+    /// short one above would give a busy box only 750 ms to schedule the
+    /// ticker before an answered head came back `pending` too — a red run
+    /// about the window for a reason that is not the window. This is long
+    /// enough that a starved thread is the finding rather than the noise,
+    /// and it is spent in full exactly once, by the head that is supposed
+    /// to time out.
+    const STARVED: Duration = Duration::from_secs(3);
 
     #[test]
     fn a_reply_that_never_comes_yields_pending_in_its_place() {
@@ -964,7 +975,7 @@ mod tests {
                     std::thread::sleep(Duration::from_millis(5));
                 }
             });
-            let got: Vec<_> = Pipeline::over_with(&h, minter, specs, 2, SOON)
+            let got: Vec<_> = Pipeline::over_with(&h, minter, specs, 2, STARVED)
                 .take(4)
                 .collect();
             drained.store(true, Ordering::Relaxed);
@@ -981,10 +992,11 @@ mod tests {
             "the one nothing answered"
         );
         for (at, item) in got.iter().enumerate().skip(1) {
-            // One `upto` covers every head, so the 750 ms the quiet one
-            // needs is also all the answered ones get. A `pending` here
-            // means the ticker thread was not scheduled inside it — the
-            // window is not the subject of that failure.
+            // One `upto` covers every head, so the budget the quiet one
+            // spends is also all the answered ones get, which is why it
+            // is the loose one here. A `pending` here means the ticker
+            // thread was not scheduled inside three seconds — the window
+            // is not the subject of that failure.
             assert!(
                 matches!(item, Ok(Outcome::Reply(_))),
                 "{at}: {item:?} — a pending here is a starved ticker, not a held slot"
