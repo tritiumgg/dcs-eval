@@ -123,6 +123,13 @@ a control nobody wrote down is one nothing will ever notice going quiet.
 `tools/sweep-cover.sh` catches a plan row with no entry; it cannot catch a
 second control added to a row that already has one.
 
+**The sweep runs weekly against `main`, and green before a milestone closes.**
+`.github/workflows/sweep.yml` is the weekly run and takes a `workflow_dispatch`
+for the other one. It is not in `mise run check` and not on a pull request: it
+is slow and it edits the working tree. A cadence nobody wrote down is a sweep
+nobody runs, which is the failure this whole apparatus is against, one level
+up.
+
 ## Toolchain
 
 **Windows is the only supported host** — not merely the only target. Every

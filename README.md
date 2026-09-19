@@ -133,6 +133,11 @@ as it found it. It exits 0 when every control reddened as recorded, 1 when one
 did not, and 2 when the tree cannot be vouched for, which is the code to stop
 and look at.
 
+It runs weekly against `main` — `.github/workflows/sweep.yml`, which also takes
+a manual run from the Actions tab — and it is green before a milestone closes.
+Run it yourself after changing any code a control watches, rather than waiting
+for the Monday run to tell you.
+
 The controls themselves are `docs/mutations.md`, which also says what the sweep
 does *not* cover. A task that builds a control adds its entry there.
 

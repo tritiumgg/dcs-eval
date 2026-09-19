@@ -1,0 +1,56 @@
+name: Mutation sweep
+
+# The sweep is what re-runs the proofs behind every control, and until this
+# existed nothing re-ran it either: CI proved the runner still fails honestly
+# while never asking it anything. It is too slow and too destructive for a
+# pull request gate — it edits files in the working tree — so it runs here, on
+# its own cadence, against `main`.
+#
+# Weekly, and on demand. A milestone does not close on a red sweep; that rule
+# lives in CLAUDE.md, beside the one that says a control's entry lands with the
+# control.
+on:
+  schedule:
+    # Mondays, 05:00 UTC.
+    - cron: '0 5 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: windows-latest
+    # Warm, the Stage 3 to 6 controls take about three and a half minutes; a
+    # cold checkout pays a full workspace build first, once per control's
+    # first command.
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: jdx/mise-action@v2
+        with:
+          experimental: true
+
+      - name: Cache the reference interpreter
+        id: lua-cache
+        uses: actions/cache@v4
+        with:
+          path: .lua
+          key: lua-5.1.5-${{ runner.os }}-${{ hashFiles('tools/mklua.sh') }}
+
+      - name: Build the reference interpreter
+        if: steps.lua-cache.outputs.cache-hit != 'true'
+        run: mise run lua-build
+
+      - name: Prove the interpreter is 5.1.5 PUC-Rio
+        run: mise run lua-check
+
+      # Exit 1 is a control that did not redden as recorded; exit 2 is a tree
+      # that cannot be vouched for, which is the one to stop and look at.
+      - name: Re-run every recorded mutation
+        run: sh tools/sweep.sh
