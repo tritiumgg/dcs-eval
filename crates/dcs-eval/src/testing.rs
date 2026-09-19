@@ -237,6 +237,45 @@ pub(crate) fn held(path: &Path) -> fs::File {
     file
 }
 
+/// What `sha256sum` says about the file at `path`: the digest alone, lower
+/// case, without the filename the tool prints after it.
+///
+/// The tool is spawned by bare name and nothing else is tried. It ships in
+/// Git for Windows' `usr\bin`, which is on `PATH` under Git Bash and under
+/// PowerShell on a normal install, so `NotFound` is a machine that is not
+/// set up rather than a case to work around: a substitute would be an
+/// untested branch standing where the whole point is an independent second
+/// opinion about a digest.
+#[cfg(windows)]
+pub(crate) fn sha256sum(path: &Path) -> String {
+    let out = std::process::Command::new("sha256sum")
+        .arg("-b")
+        .arg(path)
+        .output()
+        .unwrap_or_else(|why| match why.kind() {
+            std::io::ErrorKind::NotFound => panic!(
+                "sha256sum is not on PATH: it comes with Git for Windows, in its usr\\bin, and \
+                 the hash cross-check cannot run without it"
+            ),
+            _ => panic!("sha256sum on {}: {why}", path.display()),
+        });
+    assert!(
+        out.status.success(),
+        "sha256sum on {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&out.stderr).trim()
+    );
+    let line = String::from_utf8_lossy(&out.stdout).into_owned();
+    let digest = line
+        .split_whitespace()
+        .next()
+        .unwrap_or_else(|| panic!("sha256sum said nothing about {}", path.display()));
+    // The tool escapes a name holding a backslash and marks the line by
+    // putting one in front of the digest, which every Windows path here
+    // earns. It is the line's own punctuation, not part of the hash.
+    digest.trim_start_matches('\\').to_owned()
+}
+
 /// A fixture path is what the filesystem says it is, never the spelling
 /// that made it: the sandbox sits under a temp directory this host
 /// spells short, and a `Real` compares bytes.
