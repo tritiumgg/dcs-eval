@@ -339,8 +339,11 @@ impl Standin {
         &self.seen
     }
 
-    /// Answer the next `eval` whose body holds `when` with `status`, a
+    /// Answer *every* `eval` whose body holds `when` with `status`, a
     /// `result_type` and `body`, rather than as one that returned nil.
+    /// A script is not consumed when it matches: it stands until the
+    /// stand-in is dropped, so a second window asking the same thing gets
+    /// the same answer.
     ///
     /// It is matched after the shape refusals an executor makes before it
     /// looks at a state's carrier, and *before* the carrier is looked up.
