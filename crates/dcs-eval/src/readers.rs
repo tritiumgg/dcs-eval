@@ -639,11 +639,17 @@ mod tests {
         let b = Sandbox::new();
         let (_s, bytes) = published(&b);
         for name in NAMES {
-            let why = refused(&without(&bytes, name));
+            let short = without(&bytes, name);
+            let why = match Handshake::from_bytes(Path::new("executor.txt"), &short) {
+                Err(why) => why.to_string(),
+                Ok(_) => panic!(
+                    "{name}: an absent header is refused, not defaulted — the \
+                     handshake read Ok"
+                ),
+            };
             assert!(
                 why.ends_with(&format!("{name}: absent")),
-                "{name} dropped: an absent header is refused naming it, and the \
-                 handshake said: {why}"
+                "{name} dropped, and the handshake said: {why}"
             );
         }
     }
@@ -829,11 +835,20 @@ mod tests {
         let b = Sandbox::new();
         let (_s, bytes) = beaten(&b, SystemTime::now());
         for name in BEAT {
-            let why = beat_refused(&without(&bytes, name));
+            let short = without(&bytes, name);
+            let read =
+                Heartbeat::from_bytes(Path::new("heartbeat.txt"), &short, SystemTime::UNIX_EPOCH);
+            let why = match read {
+                Err(why) => why.to_string(),
+                Ok(h) => panic!(
+                    "{name}: an absent header is refused, not defaulted — the \
+                     heartbeat read Ok, with armed: {}",
+                    h.armed
+                ),
+            };
             assert!(
                 why.ends_with(&format!("{name}: absent")),
-                "{name}: an absent header is refused, not defaulted — the \
-                 heartbeat said: {why}"
+                "{name} dropped, and the heartbeat said: {why}"
             );
         }
     }
