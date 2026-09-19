@@ -19,6 +19,7 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use crate::protocol::{FrameError, frame};
 
@@ -163,6 +164,52 @@ impl fmt::Display for SendError {
 
 impl std::error::Error for SendError {}
 
+/// A request that landed: its id, and when this process saw it land.
+///
+/// The time is an [`Instant`] rather than a `SystemTime` because the only
+/// question asked of it is how long ago this process's own call returned,
+/// which a clock put back or forward must not change the answer to. A
+/// heartbeat's age is the other question — a file's modification time
+/// against now — and that one is a `SystemTime` because the two stamps
+/// come from different machines' idea of the wall clock. Two questions,
+/// two clocks, and neither is the other's.
+#[must_use]
+#[derive(Debug, Clone)]
+pub struct Sent {
+    id: String,
+    at: Option<Instant>,
+}
+
+impl Sent {
+    /// A record a caller kept of a send this process made.
+    pub fn at(id: &str, at: Instant) -> Self {
+        Self {
+            id: id.to_owned(),
+            at: Some(at),
+        }
+    }
+
+    /// An id whose send this process did not see. Its age is no age at
+    /// all, and every rule that turns on "sent less than ten seconds ago"
+    /// reads it as older than that: a caller collecting an id it was
+    /// handed cannot claim the arm file was ensured a moment ago.
+    pub fn earlier(id: &str) -> Self {
+        Self {
+            id: id.to_owned(),
+            at: None,
+        }
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    /// How long ago the request landed, where that is known.
+    pub fn elapsed(&self, now: Instant) -> Option<Duration> {
+        self.at.map(|at| now.saturating_duration_since(at))
+    }
+}
+
 /// A request to the executor: `headers` and `body` framed as an envelope,
 /// published as `<req>/<id>.req` by rename, then the arm file at
 /// `arm_path` ensured. In that order, so a request that did not land arms
@@ -171,19 +218,25 @@ impl std::error::Error for SendError {}
 /// already listed or has recreated the file behind it. Every header is the
 /// caller's, the session stamp under `for` included; nothing is added, so
 /// what lands is what was asked for.
+///
+/// The [`Sent`] comes back off this process's clock read after the arm
+/// file was ensured, which is the moment a wait counts from: before it,
+/// nothing was waiting for a dormant session to notice. Every failure arm
+/// returns none, so a request that did not land cannot be waited on.
 pub fn send(
     req: &Path,
     arm_path: &Path,
     id: &str,
     headers: &[(&str, &str)],
     body: &[u8],
-) -> Result<(), SendError> {
+) -> Result<Sent, SendError> {
     if !is_id(id) {
         return Err(SendError::Id { id: id.to_owned() });
     }
     let bytes = frame(headers, body).map_err(SendError::Frame)?;
     publish(&req.join(format!("{id}.req")), &bytes).map_err(SendError::Publish)?;
-    arm(arm_path).map_err(SendError::Arm)
+    arm(arm_path).map_err(SendError::Arm)?;
+    Ok(Sent::at(id, Instant::now()))
 }
 
 #[cfg(test)]
@@ -352,7 +405,7 @@ mod tests {
     fn send_lands_the_envelope_under_the_id_and_makes_the_arm_file() {
         let b = Sandbox::new();
         let (req, arm_path) = session(&b);
-        send(&req, &arm_path, ID, &PING, b"").expect("the request sends");
+        let _ = send(&req, &arm_path, ID, &PING, b"").expect("the request sends");
         assert_eq!(
             entries(&req),
             "0000000001-abcd.req",
@@ -369,6 +422,39 @@ mod tests {
     }
 
     #[test]
+    fn send_returns_a_sent_read_off_the_clock_after_the_call_began() {
+        let b = Sandbox::new();
+        let (req, arm_path) = session(&b);
+        let before = Instant::now();
+        let sent = send(&req, &arm_path, ID, &PING, b"").expect("the send");
+        let after = Instant::now();
+        assert_eq!(sent.id(), ID, "the id comes back verbatim");
+        let elapsed = sent
+            .elapsed(after)
+            .expect("a send this process made has an age");
+        assert!(
+            elapsed <= after.saturating_duration_since(before),
+            "the stamp is no older than the call: {elapsed:?}"
+        );
+        assert_eq!(
+            sent.elapsed(before),
+            Some(Duration::ZERO),
+            "and no earlier than the call began"
+        );
+    }
+
+    #[test]
+    fn a_sent_for_an_id_this_process_did_not_publish_carries_no_age() {
+        let sent = Sent::earlier(ID);
+        assert_eq!(sent.id(), ID);
+        assert_eq!(
+            sent.elapsed(Instant::now()),
+            None,
+            "no age at all, rather than an age of nothing"
+        );
+    }
+
+    #[test]
     fn send_never_removes_the_arm_file() {
         // The arm file is there before the send, with content nobody here
         // wrote: after two sends it is still there, as it was. A send that
@@ -376,13 +462,14 @@ mod tests {
         let b = Sandbox::new();
         let (req, arm_path) = session(&b);
         fs::write(&arm_path, b"present").expect("an arm file already there");
-        send(&req, &arm_path, ID, &PING, b"").expect("the first send");
+        let _ = send(&req, &arm_path, ID, &PING, b"").expect("the first send");
         assert!(
             arm_path.is_file(),
             "the arm file is still there after one send"
         );
         assert_eq!(slurp(&arm_path), b"present", "as it was");
-        send(&req, &arm_path, "0000000002-abcd", &PING, b"return 1").expect("the second send");
+        let _ =
+            send(&req, &arm_path, "0000000002-abcd", &PING, b"return 1").expect("the second send");
         assert!(arm_path.is_file(), "and after two");
         assert_eq!(slurp(&arm_path), b"present", "as it was");
         assert_eq!(entries(&req), "0000000001-abcd.req 0000000002-abcd.req");

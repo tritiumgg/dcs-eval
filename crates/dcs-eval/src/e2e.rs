@@ -220,7 +220,7 @@ fn a_ping_the_client_sends_is_answered_by_the_shipped_executor() {
         live.res.display()
     );
 
-    send(
+    let _ = send(
         &live.req,
         &live.arm,
         ID,

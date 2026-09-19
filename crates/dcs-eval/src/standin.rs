@@ -910,7 +910,7 @@ mod tests {
     /// A request sent the client's way: `send`, with `for` the stand-in's
     /// own stamp unless the caller spells the headers.
     fn sent(s: &Standin, id: &str, headers: &[(&str, &str)], body: &[u8]) {
-        send(s.req(), s.arm(), id, headers, body).expect("the request sends");
+        let _ = send(s.req(), s.arm(), id, headers, body).expect("the request sends");
     }
 
     fn pinged(s: &Standin, id: &str) {

@@ -484,7 +484,7 @@ fn the_stand_in_answers_as_the_shipped_executor_does() {
     let stamp = s.stamp.clone();
     // The same three requests the Lua suite plants, answered on one tick as
     // the Lua answered them on one frame, so the ticks agree too.
-    send(
+    let _ = send(
         s.req(),
         s.arm(),
         PING_ID,
@@ -492,7 +492,7 @@ fn the_stand_in_answers_as_the_shipped_executor_does() {
         b"",
     )
     .expect("the ping sends");
-    send(
+    let _ = send(
         s.req(),
         s.arm(),
         EVAL_ID,
@@ -500,7 +500,7 @@ fn the_stand_in_answers_as_the_shipped_executor_does() {
         b"return nil",
     )
     .expect("the eval sends");
-    send(
+    let _ = send(
         s.req(),
         s.arm(),
         FENCE_ID,
