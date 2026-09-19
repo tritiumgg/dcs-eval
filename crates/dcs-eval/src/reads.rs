@@ -623,7 +623,12 @@ pub(crate) fn vet(specs: &[Spec]) -> Result<(), Refused> {
         // that protects a call. The window carries other evals — a
         // reachability probe that calls nothing — and they are held to
         // the never rule above like everything else, but they are not
-        // reads and have no callee to look up.
+        // reads and have no callee to look up. So this is narrower than
+        // "every name is on the list": an eval written some other way
+        // passes here on the never rule alone. `gather` is the only
+        // caller and publishes exactly one such eval, the probe; a
+        // caller handing this its own body is the gap, and the record
+        // says why it is left open.
         let Some(callee) = callee_of(&spec.body) else {
             continue;
         };

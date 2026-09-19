@@ -107,6 +107,17 @@ keeps that true. The allowlist falls on any body shaped like a read — a chunk
 that protects a call — so the probe, which calls nothing, is held to the never
 rule alone.
 
+**That is narrower than the document's rule, deliberately.** The frozen text
+says a chunk that is not on the list is not a game-state read; the check here
+says a read-shaped chunk naming a callee the list does not hold is refused, and
+an `eval` written some other way is held to the never rule and to no list. The
+window carries exactly one such `eval`, the probe, and nothing in this crate
+can publish another; the gap is what a future caller handing `publish_reads` a
+body of its own would walk through, and a marker on the spec saying "this is
+not a read" would close it. It is not closed now because the only caller is
+`gather` and inventing a marker for a caller that does not exist would be
+guessing at its shape.
+
 **The chunkname is `=dcs-eval read <callee>`**, so a crash, a raise and a log
 line all say which read it was, which is the whole reason for one chunk each.
 All nine reads go to `state: hook`; the reachability probe is an `eval` of
