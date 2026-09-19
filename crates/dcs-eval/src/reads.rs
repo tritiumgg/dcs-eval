@@ -1774,8 +1774,10 @@ mod game_reads {
 
     #[test]
     fn an_invalid_state_probe_is_told_from_a_refused_one_without_reading_prose() {
-        // T36 puts `session: client` on a `refused` probe and nothing on
-        // an `invalid-state` one, so these two must not share an arm.
+        // A refused probe is evidence about the session and an
+        // invalid-state one is evidence about this build, so the
+        // derivation reads them differently and they must not share an
+        // arm.
         let refused = probe_of(Ok(Outcome::Reply(envelope(
             &[("status", "refused"), ("stage", "eval")],
             b"no",
