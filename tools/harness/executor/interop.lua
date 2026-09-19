@@ -24,7 +24,10 @@
 -- failing one `executor/ping` installs. The third names a stamp that is
 -- not this session's, so the fence answers it `stale-session` and echoes
 -- the stamp it named, which puts the one header no other reply carries on
--- the wire for the client's parser to read.
+-- the wire for the client's parser to read. Two more are refusals that cut
+-- the value they name at eighty bytes, an op and a state: each message is
+-- written once in each dialect, so this is where the two cuts are compared
+-- rather than read off the same literal typed twice.
 --
 -- What is proved here is only that the run went where the reader looks:
 -- the load got past containment over this box, nothing reached `dcs.log`,
@@ -84,11 +87,19 @@ t.eq(host.log, nil, "and nothing reached dcs.log: no refusal, no fallback")
 request(E, "0000000001-ping.req", "op: ping\nfor: " .. E.stamp .. "\n\n")
 request(E, "0000000002-eval.req", "op: eval\nfor: " .. E.stamp .. "\nstate: hook\n\nreturn nil")
 request(E, "0000000003-fence.req", "op: eval\nfor: 1-1\nstate: hook\n\nreturn nil")
+-- Two refusals that cut the value they name at eighty bytes. They are here
+-- and not only in the two dialects' own suites because a cut written twice
+-- is a cut that can round two ways, and this is where the two are compared
+-- rather than read off the same literal typed twice.
+request(E, "0000000004-longop.req", "op: " .. string.rep("n", 100) .. "\nfor: " .. E.stamp .. "\n\n")
+request(E, "0000000005-longstate.req",
+  "op: eval\nfor: " .. E.stamp .. "\nstate: " .. string.rep("z", 100) .. "\n\nreturn nil")
 host.callbacks.onSimulationFrame()
 
 t.eq(E.tick, 1, "one frame ran")
 t.eq(entries(env, E.req), "", "every request was taken")
-t.eq(entries(env, E.res), "0000000001-ping.res 0000000002-eval.res 0000000003-fence.res",
+t.eq(entries(env, E.res),
+  "0000000001-ping.res 0000000002-eval.res 0000000003-fence.res 0000000004-longop.res 0000000005-longstate.res",
   "every reply is under res by its final name, no .tmp")
 t.eq(E.raised, 0, "nothing raised")
 t.eq(E.unpublished, 0, "nothing failed to publish")

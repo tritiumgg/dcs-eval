@@ -60,6 +60,8 @@ const SUITE: &str = "executor/interop";
 const PING_ID: &str = "0000000001-ping";
 const EVAL_ID: &str = "0000000002-eval";
 const FENCE_ID: &str = "0000000003-fence";
+const OP_ID: &str = "0000000004-longop";
+const STATE_ID: &str = "0000000005-longstate";
 
 /// The stamp the fenced request names. Two digits and a dash cannot be a
 /// stamp this session minted, whose pid alone is longer than that.
@@ -395,7 +397,7 @@ fn the_eval_reply_parses_as_ok_with_an_empty_body() {
     );
     assert_eq!(
         entries(&r.res),
-        format!("{PING_ID}.res {EVAL_ID}.res {FENCE_ID}.res"),
+        format!("{PING_ID}.res {EVAL_ID}.res {FENCE_ID}.res {OP_ID}.res {STATE_ID}.res"),
         "every reply under its final name, no .tmp"
     );
 }
@@ -508,9 +510,33 @@ fn the_stand_in_answers_as_the_shipped_executor_does() {
         b"return nil",
     )
     .expect("the fenced eval sends");
+    // The two refusals that cut the value they name at eighty bytes. Each
+    // message is written once in each dialect, so this is the only place
+    // that proves the two cut to the same bytes rather than to the same
+    // literal somebody typed twice.
+    let wide_op = "n".repeat(100);
+    let far_state = "z".repeat(100);
+    let _ = send(
+        s.req(),
+        s.arm(),
+        OP_ID,
+        &[("op", &wide_op), ("for", &stamp)],
+        b"",
+    )
+    .expect("the long op sends");
+    let _ = send(
+        s.req(),
+        s.arm(),
+        STATE_ID,
+        &[("op", "eval"), ("for", &stamp), ("state", &far_state)],
+        b"return nil",
+    )
+    .expect("the long state sends");
     s.tick();
     agree(PING_ID, &reply(&r, PING_ID), &stood_in(&s, PING_ID));
     agree(EVAL_ID, &reply(&r, EVAL_ID), &stood_in(&s, EVAL_ID));
+    agree(OP_ID, &reply(&r, OP_ID), &stood_in(&s, OP_ID));
+    agree(STATE_ID, &reply(&r, STATE_ID), &stood_in(&s, STATE_ID));
     // The fenced reply's message names the session's own stamp, which is
     // the one value the two sides cannot share, so this one is compared
     // here rather than through `agree`: the same headers in the same order
