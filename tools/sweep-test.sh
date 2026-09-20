@@ -811,7 +811,7 @@ check 'a plan row nobody wrote an entry for is named' \
     1 "$got" "the plan names a mutation for $one and the inventory has no entry" "$out"
 
 check 'an entry filed under a row that names no mutation is named too' \
-    1 "$got" "files a control under $two" "$out"
+    1 "$got" "files a control under $two, which names no mutation" "$out"
 
 # A stage past the presence window is built row by row, and the first entry
 # written for one of its rows arrives before the rest of the stage exists. The
@@ -824,14 +824,16 @@ check 'an entry for a row outside the presence window is not a stray' \
 
 # Stages 0 to 2 are the one place the other direction bites: the inventory
 # declares them out of scope and counts them by hand, so an entry filed under
-# a row there would be counted twice and is refused.
+# a row there would be counted twice and is refused. The fixture row does name
+# a mutation, so the refusal has to say that rather than the other cause — the
+# assertion is on the wording, because the two arms share an exit code.
 printf '### fixture/one\n\n- task: %s\n- reddens: held\n\n' "$one" \
     > "$cover/docs/mutations.md"
 printf '### fixture/early\n\n- task: %s\n- reddens: held\n' "$four" \
     >> "$cover/docs/mutations.md"
 out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
 check 'an entry for a row before the swept stages is stray' \
-    1 "$got" "files a control under $four" "$out"
+    1 "$got" "files a control under $four, a row before Stage 3" "$out"
 
 # The stray check reads every stage from the third up, and "every" has to mean
 # it however far the plan grows: a numeric ceiling would quietly start calling
