@@ -37,7 +37,8 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{tool, tool_router};
 
-use crate::serve::{Client, Serve, host_of};
+use crate::serve::{Client, Host, Serve, host_of};
+use crate::verify;
 use crate::wording::{self, answered, pending, refuse, say};
 
 /// How long a call waits on a reply before answering `pending`.
@@ -53,18 +54,29 @@ pub(crate) fn waiting(seconds: Option<u64>) -> Duration {
     seconds.map_or(DEFAULT_WAIT, Duration::from_secs)
 }
 
-/// The executor this call is about: the host its `host` argument names, or
-/// the one the `--host` flag named where it names none.
-fn client_for(serve: &Serve, host: Option<&str>) -> Result<Client, CallToolResult> {
-    let host = match host {
+/// The host this call is about: the one its `host` argument names, or the
+/// one the `--host` flag named where it names none.
+///
+/// Apart from finding the executor, because a call can want the host without
+/// wanting a session. Resolving a client reads `executor.txt`, which is not
+/// there precisely when nothing is installed — and a report about the
+/// install has to be able to answer in that case rather than refuse before
+/// it has looked.
+fn host_for(serve: &Serve, host: Option<&str>) -> Result<Host, CallToolResult> {
+    match host {
         Some(word) => host_of(word).ok_or_else(|| {
             refuse(
                 "bad-argument",
                 vec![format!("host is hook or export, not {word}")],
             )
-        })?,
-        None => serve.options().host,
-    };
+        }),
+        None => Ok(serve.options().host),
+    }
+}
+
+/// The executor this call is about: the session published for that host.
+fn client_for(serve: &Serve, host: Option<&str>) -> Result<Client, CallToolResult> {
+    let host = host_for(serve, host)?;
     serve
         .client_at(host)
         .map_err(|why| refuse("no-session", vec![why.to_string()]))
@@ -223,16 +235,45 @@ pub struct Collect {
 }
 
 /// What `dcs_status` and the `status` verb both do.
+///
+/// No client is resolved, deliberately. Resolving one reads the handshake,
+/// which is absent exactly when nothing is installed — so a call that
+/// resolved first would refuse to say anything about the install in the one
+/// case a user most needs it to.
 pub(crate) fn status(serve: &Serve, host: Option<&str>) -> Answered {
-    let client = match client_for(serve, host) {
-        Ok(client) => client,
+    let host = match host_for(serve, host) {
+        Ok(host) => host,
         Err(no) => return Answered::plain(no),
     };
-    // Rendered through `Debug` on purpose and for now: the report has no
-    // wording of its own yet, and inventing one here would be inventing it
-    // twice.
-    let report = status::status(client.output().as_path());
-    Answered::plain(say("status", vec![format!("{report:#?}")]))
+    let output = serve.options().at_host(host).output();
+    // The session in full sits under the report, rendered through `Debug` on
+    // purpose and for now: the summary above is what a reader needs first,
+    // and a second wording of the rest would be inventing one twice.
+    Answered::plain(say(
+        "status",
+        match writedirs(serve).into_iter().next() {
+            Some(variant) => {
+                let report = verify::verify(&variant, &output);
+                let session = format!("{:#?}", report.session);
+                vec![report.to_string(), session]
+            }
+            // The install is not on the disk, so there is nothing of it to
+            // look at — and the session half is still printed, since a
+            // directory that will not resolve says nothing about a handshake
+            // that might.
+            None => vec![
+                format!(
+                    "{}: the install could not be looked at, so only the session is reported",
+                    serve
+                        .options()
+                        .saved_games
+                        .join(&serve.options().variant)
+                        .display()
+                ),
+                format!("{:#?}", status::status(&output)),
+            ],
+        },
+    ))
 }
 
 /// What `dcs_ping` and the `ping` verb both do.
@@ -351,10 +392,11 @@ pub(crate) fn eval_file(
 
 #[tool_router(vis = "pub(crate)")]
 impl Serve {
-    /// What is readable without asking the executor anything: whether it is
-    /// installed, the session it published, whether that process is alive,
-    /// whether it is armed, how old the heartbeat is, and every problem found
-    /// along the way.
+    /// What is readable without asking the executor anything: the hook's
+    /// hash, the line in `Export.lua`, any second hook beside ours, the two
+    /// policy-gate keys, the session it published, whether that process is
+    /// alive, how old the heartbeat is, and every problem found along the
+    /// way.
     #[tool]
     async fn dcs_status(
         &self,
@@ -658,6 +700,50 @@ mod tests {
         assert!(
             rendered.contains("phase: "),
             "it names a phase rather than leaving one out: {rendered}"
+        );
+
+        client.cancel().await.expect("the client hangs up");
+        server.cancel().await.expect("the server comes down");
+    }
+
+    /// The install half of `dcs_status`, over a sandbox that has no
+    /// `Scripts\Hooks` in it at all.
+    ///
+    /// Two things at once, and the second is the one that would go unnoticed:
+    /// that the answer names the hook that is not there, and that there is an
+    /// answer at all. A body that resolved a client first would refuse here —
+    /// the handshake is published, but the directory holding the executor is
+    /// not, which is what "nothing is installed" looks like — and a refusal
+    /// carries content too, so the call that merely checks for content cannot
+    /// tell the two apart.
+    #[tokio::test]
+    async fn tools_listed_verify_names_the_hook_that_is_not_there() {
+        let box_ = Sandbox::new();
+        let (server, client) = pair(&box_).await;
+
+        let answer = client
+            .call_tool(CallToolRequestParams::new("dcs_status"))
+            .await
+            .expect("dcs_status answers");
+
+        let rendered = answer
+            .content
+            .iter()
+            .filter_map(|block| block.as_text().map(|text| text.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(
+            answer.is_error,
+            Some(true),
+            "a report is not a refusal: {rendered}"
+        );
+        assert!(
+            rendered.contains("hook: not there"),
+            "the install half is reported: {rendered}"
+        );
+        assert!(
+            rendered.contains("DcsEvalExecutor.lua"),
+            "and it names the file that is missing: {rendered}"
         );
 
         client.cancel().await.expect("the client hangs up");
