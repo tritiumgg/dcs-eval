@@ -14,6 +14,13 @@
 # rule in the inventory's own header — a task that builds a control adds its
 # entry in the same pull request — and by nothing else.
 #
+# The two directions read different windows of the plan, and the difference is
+# deliberate. Presence is owed only by Stages 3 to 6, which are built: a later
+# stage's row has no code to mutate yet, and demanding an entry for it would
+# fail every run until the last row landed. A stray is checked against the rows
+# of every stage, because a stage being unbuilt is no reason to call the first
+# entry written for it a control filed under a row that names no mutation.
+#
 # No toolchain, so it runs inside `mise run check` and in CI's preflight job.
 
 set -e
@@ -37,21 +44,27 @@ done
 # a plan task ID anywhere outside docs/, CLAUDE.md and README.md.
 ID='T[0-9][0-9]'
 
-# Every Stage 3 to 6 row whose done-condition names a mutation. The stage is
-# read from the heading above the table. The row is matched whole rather than
+# Every row of stages $1 to $2 whose done-condition names a mutation. The stage
+# is read from the heading above the table. The row is matched whole rather than
 # by column: a cell can carry a literal pipe inside backticks, which shifts
 # every column after it and would drop the row silently.
-claimed=$(awk -v id="$ID" '
-    /^## Stage / { stage = $3 + 0 }
-    stage < 3 || stage > 6 { next }
-    $0 !~ ("^\\|[ \t]*" id "[ \t]*\\|") { next }
-    /mutations?:/ {
-        row = $0
-        sub(/^\|[ \t]*/, "", row)
-        sub(/[ \t]*\|.*$/, "", row)
-        print row
-    }
-' "$plan" | sort -u)
+rows() {
+    awk -v id="$ID" -v lo="$1" -v hi="$2" '
+        /^## Stage / { stage = $3 + 0 }
+        stage < lo || stage > hi { next }
+        $0 !~ ("^\\|[ \t]*" id "[ \t]*\\|") { next }
+        /mutations?:/ {
+            row = $0
+            sub(/^\|[ \t]*/, "", row)
+            sub(/[ \t]*\|.*$/, "", row)
+            print row
+        }
+    ' "$plan" | sort -u
+}
+
+# What an entry is owed for, and what an entry is allowed to name.
+claimed=$(rows 3 6)
+named=$(rows 0 99)
 
 # Every task the inventory names, in-scope entry and out-of-scope entry alike:
 # a `task:` bullet is read the same way wherever it sits. The runner's own row
@@ -71,7 +84,7 @@ for m in $missing; do
     fail=1
 done
 
-stray=$(printf '%s\n' "$written" | grep -vxF "$(printf '%s\n' "$claimed")" 2>/dev/null || true)
+stray=$(printf '%s\n' "$written" | grep -vxF "$(printf '%s\n' "$named")" 2>/dev/null || true)
 for s in $stray; do
     [ -n "$s" ] || continue
     printf 'sweep-cover: the inventory files a control under %s, which names no mutation in the plan\n' "$s" >&2

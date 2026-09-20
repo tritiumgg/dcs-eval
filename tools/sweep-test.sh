@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=33
+CASES=34
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -748,18 +748,21 @@ check 'a mutation that never built comes off the coverage figure too' \
 # side of the sweep's coverage line, so the sweep would report full coverage of
 # a set it had quietly shrunk. These prove the gate that catches that.
 #
-# The two fixture IDs are assembled rather than written: tools/nospecrefs.sh
+# The three fixture IDs are assembled rather than written: tools/nospecrefs.sh
 # refuses a plan task ID anywhere outside docs/, and a fixture plan has to
 # carry IDs shaped exactly like the real ones or the gate would not read them.
 one=$(printf 'T%s' 91)
 two=$(printf 'T%s' 92)
+three=$(printf 'T%s' 93)
 
 cover="$sandbox/cover"
 mkdir -p "$cover/docs" "$cover/tools"
 cp tools/sweep-cover.sh "$cover/tools/sweep-cover.sh"
 
-# A two-row fixture plan. The stage heading is what the gate reads the stage
-# off, and the second row names no mutation, so it is owed no entry.
+# A three-row fixture plan. The stage heading is what the gate reads the stage
+# off. The second row names no mutation, so it is owed no entry; the third sits
+# outside the window presence is owed in, so it is owed no entry either — but
+# an entry written for it early is not a stray.
 cat > "$cover/docs/PLAN.md" <<EOF
 ## Stage 4 — a fixture stage
 
@@ -767,11 +770,26 @@ cat > "$cover/docs/PLAN.md" <<EOF
 |---|---|---|---|---|
 | $one | a fixture | it holds; mutation: break it and it does not | — | developer-only |
 | $two | another | it holds | — | developer-only |
+
+## Stage 8 — a fixture stage built later
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $three | a later fixture | it holds; mutation: break it | — | developer-only |
 EOF
 
 covered() {
     printf '### fixture/one\n\n- task: %s\n- reddens: held\n' "$1" \
         > "$cover/docs/mutations.md"
+}
+
+# Two entries, one per named ID, so a row outside the presence window can be
+# seen being accepted rather than called a stray.
+covered_both() {
+    printf '### fixture/one\n\n- task: %s\n- reddens: held\n\n' "$1" \
+        > "$cover/docs/mutations.md"
+    printf '### fixture/later\n\n- task: %s\n- reddens: held\n' "$2" \
+        >> "$cover/docs/mutations.md"
 }
 
 covered "$one"
@@ -786,6 +804,15 @@ check 'a plan row nobody wrote an entry for is named' \
 
 check 'an entry filed under a row that names no mutation is named too' \
     1 "$got" "files a control under $two" "$out"
+
+# A stage past the presence window is built row by row, and the first entry
+# written for one of its rows arrives before the rest of the stage exists. The
+# stray check reads every stage so that entry is accepted; the tally still
+# counts only the rows presence is owed for.
+covered_both "$one" "$three"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'an entry for a row outside the presence window is not a stray' \
+    0 "$got" "1 plan rows name a mutation" "$out"
 
 
 # --- the tally --------------------------------------------------------------
