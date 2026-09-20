@@ -87,7 +87,7 @@ folder and its `DCS*` variants for you is *not built*. The server registers,
 lists and answers all six tools below; each takes an optional `host`, which is
 `hook` or `export` and falls back to `--host`.
 
-## The six tools — the wording *not built*
+## The six tools
 
 | Tool | What it says |
 |---|---|

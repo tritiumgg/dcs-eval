@@ -491,6 +491,11 @@ mod tests {
     /// with a protocol error saying the tool was not found, which is what the
     /// six `Ok`s here rule out — and the seventh call, of a name that really
     /// is not there, is what says those six are not vacuous.
+    ///
+    /// It goes no further than that, on purpose. What a body *says* is not
+    /// read here, so a handler answering the wrong question in a well-formed
+    /// block would still pass. The wording of a reply is settled in one
+    /// place, by the tests that own it, and not by this one.
     #[tokio::test]
     async fn tools_listed_each_answer_a_call() {
         let box_ = Sandbox::new();

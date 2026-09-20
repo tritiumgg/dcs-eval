@@ -272,14 +272,14 @@ impl ServerHandler for Serve {
         // The wording below is a placeholder and is known to be one: how a
         // reply reads — a refusal that reads as a refusal, a `pending` that
         // names its id and phase — is settled in one place, and not here.
+        // It is a clause per tool and no more, so that it does not become a
+        // second copy of the README's prose for that work to keep in step.
         info.instructions = Some(
             "Evaluate Lua inside a running DCS World. `dcs_status` reports what \
              is readable without asking the executor anything; `dcs_ping` proves \
              it is alive; `dcs_game_state` says what the game is doing; \
              `dcs_eval` and `dcs_eval_file` run a chunk; `dcs_collect` picks up \
-             a reply left pending. The wait on a call is a wait and never a \
-             limit: a mission load can outlast it, and the answer is then a \
-             `pending` to collect by id."
+             a reply left pending."
                 .to_owned(),
         );
         info
