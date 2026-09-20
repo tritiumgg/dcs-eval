@@ -94,6 +94,15 @@ another installer — stays in the store rather than clobbering the occupant.
 That is the conservative direction, and it is visible: the store holds the file
 and the register holds the row, so somebody can put it back by hand.
 
+The absence cannot tell a file this build moved from one the user deleted
+themselves. Where somebody removes their own `Export.lua` after an install, the
+row's destination is absent, the `copy_aside` copy is in the store, and the
+uninstall puts that copy back — resurrecting a file its owner had thrown away.
+Nothing on disk distinguishes the two absences, and of the two mistakes
+available this is the one that loses nothing: the file returns where it was,
+under the name it had, and deleting it again is one keystroke, whereas the
+other direction would leave a displaced file stranded in the store.
+
 One ambiguity is left unresolved rather than decided: two parks holding the
 same relative path for the same variant within the same second. The oldest
 candidate directory holding that path wins and the rest stay in the store.
