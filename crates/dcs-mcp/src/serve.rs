@@ -57,11 +57,7 @@ impl Options {
     /// it. Nothing here asks the filesystem, so this answers before the
     /// directory exists.
     pub fn output(&self) -> PathBuf {
-        self.saved_games
-            .join(&self.variant)
-            .join("Logs")
-            .join("DcsEval")
-            .join(self.host.word())
+        output_in(&self.saved_games.join(&self.variant), self.host)
     }
 
     /// `--saved-games <dir> --variant <name> [--host hook|export]`, and
@@ -122,6 +118,18 @@ impl Options {
             ..self.clone()
         }
     }
+}
+
+/// Where the executor of `host` writes under a variant directory already in
+/// hand.
+///
+/// The join lives here and not in each caller so that a caller holding a
+/// resolved variant reports paths under it in the one spelling. A second
+/// join composed from the flags would reach the same directory by a
+/// different name, and a report naming a resolved path beside an
+/// unresolved one reads as two places.
+pub fn output_in(variant: &Path, host: Host) -> PathBuf {
+    variant.join("Logs").join("DcsEval").join(host.word())
 }
 
 /// The host a word names, or nothing where it names neither.

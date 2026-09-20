@@ -37,7 +37,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{tool, tool_router};
 
-use crate::serve::{Client, Host, Serve, host_of};
+use crate::serve::{Client, Host, Serve, host_of, output_in};
 use crate::verify;
 use crate::wording::{self, answered, pending, refuse, say};
 
@@ -245,7 +245,6 @@ pub(crate) fn status(serve: &Serve, host: Option<&str>) -> Answered {
         Ok(host) => host,
         Err(no) => return Answered::plain(no),
     };
-    let output = serve.options().at_host(host).output();
     // The session in full sits under the report, rendered through `Debug` on
     // purpose and for now: the summary above is what a reader needs first,
     // and a second wording of the rest would be inventing one twice.
@@ -253,6 +252,10 @@ pub(crate) fn status(serve: &Serve, host: Option<&str>) -> Answered {
         "status",
         match writedirs(serve).into_iter().next() {
             Some(variant) => {
+                // Under the variant as it resolved, so the report does not
+                // name one path resolved and its neighbour as the flags
+                // spelt it.
+                let output = output_in(variant.as_path(), host);
                 let report = verify::verify(&variant, &output);
                 let session = format!("{:#?}", report.session);
                 vec![report.to_string(), session]
@@ -270,7 +273,10 @@ pub(crate) fn status(serve: &Serve, host: Option<&str>) -> Answered {
                         .join(&serve.options().variant)
                         .display()
                 ),
-                format!("{:#?}", status::status(&output)),
+                format!(
+                    "{:#?}",
+                    status::status(&serve.options().at_host(host).output())
+                ),
             ],
         },
     ))
