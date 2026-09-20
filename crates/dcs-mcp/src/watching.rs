@@ -40,6 +40,11 @@ const ID_TWO: &str = "0000000002-abcd";
 /// inside one second would otherwise mint the same directory name.
 const LATER: &str = "2000000000-7";
 
+/// How long a wait is given to reach its first sleep before a test looks
+/// at what it is holding. Twenty times the wait's own poll, because the
+/// number is a margin rather than a measurement.
+const SETTLING: Duration = Duration::from_millis(500);
+
 fn opts(box_: &Sandbox) -> Options {
     Options {
         saved_games: box_.path.clone(),
@@ -110,12 +115,17 @@ fn a_sweep_is_refused_while_a_wait_is_in_flight_and_succeeds_once_it_returns() {
         // executor's side while the client waits.
         let waiting = scope.spawn(|| wait::wait(&session, &sent, Duration::from_secs(5)));
 
-        // Long enough for the wait to have gone round its 25 ms poll several
-        // times, so the watch is certainly open by now. If it were not, the
-        // sweep below would remove the directory out from under a live wait
-        // and this test would fail loudly rather than pass for the wrong
-        // reason.
-        std::thread::sleep(Duration::from_millis(250));
+        // Wall clock, and the only barrier there is. A watch opening leaves
+        // nothing on the disk and the count of them is private to
+        // `dcs-eval`, so from out here there is no state to poll until the
+        // wait is certainly asleep — only time to allow it. `SETTLING` is
+        // that allowance: many times the wait's own 25 ms poll, and the
+        // slack is all on the safe side, because a barrier that expired too
+        // early would let the sweep below succeed and the assertion that
+        // follows it fire. A failure here is this sleep being too short for
+        // a loaded machine, not the rule being broken; nothing about the
+        // rule is read off the clock.
+        std::thread::sleep(SETTLING);
 
         // DCS loads again. The new session's directories are made first; its
         // handshake is deliberately not published yet, so the client waiting
@@ -126,7 +136,9 @@ fn a_sweep_is_refused_while_a_wait_is_in_flight_and_succeeds_once_it_returns() {
         let blocked = b.sweep();
         assert!(
             blocked.left.iter().any(|(name, _)| *name == a_stamp),
-            "a session with a wait in flight was swept away: removed {:?}, left {:?}",
+            "a session with a wait in flight was swept away \
+             (or the wait had not yet reached its first sleep): \
+             removed {:?}, left {:?}",
             blocked.removed,
             blocked.left
         );
@@ -215,12 +227,23 @@ fn a_sibling_sweep_succeeds_while_the_server_is_idle_between_two_calls() {
     );
 }
 
-/// A session a call reported `superseded` is one no watch was ever opened
-/// on, so the sweep that follows finds nothing in its way.
+/// A session a call reported `superseded` is one the sweep that follows
+/// finds nothing in its way on.
 ///
 /// This is the terminal path, and it never sleeps: the first look answers,
 /// and a watch opened before that look rather than inside the sleep would be
 /// left on a directory the caller has just been told is gone.
+///
+/// What this reads is the sweep, after `wait` has returned, so it cannot by
+/// itself tell a watch never opened from one opened and dropped before the
+/// sweep looked. That distinction is not observable from this crate and is
+/// not meant to be: `dcs-eval`'s own
+/// `a_superseded_session_is_answered_without_the_directory_being_opened`
+/// counts the opens and holds it at zero, where the counter lives. What is
+/// left for this test is the consequence a user would meet — the next
+/// load's sweep going through — and it is a real consequence, because the
+/// paired mutation leaks a handle on exactly this path and this is where
+/// the leak surfaces.
 #[test]
 fn a_superseded_session_is_waited_on_and_swept_straight_after() {
     let box_ = Sandbox::new();
