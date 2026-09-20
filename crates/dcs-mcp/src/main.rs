@@ -6,4 +6,7 @@
 //! as a library, so that the words a reply is given and the bytes it arrived
 //! as are decided in two places that cannot drift into each other.
 
+// The executor the binary carries, and the hashes that recognise it.
+mod embed;
+
 fn main() {}
