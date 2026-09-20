@@ -585,6 +585,65 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +             tools: Self::tool_router().with_disabled("dcs_collect"),
 ```
 
+### watching/handle-left-open-across-a-call
+
+- task: T41
+- command: `mise exec -- cargo test -p dcs-mcp watching`
+- reddens: `a_sibling_sweep_succeeds_while_the_server_is_idle_between_two_calls`
+- note: **this edit is byte for byte the one under `watch/handle-left-open`
+  above, and that is deliberate.** Same injury, different observer: there the
+  red is a `remove_dir` inside the `watch` module's own test, with the private
+  tally to hand; here it is the next executor session's sibling sweep, from
+  another crate, reached only through the path a tool call takes. A reader
+  finding the two blocks identical is looking at one mechanism watched from
+  both sides, not at a copy-paste slip.
+
+  A second handle on the same directory, leaked, so that it outlives the call
+  the way one cached across calls would. The leak is the instrument rather
+  than the fault being modelled: an open-then-closed handle is invisible from
+  outside the crate, and what the rule is about is a handle still standing
+  when the next session sweeps. It fires only where `settle` ran — that is,
+  only where the wait actually slept — so the observed red is two tests and
+  not three: `a_sweep_is_refused_while_a_wait_is_in_flight_and_succeeds_once_it_returns`
+  fails beside it on its second sweep, and
+  `a_superseded_session_is_waited_on_and_swept_straight_after` stays green.
+  That separation is what says the third test watches the terminal path and
+  not the sleeping one. Observed in both:
+  `The process cannot access the file because it is being used by another process`.
+
+```sweep-edit crates/dcs-eval/src/watch.rs
+-                 *changes = Some(observer);
++                 *changes = Some(observer);
++                 std::mem::forget(Changes::open(res).ok());
+```
+
+### watching/watch-opened-on-a-superseded-session
+
+- task: T41
+- command: `mise exec -- cargo test -p dcs-mcp watching`
+- reddens: `a_superseded_session_is_waited_on_and_swept_straight_after`
+- note: the watch hoisted out of the sleep and opened before the first look,
+  which is the natural way to write this wrong — so it is opened even on a
+  wait that answers `superseded` on its first pass and never sleeps at all.
+  Leaked for the same reason as the entry above: the harm is the next
+  session's sweep finding a handle, and that sweep runs after the terminal
+  call has returned. `Changes` is already in scope in `wait.rs` and `s.res()`
+  is the session being waited on, so the edit compiles and the red is an
+  assertion.
+
+  **The red is not exclusive, and the entry above is what tells the two
+  apart.** This leaks on every wait, so all three tests were observed
+  failing: the other two are
+  `a_sweep_is_refused_while_a_wait_is_in_flight_and_succeeds_once_it_returns`
+  and `a_sibling_sweep_succeeds_while_the_server_is_idle_between_two_calls`.
+  The superseded test is the one only this mutation reddens.
+
+```sweep-edit crates/dcs-eval/src/wait.rs
+-     let mut changes: Option<Changes> = None;
++     let mut changes: Option<Changes> = None;
++     std::mem::forget(Changes::open(s.res()).ok());
+```
+
 ---
 
 ## Stage 8 — the installer and embedding
@@ -732,9 +791,9 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 17
-- breakdown: T39, T58, T59 one each, 3; T40, T41, T44, T61, T46 two each, 10;
-  T45 three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
+- controls: 15
+- breakdown: T39, T58, T59 one each, 3; T40, T44, T61, T46 two each, 8; T45
+  three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
   rows move into the inventory proper.
 
