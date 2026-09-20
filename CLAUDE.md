@@ -123,6 +123,15 @@ a control nobody wrote down is one nothing will ever notice going quiet.
 `tools/sweep-cover.sh` catches a plan row with no entry; it cannot catch a
 second control added to a row that already has one.
 
+**A mutation's anchor is a line of source nothing marks.** The inventory matches
+on exact whole-line text, so reformatting, renaming or inlining a line some
+control anchors on does not fail the build — it turns that control UNPERFORMED,
+which is the failure this whole apparatus is against. Nothing in the source can
+say so, because naming a control there is the cross-reference the rule above
+keeps out of code. Before tidying a line you did not write, grep it in
+`docs/mutations.md`; if it is an anchor, leave it or move the anchor in the same
+commit and re-run `sh tools/sweep.sh --only <group>/`.
+
 **The sweep runs weekly against `main`, and green before a milestone closes.**
 `.github/workflows/sweep.yml` is the weekly run and takes a `workflow_dispatch`
 for the other one. It is not in `mise run check` and not on a pull request: it

@@ -17,8 +17,8 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-**Wave 2 of Milestone C is building:** T38, T60, T41, one worktree each off
-`4ad77ab` — `../dcs-eval-wt-a`, `-b`, `-c`; nothing of theirs is on `main`, and
+**Wave 3 of Milestone C is building:** T39, T44, T61, one worktree each off
+`969752f` — `../dcs-eval-wt-a`, `-b`, `-c`; nothing of theirs is on `main`, and
 a stopped wave leaves its branches there. Three branches in flight would all
 conflict on this file, so it is written between waves until Stage 8 closes.
 
@@ -28,15 +28,15 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T37** — `rmcp` over stdio, the `serve` role, the client built per call. Both mutations red under `sweep.sh --only serve/`. No tool is registered yet, deliberately: that is T38's count to make.
-- **T42** — the executor embedded with its SHA-256 and the list of every hash this project has shipped, which is what lets a later row call a file an upgrade rather than a stranger.
-- **T43** — `Saved Games` located through `FOLDERID_SavedGames`, two variants reported as an ambiguity rather than picked, a target under the install refused. ADR 0019 puts the Win32 declarations in the binary.
+- **T38** — the six tools registered, listed and called over an in-memory pair; the test compares the whole listed set, not a count. It also found the row's own filter vacuous: `cargo test` exits 0 on a filter matching nothing, and `tools-listed` can match no Rust path. The row now says `tools_listed`.
+- **T60** — `install-register.tsv` written before a move and marked after, and the `parked/<utc>/` store; two parks in one second land apart.
+- **T41** — the reply watch's handles: open only while waiting, never on a `superseded` session, and none a sibling sweep would trip over.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Wave 3** once wave 2 lands: T39, T44, T61. Then T40, T45, T46; then T58, T59.
+**Wave 4** once wave 3 lands: T40, T45, T46. Then T58 and T59 close Stage 7.
 
 Stages 7 and 8 were re-split before being built, ten rows into fourteen; the
 stage prose in `docs/PLAN.md` says why. Stage 8 needs nothing from Stage 7, so
