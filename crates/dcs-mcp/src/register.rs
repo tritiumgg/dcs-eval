@@ -140,6 +140,16 @@ impl DataDir {
         self.root.as_path().join("replies")
     }
 
+    /// The run record: one line per evaluation, appended to forever.
+    ///
+    /// Beside the register rather than inside it. The register is about what
+    /// this build moved on somebody else's disk and is read back to put
+    /// those files where they were; the run record is about what ran inside
+    /// the game, and nothing in this build ever reads it.
+    pub fn runs_path(&self) -> PathBuf {
+        self.root.as_path().join("runs.jsonl")
+    }
+
     /// The register, to write one action's rows through.
     pub fn register(&self, action: Action) -> Register<'_> {
         Register { data: self, action }
@@ -518,7 +528,10 @@ fn move_file(from: &Path, to: &Path) -> Result<(), RegisterError> {
 /// names a directory and Windows takes no colon in a name. A time before
 /// the epoch is not a thing this build writes, and one handed in anyway
 /// stamps as the epoch rather than failing a park over a clock.
-fn stamp(now: SystemTime) -> String {
+///
+/// Reached from outside this module by the run record, which wants the same
+/// instant written the same way. One calendar in the crate, and this is it.
+pub(crate) fn stamp(now: SystemTime) -> String {
     let secs = now
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

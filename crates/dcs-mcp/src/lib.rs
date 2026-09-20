@@ -52,6 +52,10 @@ pub mod serve;
 // is registered is the set that is listed.
 pub mod tools;
 
+// One line per evaluation, carrying where the bytes came from and the digest
+// the reader took of them. The only writer of that record.
+pub mod runs;
+
 // The read-and-eval verbs from a terminal. Each is a line over the same
 // function its tool is a line over, so the two cannot word a reply apart.
 pub mod cli;

@@ -31,12 +31,17 @@ tracing-subscriber = "0.3"
 # and nothing to the build.
 serde = { version = "1", features = ["derive"] }
 schemars = "1"
+# The run record's format, and the one crate here the binary links for its
+# own sake rather than the SDK's. The alternative is hand-rolled escaping of
+# a Windows path into a JSON string, which goes wrong quietly and only for
+# somebody whose profile carries an unusual character. rmcp resolves this
+# already, so naming it adds a line to this file and nothing to the build.
+serde_json = "1"
 
 [dev-dependencies]
 # The stand-in executor, so a test can play the executor's side of the wire
 # without DCS.
 dcs-eval = { path = "../dcs-eval", features = ["standin"] }
-serde_json = "1"
 # The client half of the SDK, for the tests that drive a real MCP session over
 # an in-memory pair. A dev-dependency and not a dependency: a plain
 # `cargo build` resolves none of these, so the shipped binary links no client.

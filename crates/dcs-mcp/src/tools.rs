@@ -23,7 +23,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use dcs_eval::file::{self, Roots};
 use dcs_eval::game;
@@ -38,6 +38,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{tool, tool_router};
 
 use crate::register::{DataDir, RegisterError};
+use crate::runs::{self, Chunk, Run};
 use crate::serve::{Client, Host, Serve, host_of, output_in};
 use crate::verify;
 use crate::wording::{self, answered, pending, refuse, say};
@@ -75,12 +76,22 @@ fn host_for(serve: &Serve, host: Option<&str>) -> Result<Host, CallToolResult> {
     }
 }
 
+/// The host this call is about and the session published for it.
+///
+/// Both, because a call that records what it ran names the host on the line
+/// and a second read of the `host` argument would be a second chance to
+/// disagree with the one the request went to.
+fn session_for(serve: &Serve, host: Option<&str>) -> Result<(Host, Client), CallToolResult> {
+    let host = host_for(serve, host)?;
+    let client = serve
+        .client_at(host)
+        .map_err(|why| refuse("no-session", vec![why.to_string()]))?;
+    Ok((host, client))
+}
+
 /// The executor this call is about: the session published for that host.
 fn client_for(serve: &Serve, host: Option<&str>) -> Result<Client, CallToolResult> {
-    let host = host_for(serve, host)?;
-    serve
-        .client_at(host)
-        .map_err(|why| refuse("no-session", vec![why.to_string()]))
+    session_for(serve, host).map(|(_, client)| client)
 }
 
 /// The write directories the containment rules fire on: the one variant this
@@ -161,9 +172,32 @@ impl Answered {
 }
 
 /// Publish one request over the session and render what that one came to.
-fn one(client: &Client, spec: Spec, upto: Duration) -> Answered {
+///
+/// `record` is the run this is, where there is a record to be written for it
+/// — the two eval verbs — and nothing for the calls that evaluate no chunk.
+/// The line is appended here rather than in either caller, because this is
+/// the one place both of them come through, so a record can neither be
+/// written twice nor be left off one of them.
+fn one(
+    client: &Client,
+    spec: Spec,
+    upto: Duration,
+    record: Option<(&DataDir, Run<'_>)>,
+) -> Answered {
     let mut window = Pipeline::over(client.handshake(), vec![spec], 1, upto);
     let item = window.next();
+    if let Some((data, run)) = record {
+        let line = runs::line(&run, SystemTime::now(), item.as_ref());
+        // A chunk that already ran is not un-run by a record that could not
+        // be kept, and refusing here would hide a result the caller asked
+        // for behind a failure at something else. Decision record 0021.
+        if let Err(why) = runs::append(data, &line) {
+            tracing::warn!(
+                "the run record at {} could not be appended to: {why}",
+                data.runs_path().display()
+            );
+        }
+    }
     // The file, not the envelope. The envelope is a parse, and parsing
     // normalises a header line's ending; what a caller asking to keep the
     // reply is asking for is the bytes the executor wrote, which is the file
@@ -308,7 +342,9 @@ pub(crate) fn ping(serve: &Serve, host: Option<&str>, upto: Duration) -> Answere
     };
     let stamp = client.handshake().stamp.clone();
     let spec = Spec::new(&[("op", "ping"), ("for", &stamp)], b"");
-    one(&client, spec, upto)
+    // No record: a ping evaluates nothing, so there is no chunk whose
+    // provenance anybody could want.
+    one(&client, spec, upto, None)
 }
 
 /// What `dcs_game_state` and the `game-state` verb both do.
@@ -335,9 +371,17 @@ pub(crate) fn eval(
     max_instructions: Option<u64>,
     upto: Duration,
 ) -> Answered {
-    let client = match client_for(serve, host) {
-        Ok(client) => client,
+    let (at, client) = match session_for(serve, host) {
+        Ok(found) => found,
         Err(no) => return Answered::plain(no),
+    };
+    // Before anything is published, so a chunk never runs without somewhere
+    // for its record to go. A directory that will not resolve is the one
+    // thing here worth refusing over: it is a misconfiguration, and running
+    // the chunk anyway would leave a result nobody can trace.
+    let data = match data_dir(serve) {
+        Ok(data) => data,
+        Err(why) => return Answered::plain(refuse("refused", vec![why.to_string()])),
     };
     let stamp = client.handshake().stamp.clone();
     let budget = max_instructions.map(|max| max.to_string());
@@ -349,7 +393,17 @@ pub(crate) fn eval(
         headers.push(("max_instructions", budget.as_str()));
     }
     let spec = Spec::new(&headers, code.as_bytes());
-    one(&client, spec, upto)
+    let run = Run {
+        host: at,
+        state,
+        stamp: stamp.as_str(),
+        budget: budget.as_deref(),
+        chunk: Chunk::Inline {
+            chunkname,
+            bytes: code.len(),
+        },
+    };
+    one(&client, spec, upto, Some((&data, run)))
 }
 
 /// What `dcs_eval_file` and the `eval --file` verb both do.
@@ -361,8 +415,8 @@ pub(crate) fn eval_file(
     max_instructions: Option<u64>,
     upto: Duration,
 ) -> Answered {
-    let client = match client_for(serve, host) {
-        Ok(client) => client,
+    let (at, client) = match session_for(serve, host) {
+        Ok(found) => found,
         Err(no) => return Answered::plain(no),
     };
     let refused = |why: String| Answered::plain(refuse("refused", vec![why]));
@@ -403,8 +457,23 @@ pub(crate) fn eval_file(
         Ok(source) => source,
         Err(why) => return refused(why.to_string()),
     };
+    // After the read, and that is the whole rule: every refusal above this
+    // line returns before a byte of the file has been opened, so a path this
+    // server would not read leaves no trace of having been asked for. The
+    // ordering is the guard; a second one here could rot apart from it.
+    let data = match data_dir(serve) {
+        Ok(data) => data,
+        Err(why) => return refused(why.to_string()),
+    };
     let spec = Spec::new(&headers, source.body());
-    let mut answered = one(&client, spec, upto);
+    let run = Run {
+        host: at,
+        state,
+        stamp: stamp.as_str(),
+        budget: budget.as_deref(),
+        chunk: Chunk::File(&source),
+    };
+    let mut answered = one(&client, spec, upto, Some((&data, run)));
     // Which bytes ran, said beside the answer rather than instead of it.
     answered.answer.content.push(ContentBlock::text(format!(
         "source: {}\nsha256: {}",
