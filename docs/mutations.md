@@ -830,6 +830,14 @@ not cover is printed by the sweep itself rather than left to be assumed.
   saying: a keepalive that touches the executor is not one that touches the
   wire, and the two instruments watch the two halves of the rule apart.
 
+  What the check does **not** watch is worth the same plainness. The plan row
+  says no thread of the server wakes; what is read is three observables — the
+  bytes written, the arm file, the request directory — so a task that woke on
+  a timer and touched none of the three would pass every assertion in the
+  test. The gap is covered indirectly by the two entries below, which hold the
+  runtime the release actually builds to one that starts no driver for such a
+  task to wake on, and not at all by this one.
+
   Nothing else in the crate was observed failing: the other 107 tests of
   `cargo test -p dcs-mcp` passed under the edit, T41's `watching` command
   among them. `serve`'s and `watching`'s tests are plain `#[test]`s with no
@@ -858,6 +866,63 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +                 }
 +             });
 +         }
+```
+
+### idle/enable-all-in-place-of-the-timer
+
+- task: T59
+- command: `mise exec -- cargo test -p dcs-mcp idle`
+- reddens: `idle::the_shipped_runtime_is_current_thread_with_a_timer_and_no_io_driver`
+- note: the natural wrong turn at that builder, and the one the comment beside
+  it argues against by name: a driver is missing, `enable_all` is the call that
+  makes every complaint go away, and it brings the IO driver along with the
+  timer that was wanted. What goes red is the positive arm — the observed
+  message is `the server's runtime no longer calls .enable_time()` — because
+  the two wanted calls are checked before the two refused ones and the timer's
+  own spelling is gone.
+
+  This control reads the source text rather than a built runtime, which is the
+  thing to understand before trusting it. The test beside it runs on the
+  harness's runtime and can never see the one `run` builds, and tokio's
+  `Builder` hands back nothing that says which drivers it was asked for, so the
+  shape is held by `include_str!` over `serve.rs`. A mutation here is therefore
+  observed as a changed line of source and not as changed behaviour, and the
+  control is worth exactly that much: it catches the edit, not its consequence.
+
+  Nothing else in the crate notices. Under this edit `cargo test -p dcs-mcp`
+  ran 108 tests with 107 passing and this one failing — the server still comes
+  up and still answers, which is why a check that reads the builder's own words
+  is the only thing standing here.
+
+```sweep-edit crates/dcs-mcp/src/serve.rs
+-         .enable_time()
++         .enable_all()
+```
+
+### idle/enable-all-beside-the-timer
+
+- task: T59
+- command: `mise exec -- cargo test -p dcs-mcp idle`
+- reddens: `idle::the_shipped_runtime_is_current_thread_with_a_timer_and_no_io_driver`
+- note: the same reach for `enable_all`, added beside the timer rather than
+  over it, which is what the entry above cannot observe: with `.enable_time()`
+  still spelt out, both positive assertions hold and the red comes from the
+  refusal instead. The observed message is the negative arm's own, `the
+  server's runtime now calls .enable_all(…), which starts a driver the stdio
+  transport does not need`. Same tally as above: 107 passed, this one failed.
+
+  The sibling refusal of `.enable_io(` is **not** proved by any mutation, and
+  deliberately so rather than by oversight. `Builder::enable_io` does not exist
+  unless tokio's `net` feature is on, and this build asks for `rt` and `time`
+  only, so the edit that would redden that assertion does not compile — which
+  the runner reports as BUILD-FAILED, a verdict that says nothing about the
+  check. That assertion stands against the day somebody turns the feature on,
+  and until then it is an unproved line, written down here as one.
+
+```sweep-edit crates/dcs-mcp/src/serve.rs
+-         .enable_time()
++         .enable_time()
++         .enable_all()
 ```
 
 ---
@@ -1239,10 +1304,10 @@ an entry here like any other, and both figures move.
 - out-of-scope: not swept. Stages 7 to 9 are the MCP server, the installer and
   the live proofs; the coverage figure is summed over Stages 3 to 6 and does
   not reach them, and the last of them needs a running game rather than a
-  runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
-  below here is the figure's scope and not an absence of code to mutate.
+  runner. Stages 7 and 8 are built in full, so what keeps the one row below
+  here is the figure's scope and not an absence of code to mutate.
 - controls: 1
-- breakdown: T52 one, 1. Every other Stage 7 and Stage 8 row is built, and its
+- breakdown: T52 one, 1. Every Stage 7 and Stage 8 row is built, and its
   mutations are entries above, counted there rather than here. Stage 9's
   remaining rows name no mutation
   and are owed none. Only T52 keeps this group alive: it is Stage 9's, and it
