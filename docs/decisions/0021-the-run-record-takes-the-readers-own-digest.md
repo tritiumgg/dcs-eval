@@ -62,6 +62,14 @@ computed by the module that writes the line.
 - **The path is recorded as this build resolved it**, with backslashes, and
   not respelt to match the forward slashes in the sample above. A second
   spelling would name a path the reader never opened.
+- **`budget` is the number the call asked for, not the wire's spelling of
+  it.** The sample above shows `"instructions=1000000"`, which is how a
+  ceiling is written into a header; on a line of the record it would be a
+  count nobody can compare without first splitting a string on `=`. The field
+  holds the number as it was asked for, and `null` where the call named none.
+  Rejected: copying the header's text — it matches the sample, at the cost of
+  making the one field on the line anybody would sort by the only one that
+  has to be parsed twice.
 - **The line is written from one seam.** Both eval verbs come through
   `tools::one`, and the record is appended there, so it can neither be
   written twice nor be left off one of them.
