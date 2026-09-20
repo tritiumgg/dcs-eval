@@ -37,12 +37,6 @@ pub struct Variant {
     pub path: Real,
 }
 
-impl fmt::Display for Variant {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.name)
-    }
-}
-
 impl SavedGames {
     /// The shell's answer, resolved.
     pub fn known() -> Result<Self, LocateError> {
@@ -57,10 +51,6 @@ impl SavedGames {
         Ok(Self {
             root: paths::resolve(path)?,
         })
-    }
-
-    pub fn root(&self) -> &Real {
-        &self.root
     }
 
     /// Every `DCS*` directory directly under the root, sorted by folded
@@ -238,6 +228,20 @@ impl fmt::Display for LocateError {
                 variants.len(),
                 names(variants)
             ),
+            Self::NoSuchVariant {
+                root,
+                wanted,
+                variants,
+            } if variants.is_empty() => {
+                // A name asked for in a root holding nothing reaches this
+                // arm rather than `NoVariant`, because the filter runs
+                // before anything is counted. Without this the line would
+                // offer "only " and then stop.
+                write!(
+                    f,
+                    "{root}: holds no {wanted}, and no DCS write directory at all"
+                )
+            }
             Self::NoSuchVariant {
                 root,
                 wanted,
@@ -433,6 +437,26 @@ mod tests {
         for named in ["DCS.dedicated", "DCS.openbeta", "DCS,"] {
             assert!(line.contains(named), "the line names {named}: {line}");
         }
+    }
+
+    #[test]
+    fn a_named_variant_in_an_empty_root_offers_no_empty_list() {
+        let b = Sandbox::new();
+        b.dir("Other");
+        let sg = SavedGames::at(&b.path).expect("the root resolves");
+        // The filter runs before anything is counted, so naming a variant
+        // in a root that holds none is this refusal and not `NoVariant`.
+        let err = sg.target(Some("DCS"), None).expect_err("no such variant");
+        assert!(matches!(err, LocateError::NoSuchVariant { .. }), "{err}");
+        let line = err.to_string();
+        assert!(
+            !line.contains("only"),
+            "a refusal with nothing to list does not offer a list: {line}"
+        );
+        assert!(
+            line.contains("DCS"),
+            "it still names what was asked for: {line}"
+        );
     }
 
     #[test]
