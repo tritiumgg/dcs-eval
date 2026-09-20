@@ -12,14 +12,28 @@
 //! that command vacuously green. The unit tests earn the same substring
 //! through their module path.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Long enough that a cold, loaded machine is not mistaken for a hang, short
 /// enough that a hang is reported by this test rather than by CI's own clock.
 const PATIENCE: Duration = Duration::from_secs(20);
+
+/// Read one of the child's pipes to the end on a thread of its own, and hand
+/// back what it carried. The thread is never joined: if the child never closes
+/// the pipe the test gives up on the channel and kills it, and the thread goes
+/// with the process.
+fn drain(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<io::Result<Vec<u8>>> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let read = pipe.read_to_end(&mut bytes).map(|_| bytes);
+        let _ = tx.send(read);
+    });
+    rx
+}
 
 #[test]
 fn serve_writes_only_protocol_frames_to_stdout() {
@@ -61,39 +75,40 @@ fn serve_writes_only_protocol_frames_to_stdout() {
     }
 
     // Reading both pipes to the end is what would hang if the server did not
-    // come down, so it happens on a thread this test can give up on.
-    let mut stdout = child.stdout.take().expect("the server's stdout is a pipe");
-    let mut stderr = child.stderr.take().expect("the server's stderr is a pipe");
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        let read = std::io::copy(&mut stdout, &mut out).and_then(|_| {
-            std::io::copy(&mut stderr, &mut err)?;
-            Ok(())
-        });
-        let _ = tx.send(read.map(|()| (out, err)));
-    });
+    // come down, so it happens off this thread, which can give up on it.
+    //
+    // A thread each, and not one thread reading them in turn: a pipe whose
+    // buffer fills blocks the writer, so a server that said more on stderr than
+    // the buffer holds would stall there while this side was still waiting for
+    // stdout to end. The hang would be reported as the server refusing to come
+    // down, which is a different fault entirely.
+    let out = drain(child.stdout.take().expect("the server's stdout is a pipe"));
+    let err = drain(child.stderr.take().expect("the server's stderr is a pipe"));
 
-    let (out, err) = match rx.recv_timeout(PATIENCE) {
-        Ok(Ok(streams)) => streams,
-        Ok(Err(why)) => {
-            let _ = child.kill();
-            panic!("the server's streams did not read: {why}");
-        }
-        Err(_) => {
-            let _ = child.kill();
-            panic!(
-                "the server was still holding its streams open {} s after stdin closed: \
-                 a client that hangs up leaves it running",
-                PATIENCE.as_secs()
-            );
+    // One deadline over both, so a server that hangs is still reported inside
+    // the patience rather than twice it.
+    let deadline = Instant::now() + PATIENCE;
+    let mut collect = |which: &str, rx: &mpsc::Receiver<io::Result<Vec<u8>>>| {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(Ok(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+            Ok(Err(why)) => {
+                let _ = child.kill();
+                panic!("the server's {which} did not read: {why}");
+            }
+            Err(_) => {
+                let _ = child.kill();
+                panic!(
+                    "the server was still holding {which} open {} s after stdin closed: \
+                     a client that hangs up leaves it running",
+                    PATIENCE.as_secs()
+                );
+            }
         }
     };
+    let out = collect("stdout", &out);
+    let err = collect("stderr", &err);
     let _ = child.wait();
-
-    let out = String::from_utf8_lossy(&out).into_owned();
-    let err = String::from_utf8_lossy(&err).into_owned();
 
     assert!(
         !out.trim().is_empty(),
