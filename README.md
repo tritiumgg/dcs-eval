@@ -91,7 +91,7 @@ lists and answers all six tools below; each takes an optional `host`, which is
 
 | Tool | What it says |
 |---|---|
-| `dcs_status` | what is readable without asking the executor anything: installed, session alive, phase, armed, every problem found |
+| `dcs_status` | what is readable without asking the executor anything, and it writes nothing: the hook's hash against the release this build carries, the `Export.lua` line present exactly once, any second hook beside ours, the two `autoexec.cfg` policy keys as they are written — then the session, alive, phase, armed, every problem found. A DCS build that differs from the one this was measured on is reported as a difference and never as a fault |
 | `dcs_ping` | liveness proved by a reply, with the phase and tick |
 | `dcs_game_state` | what the game is doing, every fact it rests on, and the basis of each value |
 | `dcs_eval` | evaluate a chunk in the state you name |
