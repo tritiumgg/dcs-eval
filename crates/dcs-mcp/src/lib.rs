@@ -20,6 +20,10 @@ pub mod diag;
 // which trees a target may not be in.
 pub mod locate;
 
+// The server's own data directory: the register of what was moved, written
+// before the move, and the store the displaced copies are moved into.
+pub mod register;
+
 // The MCP server itself: the options it is started with, the client it builds
 // per call, and the stdio transport it speaks over.
 pub mod serve;
