@@ -71,7 +71,15 @@ fn occurrences(bytes: &[u8]) -> usize {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// There was no `Export.lua`, so one was written holding the line and
-    /// nothing else. Nothing was displaced, so nothing was parked.
+    /// nothing else. Nothing was displaced, so nothing was parked, and
+    /// nothing is written to the register either: the register records
+    /// what was displaced, and here nothing was.
+    ///
+    /// So this answer is the only place the fact lives. A removal that
+    /// takes the line back out of a file created this way leaves an empty
+    /// `Export.lua` that only this build ever had a use for, and no row on
+    /// disk says so — whoever builds the removal decides what to do about
+    /// that, from an empty file rather than from a record.
     Created,
     /// The line was appended to a file that was already there, after a
     /// copy of it was parked. `newline_added` says whether the file was
