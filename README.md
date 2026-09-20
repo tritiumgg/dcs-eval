@@ -129,17 +129,45 @@ credentials are refused too, is *not built*; nor is how the roots are
 configured on the command line. Until a root can be allowed, the allowed list
 is empty — and an empty list admits nothing rather than everything, so
 `dcs_eval_file` refuses every path you give it by that same rule. Use
-`dcs_eval` meanwhile.
+`dcs_eval` meanwhile. `eval --file` on the command line is refused for the
+same reason, and will be until a root can be allowed.
 
-## Use it from a terminal — *not built*
+## Use it from a terminal
 
-The CLI speaks the same functions as the tools and prints the same words:
+Four verbs, and each one calls the same function its tool calls, so the words
+you read here are the words the tool gives — the head word, the reply's
+headers and body, a refusal that says why, a `pending` that names its id.
 
 ```
-dcs-mcp eval hook "return #coalition.getGroups(2)"
-dcs-mcp eval-file missionscripting ./probe.lua --out reply.txt
-dcs-mcp game-state
+dcs-mcp status --saved-games "%USERPROFILE%\Saved Games" --variant DCS.openbeta
+dcs-mcp ping --saved-games ... --variant DCS.openbeta
+dcs-mcp game-state --saved-games ... --variant DCS.openbeta
+dcs-mcp eval hook "return #coalition.getGroups(2)" --saved-games ... --variant DCS.openbeta
+dcs-mcp eval missionscripting --file .\probe.lua --saved-games ... --variant DCS.openbeta
 ```
+
+`--saved-games <dir>` and `--variant <name>` are required, the same as for
+`serve`, and `--host hook|export` picks which of the executor's two hosts to
+talk to. `--wait-seconds`, `--max-instructions` and `--chunkname` are the
+call's own, and a verb waits 15 seconds by default — a wait and never a
+limit, exactly as for the tools.
+
+`--out <path>` writes the reply to a file, and `--capture` keeps a copy under
+this build's own data directory (`--data-dir <dir>` puts it somewhere else).
+Both write the bytes the executor published, byte for byte, rather than a
+re-rendering of them. Where no reply came back — a `pending`, or a request
+that was refused before it was sent — **neither writes anything at all**, not
+even an empty file, because an empty file reads back as a reply that returned
+nothing. `status` and `game-state` answer without one reply off the wire, so
+they refuse both flags rather than accept them and write nothing.
+
+A verb exits 0 for an answer or a `pending`, 1 where the answer is a refusal
+or a file you asked for could not be written, and 2 for a command line that
+would not parse.
+
+`install`, `verify` and `uninstall` are *not built*. An `--out` path is not
+yet judged against the containment rule the install paths are judged by —
+*not built*; `--capture` is, because it goes through the same data directory.
 
 ## Building it
 
