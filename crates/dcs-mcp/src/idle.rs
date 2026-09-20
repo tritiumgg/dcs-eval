@@ -12,6 +12,15 @@
 //! file, which a publish makes and the executor removes, and the request
 //! directory, which is empty exactly when nothing has been published.
 //!
+//! What those instruments do not reach is worth writing down, because the
+//! sentence above is wider than they are. Three observables are read — the
+//! bytes, the arm file, the request directory — and a task that woke on a
+//! timer and touched none of the three would go by unseen here. Nothing
+//! catches such a task by watching it wake; what stands against it instead is
+//! the second test below, which holds the shipped runtime to a builder that
+//! starts no IO driver, and the plain fact that this crate's own code spawns
+//! nothing.
+//!
 //! **The sixty seconds are the runtime's own, not the wall clock's.** The
 //! test runs under a paused clock, which tokio advances only when it has
 //! nothing left to run. So the clock reaching sixty seconds at near-zero real
@@ -150,7 +159,6 @@ async fn sixty_seconds_of_silence_wakes_nothing() {
 
     let quiet = written.load(Ordering::Relaxed);
     let began = tokio::time::Instant::now();
-    let wall = std::time::Instant::now();
     tokio::time::sleep(SILENCE).await;
 
     assert!(
@@ -175,16 +183,6 @@ async fn sixty_seconds_of_silence_wakes_nothing() {
         Vec::<String>::new(),
         "a request was published in sixty seconds of silence"
     );
-    // A statement about cost, not a measurement: the paused clock covered
-    // sixty seconds only because the runtime had nothing to run in them, and
-    // a timer that had been registered would have burnt real time here.
-    assert!(
-        wall.elapsed() < Duration::from_secs(10),
-        "sixty virtual seconds cost {:?} of wall clock, which is a runtime \
-         that was not idle",
-        wall.elapsed()
-    );
-
     // ---- one call, so the instruments are known to read at all ------------
 
     let arguments = match serde_json::json!({ "wait_seconds": 0 }) {
