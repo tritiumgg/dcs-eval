@@ -40,6 +40,10 @@ pub mod install;
 // put back where it was found.
 pub mod uninstall;
 
+// What the installation looks like from outside: the hook's hash, the one
+// line in `Export.lua`, the policy gate, the session — and no write at all.
+pub mod verify;
+
 // The MCP server itself: the options it is started with, the client it builds
 // per call, and the stdio transport it speaks over.
 pub mod serve;

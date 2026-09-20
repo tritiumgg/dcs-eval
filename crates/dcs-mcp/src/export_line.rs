@@ -54,7 +54,12 @@ pub fn path(variant: &Real) -> PathBuf {
 /// One trailing carriage return is stripped before the comparison, so an
 /// editor that converted the whole file to CRLF after the line went in
 /// cannot make this build think the line is missing and add a second one.
-fn occurrences(bytes: &[u8]) -> usize {
+///
+/// Shared with the verification that reports a duplicated line, so that the
+/// count which decides whether a line goes in is the count a later report
+/// takes of the same file. Two counters would answer the same question
+/// twice and could come to answer it differently.
+pub(crate) fn occurrences(bytes: &[u8]) -> usize {
     bytes
         .split(|b| *b == b'\n')
         .filter(|line| {
