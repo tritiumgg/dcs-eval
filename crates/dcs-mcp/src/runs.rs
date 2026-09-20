@@ -50,7 +50,10 @@ pub(crate) struct Run<'a> {
     pub state: &'a str,
     /// The executor session the request was fenced with.
     pub stamp: &'a str,
-    /// The instruction budget, where the call named one.
+    /// The instruction budget, where the call named one: the number asked
+    /// for, and not the `instructions=<n>` a header spells it with. Decision
+    /// record 0021 says why the record keeps a count rather than the wire's
+    /// wording of it.
     pub budget: Option<&'a str>,
     pub chunk: Chunk<'a>,
 }
@@ -273,9 +276,9 @@ mod tests {
         );
         assert_eq!(code, 0, "an answered eval is not an error: {shown}");
 
-        let rows = rows(&data);
-        assert_eq!(rows.len(), 1, "one evaluation, one line: {rows:?}");
-        let row = &rows[0];
+        let recorded = rows(&data);
+        assert_eq!(recorded.len(), 1, "one evaluation, one line: {recorded:?}");
+        let row = &recorded[0];
         assert_eq!(row["source"], "chunk", "{row}");
         assert_eq!(row["path"], Value::Null, "a chunk has no path: {row}");
         assert_eq!(
@@ -299,6 +302,33 @@ mod tests {
         assert!(
             ts.len() == 16 && ts.ends_with('Z') && ts.as_bytes()[8] == b'T',
             "stamped the way this build writes an instant: {ts}"
+        );
+
+        // A second chunk into the same directory. The record is appended to,
+        // not rewritten: a writer that truncated would leave one line behind
+        // and every assertion above it would still hold.
+        let first = row.clone();
+        let again = "return marker, 2";
+        let (code, shown) = ran(
+            &mut s,
+            args(&box_, &["eval", "hook", again, "--wait-seconds", "10"]),
+        );
+        assert_eq!(code, 0, "the second eval is answered too: {shown}");
+        let recorded = rows(&data);
+        assert_eq!(
+            recorded.len(),
+            2,
+            "two evaluations, two lines: {recorded:?}"
+        );
+        assert_eq!(
+            recorded[0], first,
+            "the first line is where it was, unaltered"
+        );
+        assert_eq!(
+            recorded[1]["bytes"],
+            Value::from(again.len()),
+            "and the second line is the second chunk's: {}",
+            recorded[1]
         );
     }
 
