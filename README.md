@@ -48,7 +48,9 @@ dcs-mcp verify
 `Scripts\Hooks\`, and appends one line to `Export.lua`. It never writes to the
 DCS install itself, and nothing already in `Saved Games` is deleted or
 overwritten — a file in the way is registered and moved aside, and `uninstall`
-puts it back.
+puts it back. The register and the copies live in `%LOCALAPPDATA%\dcs-mcp\`,
+outside both DCS folders so that removing either leaves them standing, and
+nothing under there is ever deleted.
 
 `verify` re-checks the installation and writes nothing.
 

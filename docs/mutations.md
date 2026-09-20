@@ -613,6 +613,53 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +         if found.len() > 2 {
 ```
 
+### park/deleted-in-place-of-parked
+
+- task: T60
+- command: `mise exec -- cargo test -p dcs-mcp register`
+- reddens: `a_parked_file_is_recoverable_from_its_path_relative_to_the_variant`
+- note: the displaced file is removed rather than moved aside, which is the
+  defect the park store exists against — the install still "succeeds" and the
+  file is gone. The move is one named call, so the anchor occurs exactly once.
+  The replacement names a variant that really exists, so the mutant compiles
+  clean and the red that comes back is the assertion's own words rather than a
+  compiler's; a mutation that failed to build would go red without printing
+  anything the runner matches on. `two_parks_in_one_second_land_in_distinct_directories`
+  goes red alongside it, because it too asserts each park holds its own file;
+  the entry names the check the plan cell means and this says why the red is
+  two lines rather than one.
+
+```sweep-edit crates/dcs-mcp/src/register.rs
+-             move_file(source.as_path(), &destination)?;
++             std::fs::remove_file(source.as_path()).map_err(|why| RegisterError::Disk {
++                 path: source.as_path().to_owned(),
++                 why,
++             })?;
+```
+
+### register/row-written-after-the-move
+
+- task: T60
+- command: `mise exec -- cargo test -p dcs-mcp register`
+- reddens: `the_row_goes_in_before_the_move_and_is_marked_after`
+- note: two independent locals swapped, so the mutant compiles and warns about
+  nothing, and the finished state is byte-identical — the only difference is
+  what a run killed between the two would leave behind. That is why the check
+  makes its assertions from *inside* the closure, at the moment of the move:
+  read afterwards, both orderings look the same and this mutation would redden
+  nothing at all. The red is `one row, already there / left: 0 / right: 1` —
+  the register file does not exist yet where the move expected one `pending`
+  row. `a_move_that_fails_leaves_its_row_pending` goes red with it, for the
+  same reason from the other side: with the append moved after the closure, a
+  closure that refuses leaves no row to be pending.
+
+```sweep-edit crates/dcs-mcp/src/register.rs
+-         let at = self.append(now, file, sha256)?;
+-         let done = moving()?;
++         let done = moving()?;
++         let at = self.append(now, file, sha256)?;
+```
+
 ---
 
 ## Out of scope
@@ -657,9 +704,9 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 20
-- breakdown: T38, T39, T58, T59 one each, 4; T40, T41, T60, T44, T61, T46 two
-  each, 12; T45 three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
+- controls: 18
+- breakdown: T38, T39, T58, T59 one each, 4; T40, T41, T44, T61, T46 two
+  each, 10; T45 three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
   rows move into the inventory proper.
 
