@@ -15,7 +15,8 @@ use dcs_mcp::{cli, serve};
 /// anything else is a usage line rather than a silence.
 fn usage() -> String {
     format!(
-        "usage: dcs-mcp serve --saved-games <dir> --variant <name> [--host hook|export]\n{}",
+        "usage: dcs-mcp serve --saved-games <dir> --variant <name> \
+         [--host hook|export]\n       [--data-dir <dir>]\n{}",
         cli::USAGE
     )
 }
