@@ -205,7 +205,8 @@ impl fmt::Display for Problem {
 pub struct Report {
     /// The write directory this was taken against.
     pub variant: PathBuf,
-    /// The build this binary carries, as one line.
+    /// The release this report was taken against, as one line. For every
+    /// caller but a test that is the build this binary carries.
     pub release: String,
     pub hook: Hook,
     pub line: Line,
@@ -364,7 +365,10 @@ pub fn verify_at(
 
     Report {
         variant: variant.as_path().to_owned(),
-        release: embed::release_line(),
+        // The release the hook above was compared against, and not the
+        // embedded one regardless: a headline naming a build no part of
+        // the report under it was taken against is worse than none.
+        release: embed::release_line_of(release.name, release.sha256),
         hook,
         line,
         session,
@@ -869,28 +873,37 @@ mod tests {
         let (_b, variant, output) = fixture();
         let _ex = installed(&variant, &output);
         let (release, _older, _current) = a_release();
-        let stray = variant
-            .as_path()
-            .join("Scripts")
-            .join("Hooks")
-            .join("DcsApiEval.lua");
-        put(&stray, b"-- the prior project\n");
+        let hooks = variant.as_path().join("Scripts").join("Hooks");
+        // One of each prefix. The prior project's is the case a user
+        // upgrading meets; a second file of ours under another name is the
+        // one a developer leaves behind, and it is not caught by the leaf
+        // name the release is looked up by.
+        let incumbent = hooks.join("DcsApiEval.lua");
+        let ours_again = hooks.join("DcsEvalExecutor.old.lua");
+        put(&incumbent, b"-- the prior project\n");
+        put(&ours_again, b"-- a copy left behind\n");
 
         let report = verify_at(&variant, &output, &release, None, an_instant());
 
-        assert!(
-            report
-                .problems
-                .iter()
-                .any(|p| matches!(p, Problem::OtherHook { path } if path == &stray)),
-            "{:?}",
+        let strays: Vec<&PathBuf> = report
+            .problems
+            .iter()
+            .filter_map(|p| match p {
+                Problem::OtherHook { path } => Some(path),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            strays,
+            vec![&incumbent, &ours_again],
+            "both prefixes are named, in the one order: {:?}",
             report.problems
         );
         assert!(!report.verified());
+        let rendered = rendered(&report);
         assert!(
-            rendered(&report).contains("DcsApiEval.lua"),
-            "the file is named where a user would read it: {}",
-            rendered(&report)
+            rendered.contains("DcsApiEval.lua") && rendered.contains("DcsEvalExecutor.old.lua"),
+            "the files are named where a user would read them: {rendered}"
         );
     }
 
@@ -1159,6 +1172,158 @@ mod tests {
     }
 
     #[test]
+    fn an_export_file_without_the_line_is_named_a_problem() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let (release, _older, _current) = a_release();
+        let export = export_line::path(&variant);
+        // Somebody else's Export.lua, with ours taken back out of it: a
+        // file that is there is not the same answer as no file at all, and
+        // the two would be indistinguishable if only the second were held.
+        put(&export, b"-- Tacview\n");
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+
+        assert_eq!(report.line, Line::Absent);
+        assert!(
+            report.problems.iter().any(|p| matches!(
+                p,
+                Problem::ExportLineAbsent { path } if path == &export
+            )),
+            "{:?}",
+            report.problems
+        );
+        assert!(!report.verified());
+    }
+
+    /// A file the reader will not read, made without needing a permission
+    /// this test cannot rely on having: a directory at the name where a
+    /// file belongs fails `fs::read` on every host, and with something
+    /// other than `NotFound`, which is the branch under test.
+    fn a_directory_where_a_file_belongs(path: &Path) {
+        if path.exists() {
+            fs::remove_file(path).expect("what was there goes");
+        }
+        fs::create_dir_all(path).expect("the directory stands in for the file");
+    }
+
+    #[test]
+    fn a_hook_that_would_not_read_is_reported_as_unreadable() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let (release, _older, _current) = a_release();
+        let hook = variant
+            .as_path()
+            .join("Scripts")
+            .join("Hooks")
+            .join("DcsEvalExecutor.lua");
+        a_directory_where_a_file_belongs(&hook);
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+
+        assert!(
+            matches!(report.hook, Hook::Unreadable { .. }),
+            "{:?}",
+            report.hook
+        );
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|p| matches!(p, Problem::HookUnreadable { path, .. } if path == &hook)),
+            "{:?}",
+            report.problems
+        );
+        assert!(
+            rendered(&report).contains("hook: could not be read"),
+            "{}",
+            rendered(&report)
+        );
+    }
+
+    #[test]
+    fn an_export_that_would_not_read_is_reported_as_unreadable() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let (release, _older, _current) = a_release();
+        let export = export_line::path(&variant);
+        a_directory_where_a_file_belongs(&export);
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+
+        assert!(
+            matches!(report.line, Line::Unreadable { .. }),
+            "{:?}",
+            report.line
+        );
+        assert!(
+            report.problems.iter().any(
+                |p| matches!(p, Problem::ExportFileUnreadable { path, .. } if path == &export)
+            ),
+            "{:?}",
+            report.problems
+        );
+    }
+
+    #[test]
+    fn an_autoexec_that_would_not_read_is_a_problem_and_neither_key_is_guessed() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let (release, _older, _current) = a_release();
+        let gate = variant.as_path().join("Config").join("autoexec.cfg");
+        a_directory_where_a_file_belongs(&gate);
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+
+        assert!(
+            matches!(report.gate.file, GateFile::Unreadable { .. }),
+            "{:?}",
+            report.gate.file
+        );
+        assert_eq!(
+            (report.gate.unsafe_api, report.gate.dostring_in),
+            (None, None),
+            "a file that would not read reports neither key rather than \
+             reporting both as unset"
+        );
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|p| matches!(p, Problem::AutoexecUnreadable { path, .. } if path == &gate)),
+            "{:?}",
+            report.problems
+        );
+    }
+
+    #[test]
+    fn a_session_that_has_armed_reports_its_heartbeat() {
+        let (_b, variant, output) = fixture();
+        let mut ex = installed(&variant, &output);
+        let (release, _older, _current) = a_release();
+        ex.armed = true;
+        ex.phase = "simulation".to_owned();
+        ex.beat(an_instant()).expect("the heartbeat is published");
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+
+        let beat = report
+            .session
+            .session
+            .as_ref()
+            .and_then(|session| session.beat.as_ref())
+            .unwrap_or_else(|| panic!("the heartbeat is read: {}", rendered(&report)));
+        assert_eq!(beat.phase, "simulation");
+        assert!(beat.belongs, "and it is this session's");
+        assert!(
+            rendered(&report).contains("heartbeat: phase simulation"),
+            "the phase reaches the line a user reads: {}",
+            rendered(&report)
+        );
+        assert!(report.verified(), "{}", rendered(&report));
+    }
+
+    #[test]
     fn verify_of_the_embedded_release_is_the_one_a_report_names() {
         let (_b, variant, output) = fixture();
 
@@ -1168,6 +1333,28 @@ mod tests {
             report.release,
             embed::release_line(),
             "the line a user reads names the build this binary carries"
+        );
+    }
+
+    #[test]
+    fn a_report_names_the_release_it_was_taken_against() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let (release, _older, current) = a_release();
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+
+        assert!(
+            report.release.contains(&current),
+            "the headline names the hash the hook was compared against, not \
+             whichever one the binary happens to carry: {}",
+            report.release
+        );
+        assert_ne!(
+            report.release,
+            embed::release_line(),
+            "and this fixture's release is not the embedded one, so the two \
+             are told apart"
         );
     }
 }

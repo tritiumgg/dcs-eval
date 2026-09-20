@@ -62,11 +62,19 @@ pub fn is_shipped(hash: &str) -> bool {
 /// carries protocol frames and nothing else. The verbs that emit it are
 /// `verify` and the command line.
 pub fn release_line() -> String {
+    release_line_of(EXECUTOR_FILE_NAME, EXECUTOR_SHA256)
+}
+
+/// The same line about a release handed in rather than the embedded one.
+///
+/// A report is taken against whichever release its caller named, and a
+/// headline composed from the constants regardless would name this build's
+/// hash above a comparison made against another one's — the one place a
+/// wrong hash goes unnoticed, because it is the line that looks right.
+pub fn release_line_of(name: &str, sha256: &str) -> String {
     format!(
-        "dcs-mcp {} · executor {} sha256 {}",
+        "dcs-mcp {} · executor {name} sha256 {sha256}",
         env!("CARGO_PKG_VERSION"),
-        EXECUTOR_FILE_NAME,
-        EXECUTOR_SHA256
     )
 }
 
