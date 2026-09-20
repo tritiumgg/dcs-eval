@@ -24,9 +24,24 @@ rmcp = { version = "3.4", default-features = false, features = [
 tokio = { version = "1", features = ["rt", "time"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+# Not this crate's own data format. The tool macros demand both derives on
+# every parameter struct: `Deserialize` to read a call's arguments off the
+# wire, `JsonSchema` to publish the shape a client fills them in from. rmcp
+# resolves both crates already, so naming them here adds a line to this file
+# and nothing to the build.
+serde = { version = "1", features = ["derive"] }
+schemars = "1"
 
 [dev-dependencies]
 # The stand-in executor, so a test can play the executor's side of the wire
 # without DCS.
 dcs-eval = { path = "../dcs-eval", features = ["standin"] }
 serde_json = "1"
+# The client half of the SDK, for the tests that drive a real MCP session over
+# an in-memory pair. A dev-dependency and not a dependency: a plain
+# `cargo build` resolves none of these, so the shipped binary links no client.
+rmcp = { version = "3.4", default-features = false, features = ["client"] }
+# The drivers those tests need beyond the server's own: `macros` for
+# `#[tokio::test]`, and `io-util` for the duplex pair the two halves of a
+# session speak over.
+tokio = { version = "1", features = ["rt", "time", "macros", "io-util"] }
