@@ -275,16 +275,30 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     })
 }
 
-/// The bytes the executor published for this answer, where exactly one reply
-/// came off the wire and its file could be read back.
+/// The bytes the executor published for this answer, where a flag asked for
+/// them and exactly one reply came off the wire.
 ///
-/// Nothing at all in every other case, which is what the two keeping flags
-/// are guarded by.
-fn written_bytes(answered: &Answered) -> Option<&Reply> {
-    match &answered.reply {
-        Some(Ok(reply)) => Some(reply),
-        _ => None,
+/// Nothing at all where neither flag was given, because the bytes are read
+/// off the disk by the asking and a caller that is not keeping the reply
+/// would be paying for a copy of it to be thrown away. Nothing either where
+/// no single reply came off the wire, which is what the two keeping flags are
+/// guarded by.
+fn written_bytes(answered: &Answered, wanted: bool) -> Option<Result<Reply, String>> {
+    if !wanted {
+        return None;
     }
+    answered.published()
+}
+
+/// Whether `id` is one plain name, and so a thing a file can be called.
+///
+/// The id is the executor's, off the wire, and a capture is about to make a
+/// filename out of it. One carrying a separator or a `..` would put the copy
+/// somewhere the caller never named, so it is refused here rather than
+/// joined and trusted.
+fn one_name(id: &str) -> bool {
+    let mut parts = Path::new(id).components();
+    matches!(parts.next(), Some(std::path::Component::Normal(_))) && parts.next().is_none()
 }
 
 /// Write `bytes` at `path`, naming the path and what the OS said.
@@ -302,6 +316,12 @@ fn keep(reply: &Reply, serve: &Serve, parsed: &Parsed) -> Result<(), String> {
         write_bytes(path, &reply.bytes)?;
     }
     if parsed.capture {
+        if !one_name(&reply.id) {
+            return Err(format!(
+                "the reply came back under {}, which is not a name a capture can be written under",
+                reply.id
+            ));
+        }
         // The DCS write directory is passed as the tree the data directory
         // may not lie under, so the containment rule the install paths are
         // judged by is the one a capture is judged by too.
@@ -356,19 +376,26 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
     };
 
     let mut code = i32::from(answered.answer.is_error == Some(true));
-    // The bytes the executor published, and nothing at all where none came.
-    let published = written_bytes(&answered);
-    if let Some(reply) = published
-        && let Err(why) = keep(reply, &serve, &parsed)
-    {
-        // Stderr, so that what a caller reads off stdout stays the words the
-        // tool would have given and nothing else.
-        eprintln!("{why}");
-        code = 1;
-    }
-    if let Some(Err(why)) = &answered.reply {
-        eprintln!("the reply arrived and could not be read back: {why}");
-        code = 1;
+    // The bytes the executor published, where a flag asked to keep them and
+    // one reply came off the wire; nothing at all otherwise. A caller that
+    // asked for neither file is not told a reply could not be read back,
+    // because it was never read: the answer it wanted arrived, and a failure
+    // reported over it would be a failure at nothing it asked for.
+    let published = written_bytes(&answered, parsed.out.is_some() || parsed.capture);
+    match published {
+        Some(Ok(reply)) => {
+            if let Err(why) = keep(&reply, &serve, &parsed) {
+                // Stderr, so that what a caller reads off stdout stays the
+                // words the tool would have given and nothing else.
+                eprintln!("{why}");
+                code = 1;
+            }
+        }
+        Some(Err(why)) => {
+            eprintln!("the reply arrived and could not be read back: {why}");
+            code = 1;
+        }
+        None => {}
     }
     let shown = wording::text(&answered.answer);
     writeln!(out, "{shown}").map_err(|why| why.to_string())?;
@@ -398,10 +425,14 @@ mod tests {
     }
 
     /// The flags every verb needs, then the words the case adds.
-    fn args(box_: &Sandbox, more: &[&str]) -> Vec<String> {
+    fn args<I>(box_: &Sandbox, more: I) -> Vec<String>
+    where
+        I: IntoIterator,
+        I::Item: AsRef<str>,
+    {
         let mut all: Vec<String> = Vec::new();
         for word in more {
-            all.push((*word).to_owned());
+            all.push(word.as_ref().to_owned());
         }
         all.push("--saved-games".to_owned());
         all.push(box_.path.to_string_lossy().into_owned());
@@ -558,6 +589,71 @@ mod tests {
         );
     }
 
+    /// The other half of the keeping rule: a reply really did come back, and
+    /// `--capture` kept it under the data directory this line named.
+    ///
+    /// `--out` is deliberately not given. The verbatim test above watches
+    /// that flag, and a line carrying both would let a capture that never
+    /// wrote anything hide behind the file the other flag wrote.
+    #[test]
+    fn cli_capture_keeps_the_reply_under_the_data_dir() {
+        let box_ = Sandbox::new();
+        let mut s = Standin::open(&opts(&box_).output(), "hook").expect("the stand-in opens");
+        ticking(&mut s);
+        s.script("marker", "ok", "string", BODY);
+        let data = box_.dir("data");
+
+        let (code, shown) = ran(
+            &mut s,
+            args(
+                &box_,
+                &[
+                    "eval",
+                    "hook",
+                    "return marker",
+                    "--wait-seconds",
+                    "10",
+                    "--capture",
+                    "--data-dir",
+                    &data.to_string_lossy(),
+                ],
+            ),
+        );
+        assert_eq!(code, 0, "an answered eval is not an error: {shown}");
+
+        let mut kept: Vec<PathBuf> = fs::read_dir(data.join("replies"))
+            .expect("the capture directory was made")
+            .filter_map(Result::ok)
+            .map(|entry| entry.path())
+            .collect();
+        assert_eq!(kept.len(), 1, "one reply was captured: {kept:?}");
+        let copy = kept.pop().expect("the one capture");
+        assert_eq!(
+            copy.extension().and_then(|ext| ext.to_str()),
+            Some("res"),
+            "under the name the wire gave it: {}",
+            copy.display()
+        );
+        assert_eq!(
+            fs::read(&copy).expect("the capture reads"),
+            published(&s),
+            "--capture kept the bytes the executor published"
+        );
+    }
+
+    /// An id the executor never could have meant, refused rather than joined.
+    /// It is the one place a filename on this side is built out of the wire.
+    #[test]
+    fn cli_a_reply_id_that_is_not_a_name_captures_nowhere() {
+        assert!(one_name("abc123"), "a plain id is a name");
+        for wrong in ["..", "a/b", "a\\b", "", ".", "C:/tmp/x"] {
+            assert!(
+                !one_name(wrong),
+                "`{wrong}` is not a name a capture may be written under"
+            );
+        }
+    }
+
     /// The capture rule, and the mutation's target. Nothing is ticked, so the
     /// wait runs out and the answer is a `pending` — which has no reply
     /// behind it and must therefore leave no file behind either.
@@ -640,13 +736,24 @@ mod tests {
             ),
         ];
         for (words, head) in cases {
-            let mut line: Vec<&str> = words.to_vec();
             let path = chunk.to_string_lossy().into_owned();
             // The file case's empty placeholder is the chunk's real path.
-            for word in &mut line {
-                if word.is_empty() {
-                    *word = path.as_str();
-                }
+            let mut line: Vec<String> = words
+                .iter()
+                .map(|word| {
+                    if word.is_empty() {
+                        path.clone()
+                    } else {
+                        (*word).to_owned()
+                    }
+                })
+                .collect();
+            // The refused case is given somewhere to write, so that "it kept
+            // nothing" is a claim about the refusal rather than about a flag
+            // nobody passed.
+            if line.iter().any(|word| word == "--file") {
+                line.push("--out".to_owned());
+                line.push(kept.to_string_lossy().into_owned());
             }
             let mut sink: Vec<u8> = Vec::new();
             run(args(&box_, &line), &mut sink).unwrap_or_else(|why| panic!("{line:?}: {why}"));

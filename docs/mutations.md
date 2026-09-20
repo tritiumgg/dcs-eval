@@ -682,10 +682,10 @@ not cover is printed by the sweep itself rather than left to be assumed.
 - reddens: `cli_a_pending_writes_no_file_at_all`
 - note: the keeping flags written unguarded, which is the natural way to
   write this wrong — the reply is "whatever came back", and what came back
-  for a `pending` is nothing. The guard is the one `if let`, so the mutation
-  hands it a reply that is always there and empty where none arrived; the
-  block stands, so the edit compiles and the red is an assertion rather than
-  the type checker.
+  for a `pending` is nothing. The guard is the one `Option`, so the mutation
+  hands the writing an answer that is always there and empty where none
+  arrived; the match stands, so the edit compiles and the red is an assertion
+  rather than the type checker.
 
   What the mutated build does is write a zero-byte file at `--out` and a
   zero-byte `.res` under the capture directory, for a request that is still
@@ -694,13 +694,18 @@ not cover is printed by the sweep itself rather than left to be assumed.
   and "nothing measured" that the `pending` wording exists against one level
   up.
 
-  Observed red is one test and only one. The verbatim test writes the same
-  bytes either way, because a reply really did come back for it.
+  Observed red is two tests, both in the one command: the `pending` test,
+  which is what this row is for, and `cli_every_read_verb_answers`, whose
+  refused `eval --file` case is given an `--out` of its own and so watches
+  the same rule from the refusal side. The two reply tests write the same
+  bytes either way, because a reply really did come back for them.
 
 ```sweep-edit crates/dcs-mcp/src/cli.rs
--     let published = written_bytes(&answered);
-+     let empty = Reply { id: String::new(), bytes: Vec::new() };
-+     let published = Some(written_bytes(&answered).unwrap_or(&empty));
+-     let published = written_bytes(&answered, parsed.out.is_some() || parsed.capture);
++     let published = Some(answered.published().unwrap_or(Ok(Reply {
++         id: "unanswered".to_owned(),
++         bytes: Vec::new(),
++     })));
 ```
 
 ### cli/reply-rendered-by-a-second-formatter
@@ -724,7 +729,7 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ```sweep-edit crates/dcs-mcp/src/cli.rs
 -     let shown = wording::text(&answered.answer);
-+     let shown = match &answered.reply {
++     let shown = match answered.published() {
 +         Some(Ok(reply)) => format!("reply\n{}", String::from_utf8_lossy(&reply.bytes)),
 +         _ => wording::text(&answered.answer),
 +     };

@@ -22,7 +22,7 @@
 //! prints cannot come apart.
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use dcs_eval::file::{self, Roots};
@@ -91,25 +91,42 @@ pub(crate) struct Reply {
     pub bytes: Vec<u8>,
 }
 
-/// An answer, and — where exactly one reply came off the wire — the bytes the
-/// executor published for it.
+/// An answer, and — where exactly one reply came off the wire — the id it
+/// came back under and the file the executor published it in.
 ///
-/// `reply` is `None` where there is no single reply to point at: a `pending`,
-/// a refusal raised here rather than by the executor, and the two calls that
-/// never publish anything. It is `Some(Err)` where a reply did arrive and its
-/// file could not be read back.
+/// `at` is `None` where there is no single reply to point at: a `pending`, a
+/// refusal raised here rather than by the executor, and the two calls that
+/// never publish anything.
 pub(crate) struct Answered {
     pub answer: CallToolResult,
-    pub reply: Option<Result<Reply, String>>,
+    at: Option<(String, PathBuf)>,
 }
 
 impl Answered {
     /// An answer with no reply behind it.
     fn plain(answer: CallToolResult) -> Self {
-        Self {
-            answer,
-            reply: None,
-        }
+        Self { answer, at: None }
+    }
+
+    /// The bytes the executor published for this answer, read off the disk
+    /// when they are asked for rather than when the answer was made.
+    ///
+    /// Nothing where no single reply came off the wire, and `Some(Err)` where
+    /// one did and its file could not be read back. The read waits for the
+    /// asking because only a command line told to keep the reply ever wants
+    /// the bytes: a tool call reads the answer and nothing else, and reading
+    /// every body eagerly would cost each of those calls a copy of a reply
+    /// nobody looks at.
+    pub(crate) fn published(&self) -> Option<Result<Reply, String>> {
+        let (id, path) = self.at.as_ref()?;
+        Some(
+            fs::read(path)
+                .map(|bytes| Reply {
+                    id: id.clone(),
+                    bytes,
+                })
+                .map_err(|why| format!("{}: {why}", path.display())),
+        )
     }
 }
 
@@ -117,25 +134,21 @@ impl Answered {
 fn one(client: &Client, spec: Spec, upto: Duration) -> Answered {
     let mut window = Pipeline::over(client.handshake(), vec![spec], 1, upto);
     let item = window.next();
-    // Read back off the disk rather than re-encoded from what was parsed.
-    // The envelope is a parse, and parsing normalises a header line's ending;
-    // what a caller asking to keep the reply is asking for is the bytes the
-    // executor wrote, which is the file and not a second encoding of it.
-    let reply = match &item {
+    // The file, not the envelope. The envelope is a parse, and parsing
+    // normalises a header line's ending; what a caller asking to keep the
+    // reply is asking for is the bytes the executor wrote, which is the file
+    // and not a second encoding of it.
+    let at = match &item {
         Some(Ok(Outcome::Reply(envelope))) => {
             let id = envelope.headers.get("id").unwrap_or_default().to_owned();
             let path = client.session().res().join(format!("{id}.res"));
-            Some(
-                fs::read(&path)
-                    .map(|bytes| Reply { id, bytes })
-                    .map_err(|why| format!("{}: {why}", path.display())),
-            )
+            Some((id, path))
         }
         _ => None,
     };
     Answered {
         answer: answered(item),
-        reply,
+        at,
     }
 }
 
