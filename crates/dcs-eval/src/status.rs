@@ -1195,6 +1195,33 @@ mod tests {
     }
 
     #[test]
+    fn a_check_hands_back_the_running_build_it_folded_in() {
+        // Every arm, for the reason the comparison's own four are tested
+        // here: a second reader holding this session up against another
+        // build takes the reading from the check rather than opening the
+        // handshake again, so an arm that answered nothing would send it
+        // back to the file.
+        assert_eq!(
+            measured_against(Some("2.9.10.1234"), Some("2.9.10.1234")).running(),
+            Some("2.9.10.1234")
+        );
+        assert_eq!(
+            measured_against(Some("2.9.11.5000"), Some("2.9.10.1234")).running(),
+            Some("2.9.11.5000")
+        );
+        assert_eq!(
+            measured_against(Some("2.9.10.1234"), None).running(),
+            Some("2.9.10.1234")
+        );
+        assert_eq!(measured_against(None, None).running(), None);
+        assert_eq!(
+            measured_against(None, Some("2.9.10.1234")).running(),
+            None,
+            "nothing was read, so there is nothing to hand back"
+        );
+    }
+
+    #[test]
     fn an_unmeasured_build_says_so_and_is_not_a_problem() {
         // The seam the embedding task and the measuring task fill in. A
         // difference read as agreement while nothing is measured would
