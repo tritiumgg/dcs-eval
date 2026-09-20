@@ -61,8 +61,12 @@ puts it back.
 Point your MCP client at the binary and the `serve` verb:
 
 ```
-dcs-mcp serve --saved-games "%USERPROFILE%\Saved Games" --variant DCS.openbeta
+dcs-mcp serve --saved-games "C:\Users\you\Saved Games" --variant DCS.openbeta
 ```
+
+Give the folder its real path. `Saved Games` can be relocated, so a path built
+out of `%USERPROFILE%` is not reliably the folder DCS writes into; if you are
+not sure where yours is, `install` reports the one it found.
 
 Add `--host export` to talk to the Export.lua half instead of the hook.
 
