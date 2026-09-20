@@ -104,7 +104,10 @@ pub fn uninstall(
 
     // One read of the hooks directory, with every name compared case
     // folded, because that is how the placement found the name and how
-    // Windows itself matches one.
+    // Windows itself matches one. Two entries differing only in case
+    // cannot both exist on the only host this build supports, so the
+    // last one wins rather than the scan having a refusal for a state
+    // Windows will not produce.
     let hooks = variant.as_path().join("Scripts").join("Hooks");
     let mut found: Option<PathBuf> = None;
     match fs::read_dir(&hooks) {
@@ -133,10 +136,7 @@ pub fn uninstall(
         if ours {
             let resolved = paths::resolve(&file)?;
             register.around(now, &resolved, &sha, || {
-                fs::remove_file(resolved.as_path()).map_err(|why| RegisterError::Disk {
-                    path: resolved.as_path().to_owned(),
-                    why,
-                })
+                fs::remove_file(resolved.as_path()).map_err(|why| disk(resolved.as_path(), why))
             })?;
             hook = Some(resolved.into_path_buf());
         } else {
@@ -170,12 +170,7 @@ fn remove_line(
     let found = match fs::read(file.as_path()) {
         Ok(bytes) => bytes,
         Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(LineOutcome::NoFile),
-        Err(why) => {
-            return Err(RegisterError::Disk {
-                path: file.as_path().to_owned(),
-                why,
-            });
-        }
+        Err(why) => return Err(disk(file.as_path(), why)),
     };
     let Some(kept) = export_line::without(&found) else {
         return Ok(LineOutcome::NotThere);
@@ -224,7 +219,13 @@ fn restore_parked(
         if row.action != Action::Install.word() {
             continue;
         }
-        let destination = paths::resolve(&row.path)?;
+        // A path that will not resolve is one whose anchor is gone — a
+        // drive that was unplugged, a variant that was deleted whole. It
+        // is not this variant's, so it is skipped rather than allowed to
+        // refuse the uninstall of a variant that is right here.
+        let Ok(destination) = paths::resolve(&row.path) else {
+            continue;
+        };
         if !variant.contains(&destination) || destination.as_path().exists() {
             continue;
         }
@@ -525,6 +526,67 @@ mod tests {
             matches!(removed.line, LineOutcome::Removed { emptied: true, .. }),
             "and the report says so, because nothing on disk does: {:?}",
             removed.line
+        );
+    }
+
+    #[test]
+    fn a_variant_with_no_export_file_is_a_report_and_not_a_refusal() {
+        let (b, variant, data, _hooks) = fixture();
+        let (release, _current) = a_release();
+        let file = b.join("saved/DCS.openbeta/Scripts/Export.lua");
+
+        let removed = uninstall(an_instant(), &variant, &data, &release).expect("it looks");
+
+        assert_eq!(removed.line, LineOutcome::NoFile);
+        assert!(
+            !file.exists(),
+            "and no file was made to hold a line that is not going in"
+        );
+        assert!(
+            data.rows().expect("the register reads").is_empty(),
+            "nothing was moved, so nothing was written down"
+        );
+    }
+
+    #[test]
+    fn the_line_and_the_restore_each_write_a_row_of_their_own() {
+        let (b, variant, data, hooks) = fixture();
+        let (release, _current) = a_release();
+        let hook = hooks.join("DcsEvalExecutor.lua");
+        put(&hook, STRANGER);
+        let export = b.join("saved/DCS.openbeta/Scripts/Export.lua");
+        put(&export, AWKWARD);
+        place_hook(an_instant(), &variant, &data, &release, true)
+            .expect("--replace answers for the stranger");
+        export_line::ensure(&variant, &data, an_instant()).expect("the line goes in");
+
+        uninstall(an_instant(), &variant, &data, &release).expect("it comes out");
+
+        let rows = data.rows().expect("the register reads");
+        let taken = |path: &Path| {
+            rows.iter()
+                .filter(|row| {
+                    row.action == "uninstall" && row.path == path && row.status == "uninstalled"
+                })
+                .count()
+        };
+        assert_eq!(
+            taken(real(&export).as_path()),
+            1,
+            "the line's removal is a move like any other and says so: {rows:?}"
+        );
+        assert_eq!(
+            taken(real(&hook).as_path()),
+            2,
+            "the hook going and the stranger coming back are two moves at one \
+             name, and two rows: {rows:?}"
+        );
+        let last = rows.last().expect("the restore wrote the last one");
+        assert_eq!(last.path, real(&hook).into_path_buf());
+        assert_eq!(
+            last.sha256,
+            hex(&digest(STRANGER)),
+            "the restore's row names the bytes that went back, not the ones displaced"
         );
     }
 
