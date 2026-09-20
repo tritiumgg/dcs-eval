@@ -66,7 +66,8 @@ dcs-mcp serve --saved-games "C:\Users\you\Saved Games" --variant DCS.openbeta
 
 Give the folder its real path. `Saved Games` can be relocated, so a path built
 out of `%USERPROFILE%` is not reliably the folder DCS writes into; if you are
-not sure where yours is, `install` reports the one it found.
+not sure where yours is, `install` reports the one it found — *not built*, so
+until it is, read the path off the DCS folder in your own `Saved Games`.
 
 Add `--host export` to talk to the Export.lua half instead of the hook.
 
