@@ -71,6 +71,13 @@ impl SavedGames {
                 root: self.root.as_path().to_owned(),
                 why,
             })?;
+            // A name Windows will not spell back as UTF-8 keeps its entry
+            // rather than being skipped, and the replacement characters it
+            // prints with are accepted. Skipping it would drop a directory
+            // out of the count, and the count is what makes two variants an
+            // ambiguity rather than a silent pick; a name that prints oddly
+            // costs a confusing line, which is the smaller harm. The path
+            // is unaffected — it comes from the entry, not from this.
             let name = entry.file_name().to_string_lossy().into_owned();
             let bytes = name.as_bytes();
             if bytes.len() < 3 || !bytes[..3].eq_ignore_ascii_case(b"DCS") {
@@ -97,8 +104,9 @@ impl SavedGames {
     /// `wanted` is the answer to the ambiguity — `--variant`, or whatever
     /// the caller asked — and it filters before anything is counted, so
     /// naming one of two is not an ambiguity at all. With no answer in
-    /// hand, two variants are refused: the specification says the question
-    /// is asked, never picked, and picking the first would be picking.
+    /// hand, two variants are refused: which one is meant is a question for
+    /// whoever runs the installer, and taking the first would be answering
+    /// it for them — into the one directory this build then writes to.
     pub fn target(
         &self,
         wanted: Option<&str>,
@@ -516,5 +524,16 @@ mod tests {
         let path = sys::saved_games().expect("the shell says where Saved Games is");
         assert!(path.is_absolute(), "an absolute path: {}", path.display());
         paths::resolve(&path).expect("and one the client will resolve");
+    }
+
+    #[test]
+    fn the_known_root_is_that_answer_and_nothing_else() {
+        // `known()` is `at()` over the shell's answer, and this is what
+        // says so: a root reached any other way — a path spelled out of
+        // the profile, say — would only agree with this by coincidence on
+        // a machine whose known folder has never been moved.
+        let expected = real(&sys::saved_games().expect("the shell answers"));
+        let sg = SavedGames::known().expect("and the locator resolves what it said");
+        assert_eq!(sg.root, expected);
     }
 }
