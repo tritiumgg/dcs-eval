@@ -514,26 +514,24 @@ mod tests {
     }
 
     #[test]
-    fn the_shell_answers_where_saved_games_is() {
-        // The one test here that touches the real machine, and it asserts
-        // shape alone: on a host whose known folder has not been relocated
-        // the answer is indistinguishable from the string this must never
-        // build, so nothing here can prove the difference. What holds that
+    fn the_known_root_is_what_the_shell_answered() {
+        // The one test here that touches the real machine — every other
+        // one runs against a fixture root, so this is the whole of what
+        // `cargo test -p dcs-mcp locate` asks of the host: that the known
+        // folder resolves at all.
+        //
+        // It asserts shape and agreement, and neither is a proof that the
+        // path came from the shell: on a host whose known folder has never
+        // been relocated the answer is indistinguishable from the string
+        // this must never build out of the profile, and `known()` is `at()`
+        // over `sys::saved_games()` by construction, so it would agree with
+        // that call whatever the call returned. What actually holds the
         // property is that the declaration in `sys` is the only source the
-        // locator has.
+        // locator has. This says the wiring is present and the answer is
+        // one the client can resolve.
         let path = sys::saved_games().expect("the shell says where Saved Games is");
         assert!(path.is_absolute(), "an absolute path: {}", path.display());
-        paths::resolve(&path).expect("and one the client will resolve");
-    }
-
-    #[test]
-    fn the_known_root_is_that_answer_and_nothing_else() {
-        // `known()` is `at()` over the shell's answer, and this is what
-        // says so: a root reached any other way — a path spelled out of
-        // the profile, say — would only agree with this by coincidence on
-        // a machine whose known folder has never been moved.
-        let expected = real(&sys::saved_games().expect("the shell answers"));
         let sg = SavedGames::known().expect("and the locator resolves what it said");
-        assert_eq!(sg.root, expected);
+        assert_eq!(sg.root, real(&path));
     }
 }
