@@ -747,6 +747,48 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +         let at = self.append(now, file, sha256)?;
 ```
 
+### export_line/second-dofile-line-appended
+
+- task: T61
+- command: `mise exec -- cargo test -p dcs-mcp export_line`
+- reddens: `install_twice_leaves_one_dofile_line`
+- note: the once-only guard's bound is raised rather than the guard removed, so
+  the early return stays reachable and the mutant carries no unreachable-code
+  warning — the red is the assertion and nothing else. A second `install` then
+  no longer recognises the line the first one wrote and appends another beside
+  it, which is the defect the plan cell names.
+  `a_crlf_terminated_copy_of_the_line_is_still_the_line` goes red alongside it,
+  for the same reason from the other side: it too asks the guard to recognise a
+  line that is already there. `every_other_byte_of_the_file_is_the_byte_it_was`
+  stays green, because it calls `ensure` once — that separation is what says
+  this control watches the guard and not the append.
+
+```sweep-edit crates/dcs-mcp/src/export_line.rs
+-     if occurrences(&found) > 0 {
++     if occurrences(&found) > 1 {
+```
+
+### export_line/marker-dropped-from-the-line
+
+- task: T61
+- command: `mise exec -- cargo test -p dcs-mcp export_line`
+- reddens: `the_line_carries_the_marker_that_makes_its_removal_an_exact_match`
+- note: the plan cell names the red as the uninstaller's exact-match removal,
+  and the uninstaller is not built. What is observable today is one step
+  earlier and is the same defect: the line this build appends no longer ends in
+  the marker that the removal will match a whole line against, so it can no
+  longer be told from a `dofile` of the same hook somebody wrote by hand. Every
+  other check stays green, because they all compare against `LINE` itself and
+  would follow it wherever it went — which is why the marker needs an assertion
+  that does not, and why without one this mutation would redden nothing at all.
+  `MARKER` stays `pub` and is still read by that check, so the mutant compiles
+  clean under `-D warnings`.
+
+```sweep-edit crates/dcs-mcp/src/export_line.rs
+- pub const LINE: &str = "dofile(lfs.writedir() .. 'Scripts/Hooks/DcsEvalExecutor.lua') -- dcs-mcp";
++ pub const LINE: &str = "dofile(lfs.writedir() .. 'Scripts/Hooks/DcsEvalExecutor.lua')";
+```
+
 ---
 
 ## Out of scope
@@ -791,8 +833,8 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 15
-- breakdown: T39, T58, T59 one each, 3; T40, T44, T61, T46 two each, 8; T45
+- controls: 13
+- breakdown: T39, T58, T59 one each, 3; T40, T44, T46 two each, 6; T45
   three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
   rows move into the inventory proper.
