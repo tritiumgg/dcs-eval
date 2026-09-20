@@ -1,11 +1,15 @@
 //! How an answer is worded, in one place.
 //!
-//! Every answer the tools give, and every one the command line prints, is
-//! rendered by a function here. One module rather than a paragraph in each
-//! tool body, because the questions this settles — does a refusal read as a
-//! refusal rather than as an empty result, does a `pending` name its id and
-//! its phase — are the same six times over, and six copies of an answer is
-//! five chances to word one of them differently.
+//! Every answer the tools give is rendered by a function here. One module
+//! rather than a paragraph in each tool body, because the questions this
+//! settles — does a refusal read as a refusal rather than as an empty
+//! result, does a `pending` name its id and its phase — are the same six
+//! times over, and six copies of an answer is five chances to word one of
+//! them differently.
+//!
+//! The command line has no reply path of its own yet (planned). When it grows
+//! one it prints what these functions render, rather than a formatter beside
+//! them, which is the only way the two can be held to the same wording.
 
 use dcs_eval::pipeline::PipeError;
 use dcs_eval::protocol::Envelope;
@@ -39,7 +43,7 @@ pub fn refuse(status: &str, lines: Vec<String>) -> CallToolResult {
 }
 
 /// A reply's headers, a line each, then its body.
-pub fn reply_lines(envelope: &Envelope) -> Vec<String> {
+fn reply_lines(envelope: &Envelope) -> Vec<String> {
     let mut lines: Vec<String> = envelope
         .headers
         .iter()
