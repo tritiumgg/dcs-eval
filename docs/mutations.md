@@ -557,6 +557,34 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +         ONCE.get_or_init(|| Client::resolve(&self.opts)).clone()
 ```
 
+### tools/registered-not-listed
+
+- task: T38
+- command: `mise exec -- cargo test -p dcs-mcp tools_listed`
+- reddens: `tools_listed_are_exactly_the_six`
+- note: the fault the cell names is a tool that registers and is not listed,
+  and `ToolRouter::with_disabled` is the SDK's own way of producing exactly
+  that: the route stays in the router's map and the listing filters it out.
+  The mutated server holds six tools and announces five. `with_disabled` needs
+  no import the file does not already carry, so the mutation compiles and the
+  red is the assertion rather than the type checker; the router is filled on a
+  line of its own so that line is an anchor occurring once.
+
+  Observed red is two tests, not one. The router refuses a call on a disabled
+  name as well as hiding it from the listing, so
+  `tools_listed_each_answer_a_call` fails beside it with `dcs_collect is routed
+  and answers: Mcp error: -32602: tool not found`. That is worth writing down:
+  the two tests watch different things — one the listing, one the dispatch —
+  and the SDK offers no seam that hides a route from the listing while still
+  calling it, so this is as close to the cell's wording as an edit can get.
+  The assertion that goes is the set comparison, which prints both lists:
+  five names came back and `dcs_collect` was the one missing.
+
+```sweep-edit crates/dcs-mcp/src/serve.rs
+-             tools: Self::tool_router(),
++             tools: Self::tool_router().with_disabled("dcs_collect"),
+```
+
 ---
 
 ## Stage 8 — the installer and embedding
@@ -704,9 +732,9 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 18
-- breakdown: T38, T39, T58, T59 one each, 4; T40, T41, T44, T61, T46 two
-  each, 10; T45 three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
+- controls: 17
+- breakdown: T39, T58, T59 one each, 3; T40, T41, T44, T61, T46 two each, 10;
+  T45 three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
   rows move into the inventory proper.
 

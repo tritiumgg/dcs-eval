@@ -83,10 +83,11 @@ the server before you install and before the game is running, and nothing has
 to be restarted afterwards.
 
 `--saved-games` and `--variant` must both be given; finding your `Saved Games`
-folder and its `DCS*` variants for you is *not built*. The server offers no
-tools yet — *not built*; the six below are what it will offer.
+folder and its `DCS*` variants for you is *not built*. The server registers,
+lists and answers all six tools below; each takes an optional `host`, which is
+`hook` or `export` and falls back to `--host`.
 
-## The six tools — *not built*
+## The six tools — the wording *not built*
 
 | Tool | What it says |
 |---|---|
@@ -96,6 +97,14 @@ tools yet — *not built*; the six below are what it will offer.
 | `dcs_eval` | evaluate a chunk in the state you name |
 | `dcs_eval_file` | the same from a file, with its path and content hash recorded |
 | `dcs_collect` | pick up a reply that was still pending, by id |
+
+What each answer *says* is settled; how it is worded is not — *not built*. For
+now a reply comes back as a status word and a line each, and it will change.
+
+A call that names no `wait_seconds` waits 15 seconds. That is a wait and never
+a limit: when it runs out the request is still published, the answer names an
+id, and `dcs_collect` picks the reply up afterwards. A mission load on its own
+routinely takes longer than the wait.
 
 `unknown` is a value, not a guess: an axis nothing measured says so and says
 why.
@@ -111,7 +120,10 @@ DCS install, whatever else is allowed — the first holds your account
 credentials, the second holds nothing a chunk needs. Finding the `DCS*`
 siblings of the write directory you configure, so a second variant's
 credentials are refused too, is *not built*; nor is how the roots are
-configured on the command line.
+configured on the command line. Until a root can be allowed, the allowed list
+is empty — and an empty list admits nothing rather than everything, so
+`dcs_eval_file` refuses every path you give it by that same rule. Use
+`dcs_eval` meanwhile.
 
 ## Use it from a terminal — *not built*
 
