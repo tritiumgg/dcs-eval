@@ -250,6 +250,25 @@ impl fmt::Display for VersionCheck {
     }
 }
 
+impl VersionCheck {
+    /// What the session said it is running, where it said anything.
+    ///
+    /// A check is a comparison already made, and the running version is
+    /// folded into it the moment it is read. A second reader wanting to
+    /// hold the same session up against a different build would otherwise
+    /// have to open the handshake again — a second read of one file, which
+    /// could disagree with the first — so the reading is handed back out
+    /// here instead.
+    pub fn running(&self) -> Option<&str> {
+        match self {
+            Self::Unmeasured { running } => running.as_deref(),
+            Self::Unreadable { .. } => None,
+            Self::Same { build } => Some(build),
+            Self::Differs { running, .. } => Some(running),
+        }
+    }
+}
+
 /// The running version against `measured`, whatever either of them is.
 ///
 /// A pure function, so all four answers are reachable from a test while
