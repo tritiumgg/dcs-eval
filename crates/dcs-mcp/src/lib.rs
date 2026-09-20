@@ -31,6 +31,10 @@ pub mod locate;
 // before the move, and the store the displaced copies are moved into.
 pub mod register;
 
+// Placing the executor in `Scripts\Hooks\`: what was already there, whether
+// it may be displaced, and the rename that puts the bytes at their name.
+pub mod install;
+
 // The MCP server itself: the options it is started with, the client it builds
 // per call, and the stdio transport it speaks over.
 pub mod serve;
