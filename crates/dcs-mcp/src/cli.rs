@@ -25,9 +25,6 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use dcs_eval::paths::Real;
-
-use crate::register::DataDir;
 use crate::serve::{self, Host, Serve, host_of};
 use crate::tools::{self, Answered, Reply};
 use crate::wording;
@@ -37,7 +34,7 @@ pub const USAGE: &str = "usage: dcs-mcp status | ping | game-state \
      | eval <state> (<code> | --file <path>)\n       \
      --saved-games <dir> --variant <name> [--host hook|export]\n       \
      [--wait-seconds <n>] [--max-instructions <n>] [--chunkname <name>]\n       \
-     [--out <path>] [--capture [--data-dir <dir>]]";
+     [--out <path>] [--capture] [--data-dir <dir>]";
 
 /// What was asked for. One of four, and never a word the install stage owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -101,7 +98,6 @@ struct Parsed {
     file: Option<String>,
     out: Option<PathBuf>,
     capture: bool,
-    data_dir: Option<PathBuf>,
 }
 
 /// Fill a slot that has not been filled, or name the flag that filled it.
@@ -214,9 +210,10 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
             ));
         }
     }
-    if data_dir.is_some() && !capture {
-        return Err("--data-dir says where --capture writes, and nothing is captured".to_owned());
-    }
+    // `--data-dir` is not guarded by `--capture`. It names the directory this
+    // build keeps its own files in, and every evaluation appends a line to
+    // the run record there whether or not a reply is being kept — so a line
+    // that moves the directory and captures nothing has moved something real.
 
     let mut state = String::new();
     let mut code = String::new();
@@ -262,6 +259,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
             saved_games: saved_games.ok_or("a verb wants --saved-games <dir>")?,
             variant: variant.ok_or("a verb wants --variant <name>")?,
             host: host.unwrap_or(Host::Hook),
+            data_dir,
         },
         wait_seconds,
         max_instructions,
@@ -271,7 +269,6 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
         file,
         out,
         capture,
-        data_dir,
     })
 }
 
@@ -322,16 +319,10 @@ fn keep(reply: &Reply, serve: &Serve, parsed: &Parsed) -> Result<(), String> {
                 reply.id
             ));
         }
-        // The DCS write directory is passed as the tree the data directory
-        // may not lie under, so the containment rule the install paths are
-        // judged by is the one a capture is judged by too.
-        let dirs = tools::writedirs(serve);
-        let trees: Vec<&Real> = dirs.iter().collect();
-        let data = match &parsed.data_dir {
-            Some(path) => DataDir::at(path, &trees),
-            None => DataDir::known(&trees),
-        }
-        .map_err(|why| why.to_string())?;
+        // The same resolver the run record goes through, so a `--data-dir`
+        // moves both or neither, and the containment rule the install paths
+        // are judged by is the one a capture is judged by too.
+        let data = tools::data_dir(serve).map_err(|why| why.to_string())?;
         let root = data.replies_root();
         std::fs::create_dir_all(&root).map_err(|why| format!("{}: {why}", root.display()))?;
         write_bytes(&root.join(format!("{}.res", reply.id)), &reply.bytes)?;
@@ -420,10 +411,15 @@ mod tests {
             saved_games: box_.path.clone(),
             variant: "DCS.openbeta".to_owned(),
             host: Host::Hook,
+            data_dir: Some(box_.join("data")),
         }
     }
 
     /// The flags every verb needs, then the words the case adds.
+    ///
+    /// `--data-dir` is among them, and not optional: every evaluation appends
+    /// a line to the run record under it, so a line without one would write
+    /// into the machine's own data directory.
     fn args<I>(box_: &Sandbox, more: I) -> Vec<String>
     where
         I: IntoIterator,
@@ -437,6 +433,8 @@ mod tests {
         all.push(box_.path.to_string_lossy().into_owned());
         all.push("--variant".to_owned());
         all.push("DCS.openbeta".to_owned());
+        all.push("--data-dir".to_owned());
+        all.push(box_.join("data").to_string_lossy().into_owned());
         all
     }
 
@@ -553,7 +551,10 @@ mod tests {
         let mut s = Standin::open(&opts(&box_).output(), "hook").expect("the stand-in opens");
         ticking(&mut s);
         s.script("marker", "ok", "string", BODY);
-        let data = box_.dir("data");
+        // The directory `args` already points every line at, which is also
+        // where the run record goes; `--data-dir` is not repeated here,
+        // because a flag given twice is refused.
+        let data = box_.join("data");
 
         let (code, shown) = ran(
             &mut s,
@@ -566,8 +567,6 @@ mod tests {
                     "--wait-seconds",
                     "10",
                     "--capture",
-                    "--data-dir",
-                    &data.to_string_lossy(),
                 ],
             ),
         );
@@ -615,7 +614,7 @@ mod tests {
         let mut s = Standin::open(&opts(&box_).output(), "hook").expect("the stand-in opens");
         ticking(&mut s);
         let out = box_.join("nothing.out");
-        let data = box_.dir("data");
+        let data = box_.join("data");
 
         let mut sink: Vec<u8> = Vec::new();
         let code = run(
@@ -630,8 +629,6 @@ mod tests {
                     "--out",
                     &out.to_string_lossy(),
                     "--capture",
-                    "--data-dir",
-                    &data.to_string_lossy(),
                 ],
             ),
             &mut sink,
@@ -741,7 +738,6 @@ mod tests {
     fn cli_out_is_refused_for_a_verb_with_no_single_reply() {
         let box_ = Sandbox::new();
         let out = box_.join("never.out");
-        let data = box_.dir("data");
 
         let mut sink: Vec<u8> = Vec::new();
         let why = run(
@@ -755,19 +751,8 @@ mod tests {
         );
 
         let mut sink: Vec<u8> = Vec::new();
-        let why = run(
-            args(
-                &box_,
-                &[
-                    "game-state",
-                    "--capture",
-                    "--data-dir",
-                    &data.to_string_lossy(),
-                ],
-            ),
-            &mut sink,
-        )
-        .expect_err("game-state does not take --capture");
+        let why = run(args(&box_, &["game-state", "--capture"]), &mut sink)
+            .expect_err("game-state does not take --capture");
         assert!(
             why.contains("game-state") && why.contains("--capture"),
             "the refusal names the verb and the flag: {why}"

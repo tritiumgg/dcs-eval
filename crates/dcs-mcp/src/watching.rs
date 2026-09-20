@@ -50,6 +50,7 @@ fn opts(box_: &Sandbox) -> Options {
         saved_games: box_.path.clone(),
         variant: "DCS.openbeta".to_owned(),
         host: Host::Hook,
+        data_dir: Some(box_.join("data")),
     }
 }
 

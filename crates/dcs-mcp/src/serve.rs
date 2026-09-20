@@ -50,6 +50,12 @@ pub struct Options {
     pub saved_games: PathBuf,
     pub variant: String,
     pub host: Host,
+    /// Where this build keeps what is its own: the run record every
+    /// evaluation appends to, and a reply the command line was told to
+    /// capture. Nothing where the known folder is to be used, which is the
+    /// ordinary case; a path here is an override, and it is judged against
+    /// the DCS write directory exactly as the known folder is.
+    pub data_dir: Option<PathBuf>,
 }
 
 impl Options {
@@ -60,8 +66,8 @@ impl Options {
         output_in(&self.saved_games.join(&self.variant), self.host)
     }
 
-    /// `--saved-games <dir> --variant <name> [--host hook|export]`, and
-    /// nothing else.
+    /// `--saved-games <dir> --variant <name> [--host hook|export]
+    /// [--data-dir <dir>]`, and nothing else.
     ///
     /// Hand-rolled and deliberately small. The full verb set and the flags
     /// that go with the install are settled elsewhere; until then an
@@ -76,6 +82,7 @@ impl Options {
         let mut saved_games = None;
         let mut variant = None;
         let mut host = None;
+        let mut data_dir = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             let mut value = |name: &str| {
@@ -95,6 +102,11 @@ impl Options {
                         .ok_or_else(|| format!("--host is hook or export, not {given}"))?;
                     once(&mut host, "--host", word)?
                 }
+                "--data-dir" => once(
+                    &mut data_dir,
+                    "--data-dir",
+                    PathBuf::from(value("--data-dir")?),
+                )?,
                 other => return Err(format!("serve does not take {other}")),
             }
         }
@@ -102,6 +114,7 @@ impl Options {
             saved_games: saved_games.ok_or("serve wants --saved-games <dir>")?,
             variant: variant.ok_or("serve wants --variant <name>")?,
             host: host.unwrap_or(Host::Hook),
+            data_dir,
         })
     }
 
@@ -330,11 +343,15 @@ mod tests {
     use crate::testing::Sandbox;
     use dcs_eval::standin::Standin;
 
+    /// The options a test is driven over, with the data directory inside the
+    /// box: every evaluation writes a record, and a fixture left pointing at
+    /// the known folder would write it into the machine's own.
     fn opts(box_: &Sandbox, host: Host) -> Options {
         Options {
             saved_games: box_.path.clone(),
             variant: "DCS.openbeta".to_owned(),
             host,
+            data_dir: Some(box_.join("data")),
         }
     }
 
@@ -416,14 +433,18 @@ mod tests {
             "DCS.openbeta",
             "--host",
             "export",
+            "--data-dir",
+            "C:\\data",
         ]);
-        let parsed = Options::parse(good.clone()).expect("the three flags parse");
+        let parsed = Options::parse(good.clone()).expect("the four flags parse");
         assert_eq!(parsed.host, Host::Export);
+        assert_eq!(parsed.data_dir.as_deref(), Some(Path::new("C:\\data")));
 
         for (flag, value) in [
             ("--saved-games", "C:\\other"),
             ("--variant", "DCS"),
             ("--host", "hook"),
+            ("--data-dir", "C:\\elsewhere"),
         ] {
             let mut twice = good.clone();
             twice.push(flag.to_owned());

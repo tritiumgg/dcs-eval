@@ -37,6 +37,7 @@ use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{tool, tool_router};
 
+use crate::register::{DataDir, RegisterError};
 use crate::serve::{Client, Host, Serve, host_of, output_in};
 use crate::verify;
 use crate::wording::{self, answered, pending, refuse, say};
@@ -94,6 +95,23 @@ pub(crate) fn writedirs(serve: &Serve) -> Vec<Real> {
     paths::resolve(&opts.saved_games.join(&opts.variant))
         .into_iter()
         .collect()
+}
+
+/// Where this build's own files go for this server: the directory the
+/// options name, or the known folder where they name none.
+///
+/// One resolver, because the run record and a captured reply must land in
+/// the same place — two of these would let `--data-dir` move one of them and
+/// not the other. The DCS write directory is passed as the tree the data
+/// directory may not lie under either way, so the containment rule the
+/// install paths are judged by is the one every file here is judged by.
+pub(crate) fn data_dir(serve: &Serve) -> Result<DataDir, RegisterError> {
+    let dirs = writedirs(serve);
+    let trees: Vec<&Real> = dirs.iter().collect();
+    match &serve.options().data_dir {
+        Some(path) => DataDir::at(path, &trees),
+        None => DataDir::known(&trees),
+    }
 }
 
 /// One reply, as the executor published it: the id it came back under and
@@ -544,6 +562,10 @@ mod tests {
             saved_games: box_.path.clone(),
             variant: "DCS.openbeta".to_owned(),
             host: Host::Hook,
+            // Inside the box: every evaluation writes a run record, and a
+            // fixture left pointing at the known folder would write it into
+            // the machine's own data directory.
+            data_dir: Some(box_.join("data")),
         };
         let mut ex = Standin::open(&opts.output(), "hook").expect("the stand-in opens");
         // The stand-in's own pid is a number nobody is running, and a session

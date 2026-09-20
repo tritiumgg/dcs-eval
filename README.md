@@ -153,13 +153,17 @@ call's own, and a verb waits 15 seconds by default — a wait and never a
 limit, exactly as for the tools.
 
 `--out <path>` writes the reply to a file, and `--capture` keeps a copy under
-this build's own data directory (`--data-dir <dir>` puts it somewhere else).
-Both write the bytes the executor published, byte for byte, rather than a
+this build's own data directory. Both write the bytes the executor published, byte for byte, rather than a
 re-rendering of them. Where no reply came back — a `pending`, or a request
 that was refused before it was sent — **neither writes anything at all**, not
 even an empty file, because an empty file reads back as a reply that returned
 nothing. `status` and `game-state` answer without one reply off the wire, so
 they refuse both flags rather than accept them and write nothing.
+
+`--data-dir <dir>` says where that data directory is, and it is not tied to
+`--capture`: the directory holds the run record too, and every evaluation
+writes one whether or not a reply is being kept. It works for `serve` as
+well, with the same spelling.
 
 A verb exits 0 for an answer or a `pending`, 1 where the answer is a refusal
 or a file you asked for could not be written, and 2 for a command line that
