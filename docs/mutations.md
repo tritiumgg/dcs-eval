@@ -675,6 +675,61 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +     std::mem::forget(Changes::open(s.res()).ok());
 ```
 
+### cli/pending-writes-a-zero-byte-file
+
+- task: T40
+- command: `mise exec -- cargo test -p dcs-mcp cli`
+- reddens: `cli_a_pending_writes_no_file_at_all`
+- note: the keeping flags written unguarded, which is the natural way to
+  write this wrong — the reply is "whatever came back", and what came back
+  for a `pending` is nothing. The guard is the one `if let`, so the mutation
+  hands it a reply that is always there and empty where none arrived; the
+  block stands, so the edit compiles and the red is an assertion rather than
+  the type checker.
+
+  What the mutated build does is write a zero-byte file at `--out` and a
+  zero-byte `.res` under the capture directory, for a request that is still
+  in flight. A caller reading either back cannot tell it from a reply whose
+  body really was empty, which is the same confusion between "nothing yet"
+  and "nothing measured" that the `pending` wording exists against one level
+  up.
+
+  Observed red is one test and only one. The verbatim test writes the same
+  bytes either way, because a reply really did come back for it.
+
+```sweep-edit crates/dcs-mcp/src/cli.rs
+-     let published = written_bytes(&answered);
++     let empty = Reply { id: String::new(), bytes: Vec::new() };
++     let published = Some(written_bytes(&answered).unwrap_or(&empty));
+```
+
+### cli/reply-rendered-by-a-second-formatter
+
+- task: T40
+- command: `mise exec -- cargo test -p dcs-mcp cli`
+- reddens: `cli_one_reply_is_written_verbatim_and_worded_as_the_tool_words_it`
+- note: the one print seam replaced by a formatter of the command line's own,
+  for replies only. It is the natural wrong way to write it — the command
+  line is holding the reply's bytes already, and headers and a body are
+  "obviously" what a reader wants — and it is deliberately narrow, since a
+  `pending` has no reply behind it and goes on through the renderer. So the
+  red is exclusive and the capture entry above stays green under it.
+
+  Observed red is the empty-diff assertion, which prints both texts: the
+  published bytes carry the executor's blank separator line where
+  `wording::text` renders the headers and the body joined by one newline, so
+  the diff is several lines wide — `- first / + (blank) / - second / + first`
+  and on. The `--out` half of that same test stays green under this edit,
+  which is what says its two halves watch different things.
+
+```sweep-edit crates/dcs-mcp/src/cli.rs
+-     let shown = wording::text(&answered.answer);
++     let shown = match &answered.reply {
++         Some(Ok(reply)) => format!("reply\n{}", String::from_utf8_lossy(&reply.bytes)),
++         _ => wording::text(&answered.answer),
++     };
+```
+
 ---
 
 ## Stage 8 — the installer and embedding
@@ -1002,9 +1057,10 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 7
-- breakdown: T58, T59 one each, 2; T40, T46 two each, 4;
-  T52 one, 1. Stage 9's remaining rows name no mutation
+- controls: 5
+- breakdown: T58, T59 one each, 2; T46 two, 2; T52 one, 1. T40's two are in
+  the inventory above and are counted there rather than here. Stage 9's
+  remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
   rows move into the inventory proper.
 
