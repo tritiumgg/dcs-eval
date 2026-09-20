@@ -501,7 +501,6 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ## Stage 8 — the installer and embedding
 
-
 ### embed/stale-embedded-copy
 
 - task: T42
@@ -574,9 +573,11 @@ an entry here like any other, and both figures move.
 
 ### out/stages-7-to-9
 
-- out-of-scope: not built. Stages 7 to 9 are the MCP server, the installer and
-  the live proofs; there is no code to mutate, and the last of them needs a
-  running game rather than a runner.
+- out-of-scope: mostly not built. Stages 7 to 9 are the MCP server, the
+  installer and the live proofs; Stage 8 has begun and its first rows have
+  moved into the inventory proper, while the rows still counted here have no
+  code to mutate yet and the last of the three needs a running game rather
+  than a runner.
 - controls: 23
 - breakdown: T38, T39, T58, T59, T43 one each, 5; T37, T40, T41, T60, T44,
   T61, T46 two each, 14; T45 three, 3; T52 one, 1. Stage 9's remaining rows name
