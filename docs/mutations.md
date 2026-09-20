@@ -735,6 +735,72 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +     };
 ```
 
+### runs/hash-recomputed-from-the-reply
+
+- task: T58
+- command: `mise exec -- cargo test -p dcs-mcp runs`
+- reddens: `a_file_eval_records_the_path_and_the_readers_own_hash`
+- note: the digest computed where the line is written instead of taken from
+  the reader's record. It is the natural wrong way round — the writer is
+  holding the request already, and hashing it "obviously" gives the same
+  answer — and it does give the same answer in every case but the one a
+  provenance record exists for. The unmutated statement is one line and the
+  digest appears nowhere else in that module, which is what makes a single
+  whole-line anchor possible.
+
+  The fixture pairs a file holding `return 1` and a newline with a reply
+  whose body is `nil`, so the two digests can never coincide. Observed red
+  is the one hash assertion, printing `5da3a4c7…` — the reply's body — where
+  `0805bfdc…`, the file's, was wanted. That expectation is a literal
+  computed outside the build with `sha256sum`, so it is independent of both
+  the reader and the writer.
+
+  The other two tests stay green, which is what says the red is exclusive:
+  both drive inline evals, where there is no source and the `map` yields
+  nothing under either statement.
+
+```sweep-edit crates/dcs-mcp/src/runs.rs
+-     let sha256 = source.map(|source| source.sha256_hex());
++     let sha256 = source.map(|_| {
++         dcs_eval::sha256::hex(&dcs_eval::sha256::digest(match item {
++             Some(Ok(dcs_eval::wait::Outcome::Reply(envelope))) => envelope.body.as_slice(),
++             _ => &[],
++         }))
++     });
+```
+
+### runs/a-refusal-records-a-line-anyway
+
+- task: T58
+- command: `mise exec -- cargo test -p dcs-mcp runs`
+- reddens: `a_file_eval_refused_before_a_byte_is_read_records_nothing`
+- note: a record written of what was *asked for* rather than of what was
+  read. The edit goes on `eval_file`'s refusal closure, which is where
+  somebody would naturally put it: every refusal for a file eval passes
+  through that one line, so it reads as the place to say a file eval
+  happened.
+
+  Nothing guards this in the unmutated build. The data directory is resolved
+  after the read succeeds and every earlier refusal has already returned, so
+  "no line for a path that was never opened" falls out of the ordering. That
+  is also why the control matters: a later change moving the resolution
+  upward would still compile and still pass every other test.
+
+  Observed red is the assertion that the data directory does not exist —
+  constructing a `DataDir` creates nothing, so the mutated build's append is
+  what brings the directory into being. The other two tests never take that
+  closure and stay green.
+
+```sweep-edit crates/dcs-mcp/src/tools.rs
+-     let refused = |why: String| Answered::plain(refuse("refused", vec![why]));
++     let refused = |why: String| {
++         if let Ok(data) = data_dir(serve) {
++             let _ = crate::runs::append(&data, "{\"source\":\"file\",\"status\":\"refused\"}");
++         }
++         Answered::plain(refuse("refused", vec![why]))
++     };
+```
+
 ---
 
 ## Stage 8 — the installer and embedding
@@ -1116,8 +1182,8 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 3
-- breakdown: T58, T59 one each, 2; T52 one, 1. T40's two and T46's two are in
+- controls: 2
+- breakdown: T59 one, 1; T52 one, 1. T40's two, T46's two and T58's two are in
   the inventory above and are counted there rather than here. Stage 9's
   remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their

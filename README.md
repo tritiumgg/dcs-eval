@@ -153,8 +153,8 @@ call's own, and a verb waits 15 seconds by default — a wait and never a
 limit, exactly as for the tools.
 
 `--out <path>` writes the reply to a file, and `--capture` keeps a copy under
-this build's own data directory. Both write the bytes the executor published, byte for byte, rather than a
-re-rendering of them. Where no reply came back — a `pending`, or a request
+this build's own data directory. Both write the bytes the executor published,
+byte for byte, rather than a re-rendering of them. Where no reply came back — a `pending`, or a request
 that was refused before it was sent — **neither writes anything at all**, not
 even an empty file, because an empty file reads back as a reply that returned
 nothing. `status` and `game-state` answer without one reply off the wire, so
@@ -172,6 +172,28 @@ would not parse.
 `install`, `verify` and `uninstall` are *not built*. An `--out` path is not
 yet judged against the containment rule the install paths are judged by —
 *not built*; `--capture` is, because it goes through the same data directory.
+
+## What ran, written down
+
+Every evaluation — from a tool call or from the terminal — appends one line of
+JSON to `runs.jsonl` under the data directory (`%LOCALAPPDATA%\dcs-mcp` unless
+`--data-dir` says otherwise), before the answer is rendered. A line carries
+when it ran, the id the reply came back under, the executor session, the host
+and the Lua state, whether the chunk came from a file or off the line, and what
+the reply said: its status, the stage that failed if one did, the CPU
+milliseconds and the tick.
+
+For a file, it also carries the resolved path, the chunk name and the SHA-256
+of the bytes that were read — the same hash the answer's own last line shows,
+because both come from the reader that opened the file. A chunk given on the
+line has no path and no hash: nothing read it, so there is nothing to attest.
+
+A file evaluation refused **before** the file is read — a path outside the
+allowed roots, a name too long, anything judged before it is opened — writes
+no line at all. An absent line means nothing ran.
+
+Nothing reads this file back. It is a record for you, and for whoever asks
+afterwards what a result came from.
 
 ## Building it
 
