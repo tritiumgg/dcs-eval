@@ -6,8 +6,13 @@ protocol, and exposes six tools. It replaces `dcs-api-bridge`, which is
 uninstalled before this is installed (ADR 0001).
 
 **The word is "executor", and the frozen specifications say "bridge".** They
-mean the same thing; ADR 0002 says why the build uses its own word. Nothing
-outside `docs/specs/` says "bridge" except the filename `bridge.md`.
+mean the same thing; ADR 0002 says why the build uses its own word. No name the
+build chose says "bridge": not a file, a type, a module or a directory, only the
+filename `bridge.md`. The **wire** is the exception, because ADR 0002 moves the
+on-disk names off `dcs-api` and leaves the headers alone: `stage: bridge` is the
+protocol's own word for the executor's own failure, and the executor, the
+harness suites and the client all spell it that way on purpose. A quotation of
+the specifications keeps the word too.
 
 **`missionscripting` is reached through `a_do_script`, and the build does not
 call it "the door".** The specifications do, on the wire too; the build's

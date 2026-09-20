@@ -17,8 +17,8 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-**Wave 3 of Milestone C is building:** T39, T44, T61, one worktree each off
-`969752f` — `../dcs-eval-wt-a`, `-b`, `-c`; nothing of theirs is on `main`, and
+**Wave 4 of Milestone C is building:** T40, T45, T46, one worktree each off
+`192d238` — `../dcs-eval-wt-a`, `-b`, `-c`; nothing of theirs is on `main`, and
 a stopped wave leaves its branches there. Three branches in flight would all
 conflict on this file, so it is written between waves until Stage 8 closes.
 
@@ -28,15 +28,15 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T38** — the six tools registered, listed and called over an in-memory pair; the test compares the whole listed set, not a count. It also found the row's own filter vacuous: `cargo test` exits 0 on a filter matching nothing, and `tools-listed` can match no Rust path. The row now says `tools_listed`.
-- **T60** — `install-register.tsv` written before a move and marked after, and the `parked/<utc>/` store; two parks in one second land apart.
-- **T41** — the reply watch's handles: open only while waiting, never on a `superseded` session, and none a sibling sweep would trip over.
+- **T39** — one renderer for every reply: each refusing status reads as a non-empty refusal headed by its own word, an unknown wire word falls to the refusing side, and `pending` names its id and phase and is never an error.
+- **T44** — `install` places the hook by rename from a `.tmp` in the destination directory, over four dispositions: absent, a shipped hash, a foreign hash refused without `--replace`, and the incumbent's two files.
+- **T61** — the `Export.lua` line appended by its exact marker, a missing trailing newline added first rather than joined onto, and every other byte identical afterward.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Wave 4** once wave 3 lands: T40, T45, T46. Then T58 and T59 close Stage 7.
+**Wave 5** once wave 4 lands: T58 and T59, which close Stage 7 and Milestone C.
 
 Stages 7 and 8 were re-split before being built, ten rows into fourteen; the
 stage prose in `docs/PLAN.md` says why. Stage 8 needs nothing from Stage 7, so
