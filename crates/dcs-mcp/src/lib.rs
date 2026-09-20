@@ -48,6 +48,10 @@ pub mod tools;
 // are not one file.
 pub mod sys;
 
+// How an answer is worded: the one renderer every tool body goes out through,
+// so a refusal reads as a refusal in one place rather than in six.
+pub mod wording;
+
 // Scaffolding the tests in this crate share. Never in the binary.
 #[cfg(test)]
 mod testing;
