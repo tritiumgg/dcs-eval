@@ -9,8 +9,10 @@
 //! rename within a directory is the one filesystem operation that either
 //! happened or did not. The second is that whatever is already there has to
 //! be identified before it is displaced — this project's own release, an
-//! older one of ours, a stranger's file, or the executor of the project this
-//! one replaces — because only the first two are ours to answer for.
+//! older one of ours, or a stranger's file — because only the first two are
+//! ours to answer for. Nothing else in that directory is looked at at all:
+//! what a user loads beside us is theirs, including the executor of the
+//! project this one replaces (ADR 0022).
 //!
 //! Nothing here records or moves anything itself. The register writes the row
 //! before the write and marks it after, and the park store holds what was
@@ -27,15 +29,6 @@ use dcs_eval::paths::{self, Real};
 use dcs_eval::sha256::{digest, hex};
 
 use crate::register::{Action, DataDir, RegisterError};
-
-/// The leaf names the project this one replaces put in `Scripts\Hooks\`.
-///
-/// Its executor registers the same callbacks ours does, so a machine holding
-/// both runs two of them and each event is handled twice. They are named
-/// rather than matched by pattern: a pattern over `DcsApi*` would sweep up a
-/// file somebody else happened to name that way, and this list is the set of
-/// files one known project is known to have written.
-const INCUMBENT: [&str; 2] = ["DcsApiEval.lua", "DcsApiExport.lua"];
 
 /// The release being placed: the bytes, the name they go under, the hash of
 /// those bytes, and every hash this project has shipped.
@@ -92,10 +85,10 @@ pub struct Placed {
 /// was there first.
 ///
 /// `replace` is the user saying they know a file they did not put there is
-/// about to be moved aside. It is consulted in one place — the refusals near
-/// the top — and never again: below them, what is parked is decided by what
-/// was found and nothing else, so an upgrade of our own file needs no answer
-/// and a stranger's file cannot be parked without one.
+/// about to be moved aside. It is consulted in one place — the refusal near
+/// the top — and never again: below it, what is parked is decided by what was
+/// found and nothing else, so an upgrade of our own file needs no answer and
+/// a stranger's file cannot be parked without one.
 pub fn place_hook(
     now: SystemTime,
     variant: &Real,
@@ -105,17 +98,13 @@ pub fn place_hook(
 ) -> Result<Placed, InstallError> {
     let hooks = variant.as_path().join("Scripts").join("Hooks");
 
-    // One read of the directory, and every name compared with case folded.
+    // One read of the directory, and the name compared with case folded.
     // Windows matches names that way, so a hook written back as
     // `dcsevalexecutor.lua` is the same file to the game and has to be the
-    // same file here; reaching ours by `join` while folding only the
-    // incumbent's names would leave the two halves disagreeing. Only this
-    // directory is looked at, deliberately: a wider sweep for stray
-    // `DcsEval*`/`DcsApi*` files anywhere under the variant is what `verify`
-    // is for, and doing it here would make placing a hook depend on the whole
-    // tree being tidy.
+    // same file here; reaching ours by `join` would miss it. Nothing else in
+    // the directory is looked at: what a user has beside ours is theirs, and
+    // naming a second copy of *our own* executor is what `verify` is for.
     let mut ours: Option<PathBuf> = None;
-    let mut incumbent: Vec<PathBuf> = Vec::new();
     match fs::read_dir(&hooks) {
         Ok(entries) => {
             for entry in entries {
@@ -123,8 +112,6 @@ pub fn place_hook(
                 let leaf = entry.file_name().to_string_lossy().into_owned();
                 if leaf.eq_ignore_ascii_case(release.name) {
                     ours = Some(entry.path());
-                } else if INCUMBENT.iter().any(|name| leaf.eq_ignore_ascii_case(name)) {
-                    incumbent.push(entry.path());
                 }
             }
         }
@@ -134,9 +121,6 @@ pub fn place_hook(
         Err(why) if why.kind() == io::ErrorKind::NotFound => {}
         Err(why) => return Err(disk(&hooks, why)),
     }
-    // So that the refusal below names the two files in the same order every
-    // time, whatever order the filesystem hands them back in.
-    incumbent.sort();
 
     let disposition = match &ours {
         None => Disposition::Absent,
@@ -151,31 +135,25 @@ pub fn place_hook(
         }
     };
 
-    // Both refusals happen before anything on disk is touched — before even
+    // The refusal happens before anything on disk is touched — before even
     // the Hooks directory is made. A refusal that left a directory behind is
     // not a refusal that changed nothing, and changing nothing is the whole
-    // of what it promises.
-    if !replace {
-        if let (Some(hook), Disposition::Foreign { sha256: hash }) = (&ours, &disposition) {
-            return Err(InstallError::Foreign {
-                file: hook.clone(),
-                hash: hash.clone(),
-            });
-        }
-        if !incumbent.is_empty() {
-            return Err(InstallError::Incumbent { files: incumbent });
-        }
+    // of what it promises. `replace` is matched alongside the disposition
+    // rather than wrapping it, because a nested `if` here is one clippy
+    // collapses and the collapsed form is the one that keeps reading it.
+    if let (false, Some(hook), Disposition::Foreign { sha256: hash }) =
+        (replace, &ours, &disposition)
+    {
+        return Err(InstallError::Foreign {
+            file: hook.clone(),
+            hash: hash.clone(),
+        });
     }
 
     fs::create_dir_all(&hooks).map_err(|why| disk(&hooks, why))?;
 
     let register = data.register(Action::Install);
     let mut parked = Vec::new();
-    // The incumbent's files first, so that if anything below fails the
-    // machine is left with one executor rather than two.
-    for file in &incumbent {
-        parked.push(register.park(now, variant, file)?);
-    }
     if let Some(hook) = &ours {
         parked.push(register.park(now, variant, hook)?);
     }
@@ -258,7 +236,6 @@ fn disk(path: &Path, why: io::Error) -> InstallError {
 #[derive(Debug)]
 pub enum InstallError {
     Foreign { file: PathBuf, hash: String },
-    Incumbent { files: Vec<PathBuf> },
     Register(RegisterError),
 }
 
@@ -276,16 +253,6 @@ impl fmt::Display for InstallError {
                 "{}: sha256 {hash} is not one this project has shipped, so the file is somebody \
                  else's work; --replace parks it and puts ours in its place",
                 file.display()
-            ),
-            Self::Incumbent { files } => write!(
-                f,
-                "{}: a second executor DCS would run beside ours, registering its callbacks \
-                 twice; --replace parks it",
-                files
-                    .iter()
-                    .map(|file| file.display().to_string())
-                    .collect::<Vec<_>>()
-                    .join(", ")
             ),
             Self::Register(why) => why.fmt(f),
         }
@@ -629,88 +596,38 @@ mod tests {
     }
 
     #[test]
-    fn the_incumbent_s_two_files_are_named_as_a_second_executor() {
+    fn a_hook_that_is_not_ours_is_neither_read_nor_moved() {
         let (_b, variant, data, hooks) = fixture();
         let (release, _older, _current) = a_release();
-        put(&hooks.join("DcsApiEval.lua"), b"-- the prior project\n");
-        put(&hooks.join("DcsApiExport.lua"), b"-- the prior project\n");
+        // Somebody else's hook, and the one belonging to the project this one
+        // replaces. Neither is this installer's to touch: the cutover is the
+        // user's, done by hand, and nothing here looks for it (ADR 0022).
+        put(&hooks.join("TacviewGameGUI.lua"), b"-- another project\n");
+        put(&hooks.join("DcsApiEval.lua"), b"-- the one this replaces\n");
 
-        let err = place_hook(an_instant(), &variant, &data, &release, false)
-            .expect_err("two executors is not something to do quietly");
-
-        assert!(matches!(err, InstallError::Incumbent { .. }), "{err}");
-        let said = err.to_string();
-        for name in INCUMBENT {
-            assert!(said.contains(name), "{name} is not named: {said}");
-        }
-        assert!(
-            said.contains("twice"),
-            "the reason is not said, only the files: {said}"
-        );
-
-        assert_eq!(
-            leaves(&hooks),
-            vec!["DcsApiEval.lua".to_owned(), "DcsApiExport.lua".to_owned()],
-            "both still there, and ours was not written beside them"
-        );
-        assert!(
-            !data.register_path().exists(),
-            "a refusal writes no row: {}",
-            data.register_path().display()
-        );
-    }
-
-    #[test]
-    fn the_incumbent_s_two_files_are_parked_with_replace() {
-        let (_b, variant, data, hooks) = fixture();
-        let (release, _older, _current) = a_release();
-        put(&hooks.join("DcsApiEval.lua"), b"-- the eval half\n");
-        put(&hooks.join("DcsApiExport.lua"), b"-- the export half\n");
-
-        let placed = place_hook(an_instant(), &variant, &data, &release, true)
-            .expect("--replace answers for them");
+        let placed = place_hook(an_instant(), &variant, &data, &release, false)
+            .expect("a directory with other hooks in it is an ordinary install");
 
         assert_eq!(
             placed.disposition,
             Disposition::Absent,
             "ours was not there"
         );
-        assert_eq!(placed.parked.len(), 2);
-        let recovered: Vec<Vec<u8>> = placed
-            .parked
-            .iter()
-            .zip(["DcsApiEval.lua", "DcsApiExport.lua"])
-            .map(|(dir, name)| {
-                fs::read(dir.join("Scripts").join("Hooks").join(name))
-                    .unwrap_or_else(|why| panic!("{name} is not recoverable: {why}"))
-            })
-            .collect();
-        assert_eq!(
-            recovered,
-            vec![
-                b"-- the eval half\n".to_vec(),
-                b"-- the export half\n".to_vec()
-            ],
-            "each under its own path relative to the variant"
-        );
+        assert!(placed.parked.is_empty(), "nothing of theirs was moved");
         assert_eq!(
             leaves(&hooks),
-            vec!["DcsEvalExecutor.lua".to_owned()],
-            "one executor left, and it is ours"
+            vec![
+                "DcsApiEval.lua".to_owned(),
+                "DcsEvalExecutor.lua".to_owned(),
+                "TacviewGameGUI.lua".to_owned(),
+            ],
+            "ours is placed and both of theirs are left where they were"
         );
-    }
-
-    #[test]
-    fn an_incumbent_file_is_recognised_whatever_case_it_is_spelled_in() {
-        let (_b, variant, data, hooks) = fixture();
-        let (release, _older, _current) = a_release();
-        // Windows matches names with case folded, so this is the same file to
-        // the game as the one spelled the way the prior project wrote it.
-        put(&hooks.join("DCSAPIEXPORT.LUA"), b"-- shouted\n");
-
-        let err = place_hook(an_instant(), &variant, &data, &release, false)
-            .expect_err("the spelling is not what makes it a second executor");
-        assert!(matches!(err, InstallError::Incumbent { .. }), "{err}");
+        assert_eq!(
+            fs::read(hooks.join("DcsApiEval.lua")).expect("still readable"),
+            b"-- the one this replaces\n",
+            "not rewritten either"
+        );
     }
 
     #[test]

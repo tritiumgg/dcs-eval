@@ -1113,24 +1113,29 @@ not cover is printed by the sweep itself rather than left to be assumed.
 - reddens: `install::tests::a_foreign_hook_is_refused_and_named_without_replace`
 - note: the guard is deleted outright, so a hook file this project never
   shipped is parked and replaced with nobody having said it may be. The run
-  occurs exactly once — the incumbent's refusal beside it is spelled with a
-  different condition, so no shared line makes the anchor ambiguous — and the
-  mutant compiles without a warning, because the refusal clones its two fields
-  rather than moving them and both are read again below by the park and the
-  report, and because `replace` is still read by the incumbent guard left
-  standing. The red is the `expect_err` coming back with a `Placed` naming the
-  park it made. `a_foreign_hook_is_parked_when_replace_answers_for_it` stays
-  green, and that is the point of the pair: the control watches the refusal and
-  not the parking. It holds only because nothing below the guards consults
-  `replace` again — what is parked is decided by what was found.
+  occurs exactly once: it is the only refusal in the module, the second one
+  having gone with ADR 0022. The red is the `expect_err` coming back with a
+  `Placed` naming the park it made.
+  `a_foreign_hook_is_parked_when_replace_answers_for_it` stays green, and that
+  is the point of the pair: the control watches the refusal and not the
+  parking. It holds only because nothing below the guard consults `replace`
+  again — what is parked is decided by what was found.
+  **The mutant warns, and the warning is not what reddens it.** This guard is
+  now `replace`'s only reader, so deleting it leaves the parameter unused and
+  `rustc` says so. `cargo test` compiles a warning, and the assertion is what
+  fails; a sweep that came back green here on a warning alone would be
+  reporting the compiler, not the control. Before ADR 0022 the incumbent's
+  refusal read `replace` beside this one and the mutant was warning-free.
 
 ```sweep-edit crates/dcs-mcp/src/install.rs
--         if let (Some(hook), Disposition::Foreign { sha256: hash }) = (&ours, &disposition) {
--             return Err(InstallError::Foreign {
--                 file: hook.clone(),
--                 hash: hash.clone(),
--             });
--         }
+-     if let (false, Some(hook), Disposition::Foreign { sha256: hash }) =
+-         (replace, &ours, &disposition)
+-     {
+-         return Err(InstallError::Foreign {
+-             file: hook.clone(),
+-             hash: hash.clone(),
+-         });
+-     }
 ```
 
 ### uninstall/neighbouring-line-removed
@@ -1260,6 +1265,32 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +         self.problems.is_empty()
 +             && self.session.problems.is_empty()
 +             && !matches!(self.app_version, VersionCheck::Differs { .. })
+```
+
+### verify/stray-prefix-aimed-at-the-wrong-project
+
+- task: T52
+- command: `mise exec -- cargo test -p dcs-mcp verify`
+- reddens: `verify::tests::a_second_hook_file_beside_ours_is_named_a_problem`
+- note: the one prefix is swapped rather than widened or emptied, and that is
+  what makes one edit kill both halves of the control at once. `DcsEvalExecutor.old.lua`
+  stops being named, so the report says nothing about a second copy of our own
+  executor polling the one transport root; and `DcsApiEval.lua` starts being
+  named, which is the report auditing a directory it was given one file in —
+  the thing ADR 0022 took out. Four assertions follow the fixture and the first
+  is what is seen, the rest never running: the stray list comes back holding
+  `DcsApiEval.lua` where `vec![&ours_again]` names `DcsEvalExecutor.old.lua`, so
+  the printed pair is not an empty list against a full one but the two files
+  swapped — which is the mutation's whole shape, read straight off the failure.
+  It compiles clean, the array's length being written
+  `[&str; 1]` either way. `a_healthy_install_verifies` stays green, because a
+  fixture with no second copy in it has nothing for either prefix to match —
+  which is the pair saying the control watches what is named and not merely
+  that something is.
+
+```sweep-edit crates/dcs-mcp/src/verify.rs
+- const STRAY_PREFIXES: [&str; 1] = ["dcseval"];
++ const STRAY_PREFIXES: [&str; 1] = ["dcsapi"];
 ```
 
 ---

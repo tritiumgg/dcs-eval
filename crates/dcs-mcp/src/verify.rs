@@ -117,8 +117,9 @@ pub enum Problem {
         path: PathBuf,
         sha256: String,
     },
-    /// A second file DCS would load beside ours, registering its callbacks
-    /// a second time.
+    /// A second copy of *this project's* executor under another name, which
+    /// DCS loads beside the real one: our callbacks registered twice against
+    /// our one transport root. Never anybody else's file (ADR 0022).
     OtherHook {
         path: PathBuf,
     },
@@ -167,8 +168,8 @@ impl fmt::Display for Problem {
             ),
             Self::OtherHook { path } => write!(
                 f,
-                "{}: a second executor DCS would run beside ours, registering its callbacks \
-                 twice",
+                "{}: a second copy of our executor under another name, which DCS loads beside \
+                 the real one; delete it, or uninstall and install again",
                 path.display()
             ),
             Self::ExportFileAbsent { path } => write!(
@@ -390,20 +391,24 @@ pub fn verify(variant: &Real, output: &Path) -> Report {
     )
 }
 
-/// What a leaf name has to start with to be a hook one of these two
-/// projects wrote.
+/// What a leaf name has to start with to be a second copy of *this*
+/// project's executor.
 ///
-/// The placement matches the prior project by two exact leaf names; this
-/// matches a prefix, and the difference is deliberate. A placement only
-/// moves files it can identify, so a pattern there would sweep up a file
-/// somebody else happened to name that way. A report moves nothing and
-/// names everything DCS would load beside ours, which is the wider question
-/// and the one a user asking "why is every event handled twice?" is really
-/// asking.
-const STRAY_PREFIXES: [&str; 2] = ["dcseval", "dcsapi"];
+/// DCS loads every `.lua` in `Scripts\Hooks\`, so a copy of ours left under
+/// another name — a backup, or a file an update renamed — registers our
+/// callbacks a second time against the one transport root. That is this
+/// project's own footprint and the report names it.
+///
+/// It is a prefix rather than a leaf name because the second copy's name is
+/// whoever left it behind's to choose, and it is deliberately narrow: what
+/// else a user has in that directory is their business, and a report that
+/// audited it would be this tool policing a directory it was given one file
+/// in. Nothing here looks for the project this one replaces (ADR 0022).
+const STRAY_PREFIXES: [&str; 1] = ["dcseval"];
 
-/// One read of `Scripts\Hooks`: what is at the hook's name, and every other
-/// file there that DCS would load as a second executor.
+/// One read of `Scripts\Hooks`: what is at the hook's name, and any second
+/// copy of our own executor DCS would load beside it. What else is in that
+/// directory is the user's and is not looked at (ADR 0022).
 fn look_at_hooks(
     hooks: &Path,
     release: &Executor<'_>,
@@ -874,14 +879,17 @@ mod tests {
         let _ex = installed(&variant, &output);
         let (release, _older, _current) = a_release();
         let hooks = variant.as_path().join("Scripts").join("Hooks");
-        // One of each prefix. The prior project's is the case a user
-        // upgrading meets; a second file of ours under another name is the
-        // one a developer leaves behind, and it is not caught by the leaf
-        // name the release is looked up by.
-        let incumbent = hooks.join("DcsApiEval.lua");
+        // A second file of ours under another name is what a developer or a
+        // DCS update leaves behind, and it is not caught by the leaf name the
+        // release is looked up by. Beside it, two files this tool has no
+        // business naming: somebody else's hook, and the project this one
+        // replaces (ADR 0022).
         let ours_again = hooks.join("DcsEvalExecutor.old.lua");
-        put(&incumbent, b"-- the prior project\n");
+        let someone_elses = hooks.join("TacviewGameGUI.lua");
+        let incumbent = hooks.join("DcsApiEval.lua");
         put(&ours_again, b"-- a copy left behind\n");
+        put(&someone_elses, b"-- another project entirely\n");
+        put(&incumbent, b"-- the project this one replaces\n");
 
         let report = verify_at(&variant, &output, &release, None, an_instant());
 
@@ -895,15 +903,19 @@ mod tests {
             .collect();
         assert_eq!(
             strays,
-            vec![&incumbent, &ours_again],
-            "both prefixes are named, in the one order: {:?}",
+            vec![&ours_again],
+            "our own second copy is named and nobody else's file is: {:?}",
             report.problems
         );
         assert!(!report.verified());
         let rendered = rendered(&report);
         assert!(
-            rendered.contains("DcsApiEval.lua") && rendered.contains("DcsEvalExecutor.old.lua"),
-            "the files are named where a user would read them: {rendered}"
+            rendered.contains("DcsEvalExecutor.old.lua"),
+            "the file is named where a user would read it: {rendered}"
+        );
+        assert!(
+            !rendered.contains("TacviewGameGUI.lua") && !rendered.contains("DcsApiEval.lua"),
+            "no file but ours is named: {rendered}"
         );
     }
 
