@@ -537,9 +537,17 @@ not cover is printed by the sweep itself rather than left to be assumed.
   `NoSession` derive `Clone` and hold only `Sync` fields, which is what lets a
   `static` hold one — and the reason `NoSession` renders its reason to a
   `String` rather than carrying the `io::Error` that raised it. Observed red is
-  two tests, not one: `a_second_serve_over_the_same_options_resolves_independently`
-  fails beside it, because the only call in the suite that could ever cache an
-  `Ok` is the one this control is about.
+  three tests, not one: `a_second_serve_over_the_same_options_resolves_independently`
+  and `a_session_replaced_by_one_with_another_stamp_is_picked_up` fail beside
+  it.
+
+  The edit below caches an `Err` as readily as an `Ok`, which is the loudest
+  version of the fault and not the only one. A cache that kept only successes,
+  per `Serve` instance, would still be wrong the moment DCS reloads and the
+  handshake names a new stamp, and it slips past both of the other two tests —
+  neither of them resolves twice on one instance after a success. That is the
+  third test's whole job, and it was watched failing on its own under a
+  per-instance `OnceLock<Client>` before this row was written.
 
 ```sweep-edit crates/dcs-mcp/src/serve.rs
 -     pub fn client(&self) -> Result<Client, NoSession> {

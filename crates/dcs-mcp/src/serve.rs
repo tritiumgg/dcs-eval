@@ -70,10 +70,15 @@ impl Options {
     /// that go with the install are settled elsewhere; until then an
     /// unrecognised flag is refused by name rather than accepted and ignored,
     /// so a user who passes one that does not work yet is told so.
+    ///
+    /// A flag given twice is refused for the same reason. Last-wins is the
+    /// usual answer, but nothing here takes a list, so a repeat is a client
+    /// configuration with two opinions about which install to talk to, and the
+    /// half that is ignored would be ignored silently.
     pub fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Self, String> {
         let mut saved_games = None;
         let mut variant = None;
-        let mut host = Host::Hook;
+        let mut host = None;
         let mut args = args.into_iter();
         while let Some(arg) = args.next() {
             let mut value = |name: &str| {
@@ -81,14 +86,19 @@ impl Options {
                     .ok_or_else(|| format!("{name} wants a value after it"))
             };
             match arg.as_str() {
-                "--saved-games" => saved_games = Some(PathBuf::from(value("--saved-games")?)),
-                "--variant" => variant = Some(value("--variant")?),
+                "--saved-games" => once(
+                    &mut saved_games,
+                    "--saved-games",
+                    PathBuf::from(value("--saved-games")?),
+                )?,
+                "--variant" => once(&mut variant, "--variant", value("--variant")?)?,
                 "--host" => {
-                    host = match value("--host")?.as_str() {
+                    let word = match value("--host")?.as_str() {
                         "hook" => Host::Hook,
                         "export" => Host::Export,
                         other => return Err(format!("--host is hook or export, not {other}")),
-                    }
+                    };
+                    once(&mut host, "--host", word)?
                 }
                 other => return Err(format!("serve does not take {other}")),
             }
@@ -96,9 +106,18 @@ impl Options {
         Ok(Self {
             saved_games: saved_games.ok_or("serve wants --saved-games <dir>")?,
             variant: variant.ok_or("serve wants --variant <name>")?,
-            host,
+            host: host.unwrap_or(Host::Hook),
         })
     }
+}
+
+/// Fill a slot that has not been filled, or name the flag that filled it.
+fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
+    if slot.is_some() {
+        return Err(format!("{flag} is given twice"));
+    }
+    *slot = Some(value);
+    Ok(())
 }
 
 /// No executor session could be addressed, and where the looking was done.
@@ -285,6 +304,68 @@ mod tests {
                 .as_path(),
             "the session is addressed at the directory the handshake named"
         );
+    }
+
+    /// A session that ends is replaced by one with a different stamp, in the
+    /// same output directory. Nothing announces that to the server, so the only
+    /// way it can be right is by reading the handshake again — which is what a
+    /// client kept after the first success would not do.
+    #[test]
+    fn a_session_replaced_by_one_with_another_stamp_is_picked_up() {
+        let box_ = Sandbox::new();
+        let opts = opts(&box_, Host::Hook);
+        let serve = Serve::new(opts.clone());
+
+        let mut ex = Standin::open(&opts.output(), "hook").expect("the stand-in opens");
+        ex.handshake().expect("the handshake is published");
+        let first = serve.client().expect("the first call finds the session");
+        assert_eq!(first.session().stamp(), ex.stamp);
+
+        // DCS reloads: the executor mints a new stamp and republishes the
+        // handshake over the old one. The stand-in mints its directories at
+        // open and keeps them, which is beside the point here — what the server
+        // addresses a session on is the stamp the handshake names.
+        let restarted = format!("{}-again", ex.stamp);
+        ex.stamp = restarted.clone();
+        ex.handshake()
+            .expect("the reloaded executor republishes the handshake");
+
+        let second = serve.client().expect("the second call finds the session");
+        assert_eq!(
+            second.session().stamp(),
+            restarted,
+            "the second call read the handshake again rather than answering out of the first"
+        );
+    }
+
+    #[test]
+    fn a_flag_given_twice_is_refused_by_name() {
+        let args = |v: &[&str]| v.iter().map(|s| (*s).to_owned()).collect::<Vec<_>>();
+        let good = args(&[
+            "--saved-games",
+            "C:\\sg",
+            "--variant",
+            "DCS.openbeta",
+            "--host",
+            "export",
+        ]);
+        let parsed = Options::parse(good.clone()).expect("the three flags parse");
+        assert_eq!(parsed.host, Host::Export);
+
+        for (flag, value) in [
+            ("--saved-games", "C:\\other"),
+            ("--variant", "DCS"),
+            ("--host", "hook"),
+        ] {
+            let mut twice = good.clone();
+            twice.push(flag.to_owned());
+            twice.push(value.to_owned());
+            let why = Options::parse(twice).expect_err("a repeated flag is refused");
+            assert!(
+                why.contains(flag) && why.contains("twice"),
+                "the refusal names the flag that was repeated: {why}"
+            );
+        }
     }
 
     #[test]
