@@ -58,10 +58,14 @@ pub enum Line {
     /// Once, which is the only healthy answer.
     Once,
     /// Twice or more: DCS runs the hook once per line.
-    Repeated { count: usize },
+    Repeated {
+        count: usize,
+    },
     /// There is no `Export.lua` at all, so the line cannot be in it.
     NoFile,
-    Unreadable { why: String },
+    Unreadable {
+        why: String,
+    },
 }
 
 /// Whether `autoexec.cfg` could be read at all.
@@ -71,7 +75,9 @@ pub enum GateFile {
     /// when something has changed an option, so a fresh install has none.
     Absent,
     Read,
-    Unreadable { why: String },
+    Unreadable {
+        why: String,
+    },
 }
 
 /// The two keys in `autoexec.cfg` that decide what the executor may do.
@@ -232,7 +238,10 @@ impl fmt::Display for Report {
             Hook::Ours {
                 sha256,
                 current: true,
-            } => writeln!(f, "hook: ours, sha256 {sha256}, the release this binary carries")?,
+            } => writeln!(
+                f,
+                "hook: ours, sha256 {sha256}, the release this binary carries"
+            )?,
             Hook::Ours {
                 sha256,
                 current: false,
@@ -248,7 +257,11 @@ impl fmt::Display for Report {
             Line::Unreadable { why } => writeln!(f, "Export.lua: would not read: {why}")?,
         }
         writeln!(f, "{}: {}", self.gate.path.display(), gate_file(&self.gate))?;
-        writeln!(f, "net.allow_unsafe_api: {}", written(&self.gate.unsafe_api))?;
+        writeln!(
+            f,
+            "net.allow_unsafe_api: {}",
+            written(&self.gate.unsafe_api)
+        )?;
         writeln!(
             f,
             "net.allow_dostring_in: {}",
@@ -421,7 +434,8 @@ fn look_at_hooks(
                     continue;
                 }
                 let folded = leaf.to_ascii_lowercase();
-                if folded.ends_with(".lua") && STRAY_PREFIXES.iter().any(|p| folded.starts_with(p)) {
+                if folded.ends_with(".lua") && STRAY_PREFIXES.iter().any(|p| folded.starts_with(p))
+                {
                     strays.push(entry.path());
                 }
             }
@@ -661,11 +675,7 @@ mod tests {
         let variant = real(&b.dir("saved/DCS.openbeta"));
         b.dir("saved/DCS.openbeta/Scripts/Hooks");
         b.dir("saved/DCS.openbeta/Config");
-        let output = variant
-            .as_path()
-            .join("Logs")
-            .join("DcsEval")
-            .join("hook");
+        let output = variant.as_path().join("Logs").join("DcsEval").join("hook");
         (b, variant, output)
     }
 
@@ -684,7 +694,10 @@ mod tests {
             )
             .as_bytes(),
         );
-        put(&variant.as_path().join("Config").join("autoexec.cfg"), AUTOEXEC);
+        put(
+            &variant.as_path().join("Config").join("autoexec.cfg"),
+            AUTOEXEC,
+        );
         let mut ex = Standin::open(output, "hook").expect("the stand-in opens");
         // A pid somebody is running, so the session half reports a live
         // process rather than a gone one.
@@ -953,7 +966,12 @@ mod tests {
         let report = verify_at(&variant, &output, &release, None, an_instant());
 
         let sha = hex(&digest(stranger));
-        assert_eq!(report.hook, Hook::Foreign { sha256: sha.clone() });
+        assert_eq!(
+            report.hook,
+            Hook::Foreign {
+                sha256: sha.clone()
+            }
+        );
         assert!(
             report.problems.iter().any(|p| matches!(
                 p,
@@ -1098,7 +1116,11 @@ mod tests {
         // A verification that wrote nothing because it read nothing would
         // pass the two assertions below on its own, so the report is held
         // to having been a full one first.
-        assert!(matches!(report.hook, Hook::Ours { .. }), "{:?}", report.hook);
+        assert!(
+            matches!(report.hook, Hook::Ours { .. }),
+            "{:?}",
+            report.hook
+        );
         assert_eq!(report.line, Line::Once);
         assert_eq!(report.gate.file, GateFile::Read);
 
