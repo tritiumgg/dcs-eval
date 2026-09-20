@@ -309,6 +309,33 @@ impl Register<'_> {
             .map_err(|why| RegisterError::Disk { path, why })
     }
 
+    /// A directory of its own under the park store, made, together with
+    /// the place inside it that `relative` names.
+    ///
+    /// Answers the minted directory and the destination, in that order:
+    /// the first is what a caller hands back as the record of the park,
+    /// the second is where the bytes go.
+    fn minted(
+        &self,
+        now: SystemTime,
+        relative: &Path,
+    ) -> Result<(PathBuf, PathBuf), RegisterError> {
+        let parked = self.data.parked_root();
+        fs::create_dir_all(&parked).map_err(|why| RegisterError::Disk {
+            path: parked.clone(),
+            why,
+        })?;
+        let dir = mint(&parked, &stamp(now), PARKS_PER_SECOND)?;
+        let destination = dir.join(relative);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|why| RegisterError::Disk {
+                path: parent.to_owned(),
+                why,
+            })?;
+        }
+        Ok((dir, destination))
+    }
+
     /// Move `file` out of `variant` into a directory of its own under the
     /// park store, and answer that directory.
     ///
@@ -324,46 +351,68 @@ impl Register<'_> {
         variant: &Real,
         file: &Path,
     ) -> Result<PathBuf, RegisterError> {
-        let source = paths::resolve(file)?;
-        let astray = || RegisterError::NotUnderVariant {
-            file: source.clone(),
-            variant: variant.clone(),
-        };
-        // The rule is `contains`, which folds case and compares at a
-        // segment boundary; `strip_prefix` is the byte-exact half and can
-        // only disagree with it on a path the resolver did not produce.
-        // Both refuse the same way, so neither can let one through.
-        if !variant.contains(&source) {
-            return Err(astray());
-        }
-        let relative = source
-            .as_path()
-            .strip_prefix(variant.as_path())
-            .map_err(|_| astray())?
-            .to_owned();
+        let (source, relative) = relative_to(variant, file)?;
         let bytes = fs::read(source.as_path()).map_err(|why| RegisterError::Disk {
             path: source.as_path().to_owned(),
             why,
         })?;
         let sha = sha256::hex(&sha256::digest(&bytes));
         self.around(now, &source, &sha, || {
-            let parked = self.data.parked_root();
-            fs::create_dir_all(&parked).map_err(|why| RegisterError::Disk {
-                path: parked.clone(),
-                why,
-            })?;
-            let dir = mint(&parked, &stamp(now), PARKS_PER_SECOND)?;
-            let destination = dir.join(&relative);
-            if let Some(parent) = destination.parent() {
-                fs::create_dir_all(parent).map_err(|why| RegisterError::Disk {
-                    path: parent.to_owned(),
-                    why,
-                })?;
-            }
+            let (dir, destination) = self.minted(now, &relative)?;
             move_file(source.as_path(), &destination)?;
             Ok(dir)
         })
     }
+
+    /// Copy `file` aside into a directory of its own under the park store,
+    /// leaving the original where it is, and answer that directory.
+    ///
+    /// It copies rather than moves because what it parks is a file that is
+    /// about to be *edited* in place, which has to stay where it is. And
+    /// it writes no row of its own: it is called from inside a row the
+    /// caller already opened, and a second row for one action would say
+    /// two things happened where one did.
+    pub fn copy_aside(
+        &self,
+        now: SystemTime,
+        variant: &Real,
+        file: &Path,
+    ) -> Result<PathBuf, RegisterError> {
+        let (source, relative) = relative_to(variant, file)?;
+        let (dir, destination) = self.minted(now, &relative)?;
+        fs::copy(source.as_path(), &destination).map_err(|why| RegisterError::Disk {
+            path: destination.clone(),
+            why,
+        })?;
+        Ok(dir)
+    }
+}
+
+/// `file`, resolved, with its path relative to `variant` — or a refusal
+/// naming both, where it does not lie under the variant at all.
+///
+/// The relative half is the path a parked copy takes under the directory
+/// minted for it, which is what makes the copy recoverable without a
+/// second record saying where it came from.
+fn relative_to(variant: &Real, file: &Path) -> Result<(Real, PathBuf), RegisterError> {
+    let source = paths::resolve(file)?;
+    let astray = || RegisterError::NotUnderVariant {
+        file: source.clone(),
+        variant: variant.clone(),
+    };
+    // The rule is `contains`, which folds case and compares at a
+    // segment boundary; `strip_prefix` is the byte-exact half and can
+    // only disagree with it on a path the resolver did not produce.
+    // Both refuse the same way, so neither can let one through.
+    if !variant.contains(&source) {
+        return Err(astray());
+    }
+    let relative = source
+        .as_path()
+        .strip_prefix(variant.as_path())
+        .map_err(|_| astray())?
+        .to_owned();
+    Ok((source, relative))
 }
 
 /// A directory named for `stamp` that did not exist a moment ago.
@@ -659,6 +708,33 @@ mod tests {
         );
         assert_eq!(rows[0].sha256, sha256::hex(&sha256::digest(bytes)));
         assert_eq!(rows[0].status, "installed");
+    }
+
+    #[test]
+    fn a_copy_aside_leaves_the_original_where_it_is() {
+        let (b, variant, data) = fixture();
+        let bytes = b"-- somebody else's export line\n";
+        let file = b.join("saved/DCS.openbeta/Scripts/Export.lua");
+        put(&file, bytes);
+
+        let dir = data
+            .register(Action::Install)
+            .copy_aside(an_instant(), &variant, &file)
+            .expect("the file is copied aside");
+
+        assert_eq!(
+            fs::read(dir.join("Scripts").join("Export.lua")).expect("the parked copy is there"),
+            bytes
+        );
+        assert_eq!(
+            fs::read(&file).expect("and so is the original"),
+            bytes,
+            "copied, not moved: a file about to be edited stays where it is"
+        );
+        assert!(
+            data.rows().expect("the register reads").is_empty(),
+            "and the copy writes no row: the caller's row is the one row"
+        );
     }
 
     #[test]
