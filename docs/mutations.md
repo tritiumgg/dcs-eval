@@ -499,6 +499,44 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ---
 
+## Stage 8 — the installer and embedding
+
+
+### embed/stale-embedded-copy
+
+- task: T42
+- command: `mise exec -- cargo test -p dcs-mcp embed`
+- reddens: `the_embedded_bytes_are_the_repository_s_executor`
+- note: the bytes the binary carries are no longer the repository's executor,
+  which is the shape the plan cell names, and the check says so — "the embedded
+  copy is not the repository's executor". Only that one check goes red: the
+  hash on record and the file on disk are both untouched, and the decoy is LF
+  like everything else here, so the carriage-return check stays green too.
+
+```sweep-edit crates/dcs-mcp/src/embed.rs
+- pub const EXECUTOR: &[u8] = include_bytes!("../../../executor/DcsEvalExecutor.lua");
++ pub const EXECUTOR: &[u8] = include_bytes!("../../../tools/harness/executor/interop.lua");
+```
+
+### embed/current-hash-absent-from-shipped-list
+
+- task: T42
+- command: `mise exec -- cargo test -p dcs-mcp embed`
+- reddens: `the_embedded_release_s_hash_is_in_the_shipped_list`
+- note: a deletion. The list no longer holds the bytes the binary is actually
+  carrying, which is what would later let the installer mistake this project's
+  own file for a stranger's. It is why the list holds the digest as a literal
+  of its own rather than as a reference to the constant: written that way there
+  would be no list line to delete and the check could never be watched failing.
+  The anchor is the indented, comma-terminated list line; the same digest on
+  the constant's own line is a different line and is left alone.
+
+```sweep-edit crates/dcs-mcp/src/embed.rs
+-     "2a66399b06e4c14141179e3769d6180e9bf2e85ae27047a901c27d5f083ad871",
+```
+
+---
+
 ## Out of scope
 
 The counts below are read off `docs/PLAN.md` by hand, and nothing re-derives
@@ -539,9 +577,9 @@ an entry here like any other, and both figures move.
 - out-of-scope: not built. Stages 7 to 9 are the MCP server, the installer and
   the live proofs; there is no code to mutate, and the last of them needs a
   running game rather than a runner.
-- controls: 25
-- breakdown: T38, T39, T58, T59, T43 one each, 5; T37, T40, T41, T42, T60, T44,
-  T61, T46 two each, 16; T45 three, 3; T52 one, 1. Stage 9's remaining rows name
+- controls: 23
+- breakdown: T38, T39, T58, T59, T43 one each, 5; T37, T40, T41, T60, T44,
+  T61, T46 two each, 14; T45 three, 3; T52 one, 1. Stage 9's remaining rows name
   no mutation and are owed none. This figure falls as Stages 7 and 8 are built
   and their rows move into the inventory proper.
 
