@@ -40,3 +40,10 @@ pub mod sys;
 // Scaffolding the tests in this crate share. Never in the binary.
 #[cfg(test)]
 mod testing;
+
+// What a call leaves behind on the executor's session directories, watched
+// from outside through the sweep the next executor session does. A unit
+// module rather than a test binary, because it drives `testing`, and there
+// is to be only one of those.
+#[cfg(test)]
+mod watching;
