@@ -18,9 +18,12 @@
 # deliberate. Presence is owed only by Stages 3 to 6, which are built: a later
 # stage's row has no code to mutate yet, and demanding an entry for it would
 # fail every run until the last row landed. A stray is checked against the rows
-# of every stage, however far the plan grows, because a stage being unbuilt is
-# no reason to call the first entry written for it a control filed under a row
-# that names no mutation.
+# of Stage 3 upwards, however far the plan grows, because a stage being unbuilt
+# is no reason to call the first entry written for it a control filed under a
+# row that names no mutation. Stages 0 to 2 are the one place an entry is
+# refused rather than merely unowed, because the inventory declares them out of
+# scope with a hand-counted figure: an entry filed under a row there would be
+# counted once by hand and once by the sweep.
 #
 # No toolchain, so it runs inside `mise run check` and in CI's preflight job.
 
@@ -73,7 +76,7 @@ rows() {
 
 # What an entry is owed for, and what an entry is allowed to name.
 claimed=$(rows 3 6)
-named=$(rows 0 '')
+named=$(rows 3 '')
 
 # Every task the inventory names, in-scope entry and out-of-scope entry alike:
 # a `task:` bullet is read the same way wherever it sits. The runner's own row
