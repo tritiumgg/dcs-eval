@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-19
+**Last updated:** 2026-09-20
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -35,11 +35,14 @@ broken. Empty this when the task closes.*
 
 **Task T37** — Milestone C opens: `rmcp` stdio wiring, the `serve` role, the
 client built per call. Done when `cargo test -p dcs-mcp serve` shows only
-protocol frames on stdout and diagnostics on stderr; the mutation is a
-diagnostic written to stdout, and its row goes into `docs/mutations.md` with
-the task, as every control's now does.
+protocol frames on stdout and diagnostics on stderr; the mutations are a
+diagnostic written to stdout and a client resolved once at start-up.
 
-**An agent verifies** it here: the transport is proved off DCS.
+Stages 7 and 8 were re-split before being built, ten rows into fourteen; the
+stage prose in `docs/PLAN.md` says why. Stage 8 needs nothing from Stage 7, so
+the two build as separate fronts.
+
+**An agent verifies** every row of both stages: Milestone C is proved off DCS.
 
 ## After that
 

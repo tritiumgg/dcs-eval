@@ -18,7 +18,7 @@ citations below point into documents that still say "bridge".
 
 ## Granularity
 
-This plan carries **57 tasks across 10 stages**. The count is driven by the four right-sizing
+This plan carries **61 tasks across 10 stages**. The count is driven by the four right-sizing
 tests, and the splits fall at interfaces rather than at steps: each Lua carrier (`hook` local,
 `net.dostring_in`, `a_do_script`) is one task because changing how one crosses a state
 boundary must not rewrite the others; the client and the server are separate crates and separate
@@ -61,11 +61,12 @@ names a count, a diff, or a test that reddens under a stated mutation.
    nothing. Enforced by T01 (the pinned interpreter and its guard) and by every Lua stage command
    running under `lua5.1`.
 2. **The DCS install is read-only, always, including a probe of whether it is writable.** Enforced
-   by T07 (executor containment) and T43–T46 (the installer never writes the install and never probes
-   writability by writing).
+   by T07 (executor containment) and by every Stage 8 row (the installer never writes the install
+   and never probes writability by writing).
 3. **`Saved Games` is writable under park-and-restore; nothing there that is not this project's is
    ever lost — a displaced file is registered and moved, never deleted or overwritten in place.**
-   Enforced by T43–T44 and the register.
+   Enforced by T60, which builds the register and the park store, and by T44, T61 and T45, the only
+   rows that move a file under `Saved Games`.
 4. **The idle budget is a gate, not a goal.** A dormant frame is zero allocations, zero kernel
    entries; one `lfs.attributes` every `PROBE_EVERY` frames. Enforced by T27 as a byte-count control
    and by T48 as a frame-time measurement; a dormant figure above the baseline reopens `bridge.md`
@@ -289,15 +290,27 @@ plus a mutation sweep showing each §10/§7 control reddening under the mutation
 The `dcs-mcp` binary: `rmcp` wiring, six tools, one wording for one reply, and the CLI that speaks
 the same functions.
 
+Two rows here carried more than one check when the stage was first written, and are split at the
+interface as this plan's granularity rule asks. T40 carried what `--out` writes, what the provenance
+line records and whether the CLI and the tool word a reply alike — a capture rule and a file format
+in one row, of which only the capture rule had a mutation; the file format is now T58. T41 carried
+the handle rules and the server's own idle together, and `mcp.md` §7 lists them as two controls: a
+handle left open is one mechanism and a timer that wakes is another, and the sixty-second control
+its prose named was in no done-condition at all. That control is now T59. T37 is not split: the
+client built per call is the same file and the same command as the transport, and it simply gains
+the mutation it was missing.
+
 | id | task | done when | needs | runs on |
 |---|---|---|---|---|
-| T37 | `rmcp` stdio wiring, the `serve` role, the client built per call | `cargo test -p dcs-mcp serve` shows only protocol frames on stdout and diagnostics on stderr; mutation: a diagnostic written to stdout reddens the transport-cleanliness check | T02 | developer-only |
+| T37 | `rmcp` stdio wiring, the `serve` role, the client built per call | `cargo test -p dcs-mcp serve` shows only protocol frames on stdout, diagnostics on stderr, and a transport root that appears between two calls resolved by the second; mutations: a diagnostic written to stdout reddens the transport-cleanliness check; a client resolved once at start-up reddens the appears-between-calls check | T02 | developer-only |
 | T38 | The six tools registered, listed and callable over a real MCP session on an in-memory pair | `cargo test -p dcs-mcp tools-listed` lists exactly `dcs_status`, `dcs_ping`, `dcs_game_state`, `dcs_eval`, `dcs_eval_file`, `dcs_collect` and calls each; mutation: a tool that registers but is not listed reddens the count | T37 | developer-only |
 | T39 | The reply wording (one place): refusals read as refusals — `no-mission`, `stale-session`, `oversize`, `budget` — and `pending` names its id and phase | `cargo test -p dcs-mcp wording` shows each status worded as a non-empty refusal and `pending` not marked `isError`; mutation: an `oversize` reply worded like an empty result reddens it | T38 | developer-only |
-| T40 | The CLI verbs with `--out`/`--capture` (reply verbatim, nothing for `pending`) and the `runs.jsonl` provenance line | `cargo test -p dcs-mcp cli` shows `--out` writing headers+body verbatim and a `pending` writing nothing, plus one `runs.jsonl` line per eval with path+SHA-256; the CLI's text for one reply is byte-identical to the tool's (diff empty); mutation: a zero-byte file written for a `pending` reddens the capture check | T39 | developer-only |
-| T41 | The server-idle obligations (`mcp.md` §6): no thread wakes in 60 s of silence, the reply watch open only while waiting and never on a superseded session, the executor never held armed | `cargo test -p dcs-mcp idle` shows a sibling-directory sweep succeeding while the server is idle and no watch held between calls; mutation: a keepalive `ping` or a watch left open reddens the "never hold armed"/"hold no handle" checks | T54,T56,T37 | developer-only |
+| T40 | The read-and-eval CLI verbs (`status`, `ping`, `game-state`, `eval`, `eval --file`) with `--out`/`--capture` — reply verbatim, nothing for `pending` — and the one wording proved to be one | `cargo test -p dcs-mcp cli` shows `--out` writing headers+body verbatim, a `pending` writing no file at all, and the CLI's text for one reply byte-identical to the tool's as an empty diff inside the same test; mutations: a zero-byte file written for a `pending` reddens the capture check; the CLI rendering a reply through its own formatter rather than the tool's reddens the byte-identity check | T39,T55 | developer-only |
+| T58 | The `runs.jsonl` provenance record (`mcp.md` §4.6): one line per eval, the resolved path and the SHA-256 the source reader already computed, and nothing written for a refusal that never read a byte | `cargo test -p dcs-mcp runs` shows one line per eval carrying path and SHA-256 and no line for a `dcs_eval_file` refused before it read; mutation: a line whose SHA-256 is recomputed from the reply rather than taken from the source record reddens the hash-provenance check | T40 | developer-only |
+| T41 | The reply watch's handles (`mcp.md` §6): open only while a wait is in flight, never opened on a session `wait` has reported `superseded`, and no handle the next executor session's sibling sweep would trip over | `cargo test -p dcs-mcp watching` shows a stand-in's sibling-directory sweep succeeding while the server is idle, no watch held between two tool calls, and a `superseded` session waited on without a watch being opened; mutations: a watch left open across a tool call reddens the sweep check; a watch opened on a `superseded` session reddens the superseded check | T54,T56,T37 | developer-only |
+| T59 | The server's own idle (`mcp.md` §6): no thread of the server wakes in 60 s of silence, no keepalive or periodic `ping`, and the executor never held armed between calls | `cargo test -p dcs-mcp idle` shows 60 s of silence with no wake recorded against the server's own clock and no request published in it; mutation: a keepalive `ping` on a timer reddens the never-held-armed check | T37 | developer-only |
 
-**Stage command:** `cargo test -p dcs-mcp serve tools-listed wording cli idle`.
+**Stage command:** `cargo test -p dcs-mcp serve tools-listed wording cli runs watching idle`.
 
 ---
 
@@ -306,17 +319,29 @@ the same functions.
 The program that puts the executor in place for a person who downloaded one file, under park-and-
 restore, writing nothing to the install and destroying nothing under `Saved Games`.
 
+T44 carried three interfaces when the stage was first written, and `mcp.md` §5.1 lists them as
+three numbered steps with three different failure modes: a store outside both DCS trees (the
+register's row-before-move and the park tree that makes "nothing is deleted, ever" true), a
+placement policy over four hashes (absent, a hash this project shipped, a foreign hash, the prior
+project's two files), and an editor for a text file that belongs to SRS and Tacview as much as to
+this project. They are split as T60, T44 and T61 — the same split the stage's other half already
+has, since T45 removes the line T61 appends and restores what T60 parked. T45 and T46 are not
+split: each is one verb reading one tree, and they gain the mutations their cells were missing
+rather than rows.
+
 | id | task | done when | needs | runs on |
 |---|---|---|---|---|
-| T42 | Embed `DcsEvalExecutor.lua` via `include_bytes!` with its SHA-256; the binary names the executor build; `verify` prints both | `cargo test -p dcs-mcp embed` shows the embedded hash matching the repo's `DcsEvalExecutor.lua`; mutation: a stale embedded copy reddens the hash match | T16 | developer-only |
+| T42 | Embed `DcsEvalExecutor.lua` via `include_bytes!` with its SHA-256, and the list of every hash this project has shipped (`mcp.md` §5.5), which is what lets T44 call a file an upgrade and T45 call one its own; the binary names the executor build | `cargo test -p dcs-mcp embed` shows the embedded hash matching the repo's `DcsEvalExecutor.lua` and present in the shipped-hash list; mutations: a stale embedded copy reddens the hash match; the current hash missing from the list reddens the list check | T16 | developer-only |
 | T43 | Find `Saved Games` via `FOLDERID_SavedGames`, variant selection with ambiguity asked-not-picked, refuse the wrong tree | `cargo test -p dcs-mcp locate` (fixture folders) shows two variants reported as an ambiguity and a target under the install refused; mutation: picking one of two variants reddens the ambiguity check | T30 | developer-only |
-| T44 | `install`: register-before-move, place the hook by rename, park an existing/foreign file, append the `Export.lua` line by its exact marker | `cargo test -p dcs-mcp install` shows `install` twice leaving one hook file and one `dofile` line, a foreign `DcsEvalExecutor.lua` refused without `--replace` and parked with it, and a register row written before each move; mutation: a delete instead of a park, or a second `dofile` line, reddens it | T42,T43 | developer-only |
-| T45 | `uninstall`: remove exactly what `install` put there, hash-gated, restore parked files | `cargo test -p dcs-mcp uninstall` shows the `Export.lua` line removed by exact match and its neighbours untouched, an unknown-hash hook left and named, a parked file restored; mutation: removing a neighbouring line reddens the exact-match check | T44 | developer-only |
-| T46 | `verify` (which `dcs_status` also runs): hashes, single `dofile` line, `autoexec.cfg` key report, writes nothing | `cargo test -p dcs-mcp verify` reports both policy-gate keys from a fixture and a `git status`-clean fixture tree afterward; mutation: any write during `verify` reddens the clean-tree assertion | T44 | developer-only |
+| T60 | The server's own data directory: `install-register.tsv` — `<utc> install <path> <sha256> pending` appended before anything moves and marked after — and the park store, `parked\<utc>\` holding a displaced file under its path relative to the variant. Nothing here is ever deleted, and nothing here is under either DCS tree | `cargo test -p dcs-mcp register` shows a move whose register row was written before it and marked after, a parked file recoverable from its own relative path, and two parks in one second landing in distinct directories; mutations: a delete in place of a park reddens the park check; a row written after the move rather than before reddens the ordering check | T30 | developer-only |
+| T44 | `install` places the hook: `Scripts\Hooks\DcsEvalExecutor.lua` written as `.tmp` in that directory and renamed in, over four dispositions — absent, a hash this project shipped (an upgrade, the old bytes parked), a foreign hash (refused and named unless `--replace`, which parks it), and the prior project's `DcsApiEval.lua`/`DcsApiExport.lua`, named as a second executor registering callbacks twice and parked under the same rule | `cargo test -p dcs-mcp install` shows `install` twice leaving one hook file, a foreign file refused without `--replace` and parked with it, a shipped-hash file replaced and parked, and the incumbent's two files named and parked; mutations: writing the final name directly rather than by rename reddens the half-written check; a foreign hash replaced without `--replace` reddens the refusal | T42,T43,T60 | developer-only |
+| T61 | The `Export.lua` line: one `dofile(lfs.writedir() .. 'Scripts/Hooks/DcsEvalExecutor.lua') -- dcs-mcp` appended by its exact marker, the file created if absent, a newline added first where the file lacks a trailing one, a copy parked before the write, and no other byte changed — the marker is what makes T45's removal an exact-line match | `cargo test -p dcs-mcp export_line` shows `install` twice leaving one `dofile` line, a file with no trailing newline gaining one rather than a joined line, an absent file created, and every other byte of a fixture `Export.lua` identical afterward; mutations: a second `dofile` line reddens the once-only check; the marker dropped from the appended line reddens T45's exact-match removal | T43,T60 | developer-only |
+| T45 | `uninstall`: remove exactly what `install` put there, hash-gated, restore parked files, and write the register row `uninstalled` | `cargo test -p dcs-mcp uninstall` shows the `Export.lua` line removed by exact match with its neighbours byte-identical, a hook whose hash is not in the shipped list left in place and named, a parked file restored to its original path, and the register carrying the `uninstalled` row; mutations: removing a neighbouring line reddens the exact-match check; removing a hook of unknown hash reddens the hash gate; a restore that copies without removing the park reddens the restore check | T44,T61,T60 | developer-only |
+| T46 | `verify` (which `dcs_status` also runs): the hook's hash against the embedded release's, the `dofile` line present exactly once, no other `DcsEval*`/`DcsApi*` hook beside it, `executor.txt` present with `protocol: 2` and its `app_version` reported as a difference and never a refusal, the heartbeat, the `autoexec.cfg` key report, and nothing written | `cargo test -p dcs-mcp verify` reports both policy-gate keys from a fixture, names a second hook file and a duplicated `dofile` line as problems, reports a differing `app_version` without refusing, and leaves a `git status`-clean fixture tree; mutations: any write during `verify` reddens the clean-tree assertion; a differing `app_version` treated as a failure reddens the difference-not-refusal check | T42,T44,T61 | developer-only |
 
-**Stage command:** `cargo test -p dcs-mcp embed locate install uninstall verify`.  **Milestone C
-acceptance:** Stages 7–8 commands green; `dcs-mcp install --saved-games <fixture> && dcs-mcp verify`
-prints `verified`; the fixture tree is `git`-clean after verify.
+**Stage command:** `cargo test -p dcs-mcp embed locate register install export_line uninstall
+verify`.  **Milestone C acceptance:** Stages 7–8 commands green; `dcs-mcp install --saved-games
+<fixture> && dcs-mcp verify` prints `verified`; the fixture tree is `git`-clean after verify.
 
 ---
 

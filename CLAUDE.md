@@ -21,7 +21,7 @@ CLAUDE.md              this file: durable facts about the project
 README.md              what a user downloads, installs, configures and runs
 docs/
   STATE.md             the handoff between sessions. Read it first
-  PLAN.md              build order, 57 tasks in 10 stages. Not frozen
+  PLAN.md              build order, 61 tasks in 10 stages. Not frozen
   audit.md             what the documents disagree about
   mutations.md         every control, its mutation, and the red it produced
   specs/               frozen: bridge.md and mcp.md. Never edited

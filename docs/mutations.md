@@ -539,9 +539,11 @@ an entry here like any other, and both figures move.
 - out-of-scope: not built. Stages 7 to 9 are the MCP server, the installer and
   the live proofs; there is no code to mutate, and the last of them needs a
   running game rather than a runner.
-- controls: 13
-- breakdown: T37–T40, T42, T43, T45, T46 one each, 8; T41 two, T44 two, 4;
-  T52 one, 1. Stage 9's remaining rows name no mutation and are owed none.
+- controls: 25
+- breakdown: T38, T39, T58, T59, T43 one each, 5; T37, T40, T41, T42, T60, T44,
+  T61, T46 two each, 16; T45 three, 3; T52 one, 1. Stage 9's remaining rows name
+  no mutation and are owed none. This figure falls as Stages 7 and 8 are built
+  and their rows move into the inventory proper.
 
 ### out/the-runner-itself
 
