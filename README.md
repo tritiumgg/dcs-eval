@@ -154,10 +154,10 @@ limit, exactly as for the tools.
 
 `--out <path>` writes the reply to a file, and `--capture` keeps a copy under
 this build's own data directory. Both write the bytes the executor published,
-byte for byte, rather than a re-rendering of them. Where no reply came back — a `pending`, or a request
-that was refused before it was sent — **neither writes anything at all**, not
-even an empty file, because an empty file reads back as a reply that returned
-nothing. `status` and `game-state` answer without one reply off the wire, so
+byte for byte, rather than a re-rendering of them. Where no reply came back —
+a `pending`, or a request that was refused before it was sent — **neither
+writes anything at all**, not even an empty file, because an empty file reads
+back as a reply that returned nothing. `status` and `game-state` answer without one reply off the wire, so
 they refuse both flags rather than accept them and write nothing.
 
 `--data-dir <dir>` says where that data directory is, and it is not tied to
@@ -185,8 +185,10 @@ milliseconds and the tick.
 
 For a file, it also carries the resolved path, the chunk name and the SHA-256
 of the bytes that were read — the same hash the answer's own last line shows,
-because both come from the reader that opened the file. A chunk given on the
-line has no path and no hash: nothing read it, so there is nothing to attest.
+because both come from the reader that opened the file. No root can be allowed
+yet, so nothing you can run today produces such a line — *not built*, the same
+sentence as for `eval --file` above. A chunk given on the line has no path and
+no hash: nothing read it, so there is nothing to attest.
 
 A file evaluation refused **before** the file is read — a path outside the
 allowed roots, a name too long, anything judged before it is opened — writes
