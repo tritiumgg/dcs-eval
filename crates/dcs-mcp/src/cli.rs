@@ -406,11 +406,10 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
 mod tests {
     use super::*;
     use crate::serve::Options;
-    use crate::testing::Sandbox;
+    use crate::testing::{Sandbox, published, ran, ticking};
     use dcs_eval::protocol;
     use dcs_eval::standin::Standin;
     use std::fs;
-    use std::time::{Duration, Instant};
 
     /// A reply body with a CRLF, a byte that is not UTF-8 and a NUL in it, so
     /// that "verbatim" is a claim something could fail.
@@ -441,18 +440,6 @@ mod tests {
         all
     }
 
-    /// A session a verb will find alive: its handshake published, a process
-    /// id that really is running, armed, and a heartbeat just written. The
-    /// pid matters — a session left at the stand-in's default is answered
-    /// `dead` or `pending` depending on what else is running on the host.
-    fn ticking(s: &mut Standin) {
-        s.pid = std::process::id();
-        s.armed = true;
-        s.handshake().expect("the handshake publishes");
-        s.beat(std::time::SystemTime::now())
-            .expect("the heartbeat publishes");
-    }
-
     /// A line-by-line rendering of what two texts disagree about, empty when
     /// they agree. Printed by the assertion that takes it, so a failure says
     /// which line moved rather than only that something did.
@@ -478,41 +465,6 @@ mod tests {
             }
         }
         out
-    }
-
-    /// One command line run to completion, with the stand-in ticked from this
-    /// thread until it has answered something.
-    fn ran(s: &mut Standin, line: Vec<String>) -> (i32, String) {
-        let answered = std::thread::scope(|scope| {
-            let running = scope.spawn(|| {
-                let mut sink: Vec<u8> = Vec::new();
-                let code = run(line, &mut sink).expect("the line parses");
-                (code, sink)
-            });
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while !running.is_finished() && Instant::now() < deadline {
-                s.tick();
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            running.join().expect("the verb does not panic")
-        });
-        let (code, sink) = answered;
-        let shown = String::from_utf8_lossy(&sink)
-            .trim_end_matches('\n')
-            .to_owned();
-        (code, shown)
-    }
-
-    /// The single reply file the stand-in published, read off the disk.
-    fn published(s: &Standin) -> Vec<u8> {
-        let mut found: Vec<PathBuf> = fs::read_dir(s.res())
-            .expect("the reply directory lists")
-            .filter_map(Result::ok)
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().is_some_and(|ext| ext == "res"))
-            .collect();
-        assert_eq!(found.len(), 1, "exactly one reply was published: {found:?}");
-        fs::read(found.pop().expect("the one reply")).expect("the reply reads")
     }
 
     /// The row this work is proved by, and both halves of it are here on

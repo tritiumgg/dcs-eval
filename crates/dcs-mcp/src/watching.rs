@@ -31,7 +31,7 @@ use dcs_eval::wait::{self, Outcome};
 use dcs_eval::{publish, readers::Handshake};
 
 use crate::serve::{Host, Options, Serve};
-use crate::testing::Sandbox;
+use crate::testing::{Sandbox, ticking};
 
 const ID_ONE: &str = "0000000001-abcd";
 const ID_TWO: &str = "0000000002-abcd";
@@ -51,23 +51,6 @@ fn opts(box_: &Sandbox) -> Options {
         variant: "DCS.openbeta".to_owned(),
         host: Host::Hook,
     }
-}
-
-/// A session a client will find alive: its handshake published, its process
-/// id one that really is running, and a heartbeat just written.
-///
-/// The pid matters. A wait that finds a dormant session probes the process
-/// the handshake named, and the stand-in's default is a number that is
-/// nobody in particular — so a session left at the default would be answered
-/// `dead` or `pending` depending on what else happens to be running on the
-/// host. This process is certainly alive, which makes the outcome the
-/// fixture's and not the machine's.
-fn ticking(s: &mut Standin) {
-    s.pid = std::process::id();
-    s.armed = true;
-    s.handshake().expect("the handshake publishes");
-    s.beat(std::time::SystemTime::now())
-        .expect("the heartbeat publishes");
 }
 
 /// One tool call, as every tool will make it: the client resolved afresh,
