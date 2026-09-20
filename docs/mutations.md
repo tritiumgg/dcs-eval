@@ -794,6 +794,59 @@ not cover is printed by the sweep itself rather than left to be assumed.
 + pub const LINE: &str = "dofile(lfs.writedir() .. 'Scripts/Hooks/DcsEvalExecutor.lua')";
 ```
 
+### install/final-name-written-directly
+
+- task: T44
+- command: `mise exec -- cargo test -p dcs-mcp install`
+- reddens: `install::tests::the_hook_never_appears_half_written`
+- note: the bytes go straight to the name DCS loads, so the rename that
+  follows renames the file onto itself. Windows accepts that, and the mutant
+  therefore compiles clean, warns about nothing and still "succeeds" — which is
+  the defect exactly: the final name holds a partial file for as long as the
+  write takes, and a game started in that window loads a truncated chunk. Every
+  other check in the module stays green, because read afterwards the two
+  orderings are byte-identical; that is why the red one makes its assertions
+  from *inside* the closure, between the write and the rename. The observed red
+  is `the name DCS loads holds nothing until the rename: …\Scripts\Hooks\DcsEvalExecutor.lua`,
+  one failing test and no more. The sibling assertion in the same closure — that
+  the staging file's parent is the destination directory — is what holds the
+  other half of this row, a `.tmp` written on another volume, where the rename
+  becomes a copy and the window reopens; no mutation is named for it here
+  because writing the staging file elsewhere is the same defect from the other
+  side and reddens the same check.
+
+```sweep-edit crates/dcs-mcp/src/install.rs
+-     let staging = dir.join(format!("{name}.tmp"));
++     let staging = dir.join(name);
+```
+
+### install/foreign-hash-replaced-without-replace
+
+- task: T44
+- command: `mise exec -- cargo test -p dcs-mcp install`
+- reddens: `install::tests::a_foreign_hook_is_refused_and_named_without_replace`
+- note: the guard is deleted outright, so a hook file this project never
+  shipped is parked and replaced with nobody having said it may be. The run
+  occurs exactly once — the incumbent's refusal beside it is spelled with a
+  different condition, so no shared line makes the anchor ambiguous — and the
+  mutant compiles without a warning, because the refusal clones its two fields
+  rather than moving them and both are read again below by the park and the
+  report, and because `replace` is still read by the incumbent guard left
+  standing. The red is the `expect_err` coming back with a `Placed` naming the
+  park it made. `a_foreign_hook_is_parked_when_replace_answers_for_it` stays
+  green, and that is the point of the pair: the control watches the refusal and
+  not the parking. It holds only because nothing below the guards consults
+  `replace` again — what is parked is decided by what was found.
+
+```sweep-edit crates/dcs-mcp/src/install.rs
+-         if let (Some(hook), Disposition::Foreign { sha256: hash }) = (&ours, &disposition) {
+-             return Err(InstallError::Foreign {
+-                 file: hook.clone(),
+-                 hash: hash.clone(),
+-             });
+-         }
+```
+
 ---
 
 ## Out of scope
@@ -838,8 +891,8 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 13
-- breakdown: T39, T58, T59 one each, 3; T40, T44, T46 two each, 6; T45
+- controls: 11
+- breakdown: T39, T58, T59 one each, 3; T40, T46 two each, 4; T45
   three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
   rows move into the inventory proper.
