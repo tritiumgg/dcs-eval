@@ -378,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn an_absent_hook_is_placed_by_rename_into_a_hooks_directory_that_is_made() {
+    fn an_absent_hook_is_placed_into_a_hooks_directory_that_is_made() {
         let (_b, variant, data, hooks) = fixture();
         let (release, _older, current) = a_release();
         assert!(!hooks.exists(), "nothing has made it yet");
@@ -403,6 +403,32 @@ mod tests {
         assert_eq!(rows[0].path, placed.hook);
         assert_eq!(rows[0].sha256, current);
         assert_eq!(rows[0].status, "installed");
+    }
+
+    #[test]
+    fn the_placement_puts_the_bytes_down_under_the_staging_name_first() {
+        let (_b, variant, data, hooks) = fixture();
+        let (release, _older, _current) = a_release();
+        // A directory cannot be written to as a file, so occupying the staging
+        // name with one makes the staged write fail and the placement with it.
+        // That is the only difference a placement writing straight to the name
+        // DCS loads would not feel: it would sail past this and succeed, which
+        // is what ties this call to the staging the module promises rather
+        // than to whatever its final state happens to look like.
+        let squatter = hooks.join("DcsEvalExecutor.lua.tmp");
+        fs::create_dir_all(&squatter).expect("the staging name is occupied");
+
+        let err = place_hook(an_instant(), &variant, &data, &release, false)
+            .expect_err("the bytes had nowhere to be staged");
+
+        assert!(
+            matches!(err, InstallError::Register(RegisterError::Disk { .. })),
+            "{err}"
+        );
+        assert!(
+            !hooks.join("DcsEvalExecutor.lua").exists(),
+            "the name DCS loads was written anyway, so the staging was skipped"
+        );
     }
 
     #[test]
@@ -680,6 +706,33 @@ mod tests {
         let err = place_hook(an_instant(), &variant, &data, &release, false)
             .expect_err("the spelling is not what makes it a second executor");
         assert!(matches!(err, InstallError::Incumbent { .. }), "{err}");
+    }
+
+    #[test]
+    fn our_own_hook_is_recognised_whatever_case_it_is_spelled_in() {
+        let (_b, variant, data, hooks) = fixture();
+        let (release, older, _current) = a_release();
+        // Reached by `join` rather than by folding, a hook written back under
+        // another spelling would look absent: nothing would be parked, the
+        // disposition would say there had been nothing there, and the rename
+        // would land beside a file DCS also loads.
+        put(&hooks.join("dcsevalexecutor.lua"), OLDER);
+
+        let placed = place_hook(an_instant(), &variant, &data, &release, false)
+            .expect("an older release of ours, shouted or not");
+
+        assert_eq!(placed.disposition, Disposition::Upgrade { sha256: older });
+        assert_eq!(placed.parked.len(), 1, "the old copy was moved aside");
+        assert_eq!(
+            leaves(&hooks).len(),
+            1,
+            "one hook file: {:?}",
+            leaves(&hooks)
+        );
+        assert_eq!(
+            fs::read(hooks.join("DcsEvalExecutor.lua")).expect("the new release"),
+            CURRENT
+        );
     }
 
     #[test]
