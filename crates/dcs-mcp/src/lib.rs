@@ -35,6 +35,11 @@ pub mod register;
 // it may be displaced, and the rename that puts the bytes at their name.
 pub mod install;
 
+// Taking it back out: the hook only where its hash is one this project
+// shipped, the line only by whole-line match, and every file that was parked
+// put back where it was found.
+pub mod uninstall;
+
 // The MCP server itself: the options it is started with, the client it builds
 // per call, and the stdio transport it speaks over.
 pub mod serve;

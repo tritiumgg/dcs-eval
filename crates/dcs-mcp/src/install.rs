@@ -207,7 +207,12 @@ pub fn place_hook(
 /// difference is what exists between the two steps. A check that looks
 /// afterwards cannot tell the orderings apart, so this is the seam it looks
 /// through.
-fn staged(
+///
+/// The uninstaller writes `Export.lua` back through this too. That file is
+/// not one DCS loads at start-up, so the window it closes there is narrower,
+/// but the reasoning is the same one and a second copy of it would be a
+/// second thing to keep true.
+pub(crate) fn staged(
     dir: &Path,
     name: &str,
     bytes: &[u8],
