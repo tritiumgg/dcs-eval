@@ -883,6 +883,81 @@ not cover is printed by the sweep itself rather than left to be assumed.
 -         }
 ```
 
+### uninstall/neighbouring-line-removed
+
+- task: T45
+- command: `mise exec -- cargo test -p dcs-mcp uninstall`
+- reddens: `uninstall::tests::the_export_line_is_removed_by_exact_match_with_its_neighbours_byte_identical`
+- note: whole-line equality becomes the substring match the row exists against.
+  The mutant compiles clean — `LINE` is still read by `occurrences`, by `ensure`
+  and by the marker check — and it takes three lines out of the fixture instead
+  of one: ours, SRS's `dofile`, and the hand-written `dofile` of our own hook
+  that carries no marker. That last line is the whole reason the fixture holds
+  it. The red is the byte comparison, printed as two byte vectors that differ
+  from `dofile(lfs.…` onwards. The binding inside `without` is named `content`
+  rather than `line` so that this anchor cannot collide with `occurrences`'s
+  `line == LINE.as_bytes()` a few lines above it. Every other check in the
+  module stays green, because none of them holds a neighbour to eat — that
+  separation is what says this control watches the match and not the write.
+  `a_second_uninstall_changes_nothing` stays green too: both passes agree with
+  each other, wrongly.
+
+```sweep-edit crates/dcs-mcp/src/export_line.rs
+-         if content == LINE.as_bytes() {
++         if content.starts_with(b"dofile(lfs.writedir()") {
+```
+
+### uninstall/unknown-hash-removed
+
+- task: T45
+- command: `mise exec -- cargo test -p dcs-mcp uninstall`
+- reddens: `uninstall::tests::a_hook_whose_hash_is_not_one_we_shipped_is_left_in_place_and_named`
+- note: the gate is made to say yes to everything, so a file at our name that
+  this project never shipped is removed with nobody having established it is
+  ours. It is spelled as a condition rather than as `let ours = true;` so that
+  nothing goes dead and no boolean lint has anything to say: `release.shipped`
+  stays read here as well as in the placement, `sha` stays read by the row and
+  by the report, and a release always ships something, so the answer is yes for
+  a stranger's hook as surely as a constant would be. The red is the read of a
+  file that is no longer there — `the file is still there: Os { code: 2, kind:
+  NotFound … }`. `a_hook_this_project_shipped_is_removed_and_its_row_says_uninstalled`
+  stays green, and that pair is the point: the control watches the gate and not
+  the removal. `a_second_uninstall_changes_nothing` goes red alongside it,
+  because the restored stranger is taken away on the second pass.
+
+```sweep-edit crates/dcs-mcp/src/uninstall.rs
+-         let ours = release.shipped.contains(&sha.as_str());
++         let ours = !release.shipped.is_empty();
+```
+
+### uninstall/park-copied-not-moved
+
+- task: T45
+- command: `mise exec -- cargo test -p dcs-mcp uninstall`
+- reddens: `uninstall::tests::a_parked_file_is_restored_to_its_original_path_and_the_park_is_emptied`
+- note: the restore copies instead of moving, so the store goes on holding a
+  file it has already given back. The finished tree is identical either way —
+  the file that was there before us is back at its own name — and the only
+  difference is what is left in the park, which is why the check asserts on the
+  park rather than on the tree. The red is that assertion's own words, `the park
+  still holds the file it gave back`. The anchor is the call inside `restore`;
+  `park`'s own call is spelled `move_file(source.as_path(), &destination)?;`, a
+  different line and itself another row's anchor, and this mutation leaves it
+  alone. The `park/…` and `register/…` controls stay green, which says this one
+  is the restore's and not the park's, and
+  `a_second_uninstall_changes_nothing` stays green as well: the destination is
+  occupied by then, so the duplicate in the store is never handed out.
+
+```sweep-edit crates/dcs-mcp/src/register.rs
+-             move_file(parked, destination.as_path())
++             fs::copy(parked, destination.as_path())
++                 .map(|_| ())
++                 .map_err(|why| RegisterError::Disk {
++                     path: destination.as_path().to_owned(),
++                     why,
++                 })
+```
+
 ---
 
 ## Out of scope
@@ -927,9 +1002,9 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 10
-- breakdown: T58, T59 one each, 2; T40, T46 two each, 4; T45
-  three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
+- controls: 7
+- breakdown: T58, T59 one each, 2; T40, T46 two each, 4;
+  T52 one, 1. Stage 9's remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
   rows move into the inventory proper.
 
