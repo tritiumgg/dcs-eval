@@ -48,6 +48,10 @@ pub mod serve;
 // is registered is the set that is listed.
 pub mod tools;
 
+// The read-and-eval verbs from a terminal. Each is a line over the same
+// function its tool is a line over, so the two cannot word a reply apart.
+pub mod cli;
+
 // The Win32 calls this crate makes, declared here and nowhere else. The
 // client crate declares its own; decision record 0019 is why the two sets
 // are not one file.

@@ -7,9 +7,10 @@
 //! times over, and six copies of an answer is five chances to word one of
 //! them differently.
 //!
-//! The command line has no reply path of its own yet (planned). When it grows
-//! one it prints what these functions render, rather than a formatter beside
-//! them, which is the only way the two can be held to the same wording.
+//! The command line prints what these functions render, rather than what a
+//! formatter of its own would make of the same reply. That is the only way
+//! the two can be held to the same wording, and it is what [`text`] is for:
+//! the terminal shows the blocks the way a client shows them.
 
 use dcs_eval::pipeline::PipeError;
 use dcs_eval::protocol::Envelope;
@@ -40,6 +41,20 @@ pub fn refuse(status: &str, lines: Vec<String>) -> CallToolResult {
     let mut answer = say(status, lines);
     answer.is_error = Some(true);
     answer
+}
+
+/// Every text block of an answer, joined the way a reader sees it.
+///
+/// A client shows the blocks it was handed one after another, and the command
+/// line has one stream to print to — so this is what "the same words" means
+/// for a terminal, and it is the one function that decides it.
+pub fn text(answer: &CallToolResult) -> String {
+    answer
+        .content
+        .iter()
+        .filter_map(|block| block.as_text().map(|block| block.text.as_str()))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// A reply's headers, a line each, then its body.
@@ -177,16 +192,6 @@ mod tests {
     fn envelope(headers: &[(&str, &str)], body: &str) -> Envelope {
         let bytes = protocol::frame(headers, body.as_bytes()).expect("the headers frame");
         protocol::parse(&bytes).expect("what was framed parses back")
-    }
-
-    /// Every text block of an answer, joined the way a reader sees it.
-    fn text(answer: &CallToolResult) -> String {
-        answer
-            .content
-            .iter()
-            .filter_map(|block| block.as_text().map(|t| t.text.as_str()))
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     /// The head word of an answer: the first line of its text.

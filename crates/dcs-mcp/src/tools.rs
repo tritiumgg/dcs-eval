@@ -15,7 +15,13 @@
 //! **How a reply is worded is not settled here.** Every answer goes out
 //! through the one renderer in `wording`, which is what lets the wording
 //! change in one function rather than in six bodies.
+//!
+//! Each body is one line over a function further down, and those functions
+//! are what the command line calls too. Two callers over one function is the
+//! only arrangement in which the words a tool gives and the words a terminal
+//! prints cannot come apart.
 
+use std::fs;
 use std::path::Path;
 use std::time::Duration;
 
@@ -24,7 +30,7 @@ use dcs_eval::game;
 use dcs_eval::paths::{self, Real};
 use dcs_eval::pipeline::{Pipeline, Spec};
 use dcs_eval::reads::Tiers;
-use dcs_eval::wait::{self, Collected};
+use dcs_eval::wait::{self, Collected, Outcome};
 use dcs_eval::{source, status};
 use rmcp::ErrorData;
 use rmcp::handler::server::wrapper::Parameters;
@@ -43,7 +49,7 @@ use crate::wording::{self, answered, pending, refuse, say};
 const DEFAULT_WAIT: Duration = Duration::from_secs(15);
 
 /// The wait this call asked for, or the default where it asked for none.
-fn waiting(seconds: Option<u64>) -> Duration {
+pub(crate) fn waiting(seconds: Option<u64>) -> Duration {
     seconds.map_or(DEFAULT_WAIT, Duration::from_secs)
 }
 
@@ -71,17 +77,66 @@ fn client_for(serve: &Serve, host: Option<&str>) -> Result<Client, CallToolResul
 /// is not on the disk contains nothing, and with no root allowed every path
 /// is refused anyway — so refusing the call outright would replace an answer
 /// about the path with an answer about the install.
-fn writedirs(serve: &Serve) -> Vec<Real> {
+pub(crate) fn writedirs(serve: &Serve) -> Vec<Real> {
     let opts = serve.options();
     paths::resolve(&opts.saved_games.join(&opts.variant))
         .into_iter()
         .collect()
 }
 
+/// One reply, as the executor published it: the id it came back under and
+/// the bytes that were on the disk.
+pub(crate) struct Reply {
+    pub id: String,
+    pub bytes: Vec<u8>,
+}
+
+/// An answer, and — where exactly one reply came off the wire — the bytes the
+/// executor published for it.
+///
+/// `reply` is `None` where there is no single reply to point at: a `pending`,
+/// a refusal raised here rather than by the executor, and the two calls that
+/// never publish anything. It is `Some(Err)` where a reply did arrive and its
+/// file could not be read back.
+pub(crate) struct Answered {
+    pub answer: CallToolResult,
+    pub reply: Option<Result<Reply, String>>,
+}
+
+impl Answered {
+    /// An answer with no reply behind it.
+    fn plain(answer: CallToolResult) -> Self {
+        Self {
+            answer,
+            reply: None,
+        }
+    }
+}
+
 /// Publish one request over the session and render what that one came to.
-fn one(client: &Client, spec: Spec, upto: Duration) -> CallToolResult {
+fn one(client: &Client, spec: Spec, upto: Duration) -> Answered {
     let mut window = Pipeline::over(client.handshake(), vec![spec], 1, upto);
-    answered(window.next())
+    let item = window.next();
+    // Read back off the disk rather than re-encoded from what was parsed.
+    // The envelope is a parse, and parsing normalises a header line's ending;
+    // what a caller asking to keep the reply is asking for is the bytes the
+    // executor wrote, which is the file and not a second encoding of it.
+    let reply = match &item {
+        Some(Ok(Outcome::Reply(envelope))) => {
+            let id = envelope.headers.get("id").unwrap_or_default().to_owned();
+            let path = client.session().res().join(format!("{id}.res"));
+            Some(
+                fs::read(&path)
+                    .map(|bytes| Reply { id, bytes })
+                    .map_err(|why| format!("{}: {why}", path.display())),
+            )
+        }
+        _ => None,
+    };
+    Answered {
+        answer: answered(item),
+        reply,
+    }
 }
 
 /// `dcs_status`'s arguments.
@@ -154,6 +209,133 @@ pub struct Collect {
     pub id: String,
 }
 
+/// What `dcs_status` and the `status` verb both do.
+pub(crate) fn status(serve: &Serve, host: Option<&str>) -> Answered {
+    let client = match client_for(serve, host) {
+        Ok(client) => client,
+        Err(no) => return Answered::plain(no),
+    };
+    // Rendered through `Debug` on purpose and for now: the report has no
+    // wording of its own yet, and inventing one here would be inventing it
+    // twice.
+    let report = status::status(client.output().as_path());
+    Answered::plain(say("status", vec![format!("{report:#?}")]))
+}
+
+/// What `dcs_ping` and the `ping` verb both do.
+pub(crate) fn ping(serve: &Serve, host: Option<&str>, upto: Duration) -> Answered {
+    let client = match client_for(serve, host) {
+        Ok(client) => client,
+        Err(no) => return Answered::plain(no),
+    };
+    let stamp = client.handshake().stamp.clone();
+    let spec = Spec::new(&[("op", "ping"), ("for", &stamp)], b"");
+    one(&client, spec, upto)
+}
+
+/// What `dcs_game_state` and the `game-state` verb both do.
+pub(crate) fn game_state(serve: &Serve, host: Option<&str>, upto: Duration) -> Answered {
+    let client = match client_for(serve, host) {
+        Ok(client) => client,
+        Err(no) => return Answered::plain(no),
+    };
+    Answered::plain(
+        match game::game_state(client.output().as_path(), Tiers::default(), upto) {
+            Ok(state) => say("game-state", vec![state.to_string()]),
+            Err(why) => refuse("refused", vec![why.to_string()]),
+        },
+    )
+}
+
+/// What `dcs_eval` and the `eval` verb both do.
+pub(crate) fn eval(
+    serve: &Serve,
+    host: Option<&str>,
+    state: &str,
+    code: &str,
+    chunkname: Option<&str>,
+    max_instructions: Option<u64>,
+    upto: Duration,
+) -> Answered {
+    let client = match client_for(serve, host) {
+        Ok(client) => client,
+        Err(no) => return Answered::plain(no),
+    };
+    let stamp = client.handshake().stamp.clone();
+    let budget = max_instructions.map(|max| max.to_string());
+    let mut headers = vec![("op", "eval"), ("for", stamp.as_str()), ("state", state)];
+    if let Some(name) = chunkname {
+        headers.push(("chunkname", name));
+    }
+    if let Some(budget) = &budget {
+        headers.push(("max_instructions", budget.as_str()));
+    }
+    let spec = Spec::new(&headers, code.as_bytes());
+    one(&client, spec, upto)
+}
+
+/// What `dcs_eval_file` and the `eval --file` verb both do.
+pub(crate) fn eval_file(
+    serve: &Serve,
+    host: Option<&str>,
+    state: &str,
+    path: &str,
+    max_instructions: Option<u64>,
+    upto: Duration,
+) -> Answered {
+    let client = match client_for(serve, host) {
+        Ok(client) => client,
+        Err(no) => return Answered::plain(no),
+    };
+    let refused = |why: String| Answered::plain(refuse("refused", vec![why]));
+    let real = match paths::resolve(Path::new(path)) {
+        Ok(real) => real,
+        Err(why) => return refused(why.to_string()),
+    };
+    // No root is allowed, because nothing configures one yet, and an empty
+    // allowed list admits nothing rather than everything. Every path is
+    // refused here until a root can be named.
+    let roots = match Roots::new(&[], &writedirs(serve), None) {
+        Ok(roots) => roots,
+        Err(why) => return refused(why.to_string()),
+    };
+    let chunkname = match source::chunkname(&real) {
+        Ok(name) => name,
+        Err(why) => return refused(why.to_string()),
+    };
+    let stamp = client.handshake().stamp.clone();
+    let budget = max_instructions.map(|max| max.to_string());
+    let mut headers = vec![
+        ("op", "eval"),
+        ("for", stamp.as_str()),
+        ("state", state),
+        ("chunkname", chunkname.as_str()),
+    ];
+    if let Some(budget) = &budget {
+        headers.push(("max_instructions", budget.as_str()));
+    }
+    // The same header slice measures the file and frames the request, so the
+    // ceiling the file was admitted under is the one the request is really
+    // written against.
+    let admitted = match file::check(&roots, client.handshake(), &headers, &real) {
+        Ok(admitted) => admitted,
+        Err(why) => return refused(why.to_string()),
+    };
+    let source = match source::read(&admitted) {
+        Ok(source) => source,
+        Err(why) => return refused(why.to_string()),
+    };
+    let spec = Spec::new(&headers, source.body());
+    let mut answered = one(&client, spec, upto);
+    // Which bytes ran, said beside the answer rather than instead of it.
+    answered.answer.content.push(ContentBlock::text(format!(
+        "source: {}\nsha256: {}",
+        source.path(),
+        source.sha256_hex()
+    )));
+    answered
+}
+
 #[tool_router(vis = "pub(crate)")]
 impl Serve {
     /// What is readable without asking the executor anything: whether it is
@@ -165,15 +347,7 @@ impl Serve {
         &self,
         Parameters(args): Parameters<Status>,
     ) -> Result<CallToolResult, ErrorData> {
-        let client = match client_for(self, args.host.as_deref()) {
-            Ok(client) => client,
-            Err(no) => return Ok(no),
-        };
-        // Rendered through `Debug` on purpose and for now: the report has no
-        // wording of its own yet, and inventing one here would be inventing
-        // it twice.
-        let report = status::status(client.output().as_path());
-        Ok(say("status", vec![format!("{report:#?}")]))
+        Ok(status(self, args.host.as_deref()).answer)
     }
 
     /// Prove the executor is alive by getting a reply out of it.
@@ -182,13 +356,7 @@ impl Serve {
         &self,
         Parameters(args): Parameters<Ping>,
     ) -> Result<CallToolResult, ErrorData> {
-        let client = match client_for(self, args.host.as_deref()) {
-            Ok(client) => client,
-            Err(no) => return Ok(no),
-        };
-        let stamp = client.handshake().stamp.clone();
-        let spec = Spec::new(&[("op", "ping"), ("for", &stamp)], b"");
-        Ok(one(&client, spec, waiting(args.wait_seconds)))
+        Ok(ping(self, args.host.as_deref(), waiting(args.wait_seconds)).answer)
     }
 
     /// What the game is doing, every fact it rests on, and the basis of each
@@ -198,17 +366,7 @@ impl Serve {
         &self,
         Parameters(args): Parameters<GameState>,
     ) -> Result<CallToolResult, ErrorData> {
-        let client = match client_for(self, args.host.as_deref()) {
-            Ok(client) => client,
-            Err(no) => return Ok(no),
-        };
-        let upto = waiting(args.wait_seconds);
-        Ok(
-            match game::game_state(client.output().as_path(), Tiers::default(), upto) {
-                Ok(state) => say("game-state", vec![state.to_string()]),
-                Err(why) => refuse("refused", vec![why.to_string()]),
-            },
-        )
+        Ok(game_state(self, args.host.as_deref(), waiting(args.wait_seconds)).answer)
     }
 
     /// Run a chunk of Lua inside the running game and report what it came to.
@@ -217,25 +375,16 @@ impl Serve {
         &self,
         Parameters(args): Parameters<Eval>,
     ) -> Result<CallToolResult, ErrorData> {
-        let client = match client_for(self, args.host.as_deref()) {
-            Ok(client) => client,
-            Err(no) => return Ok(no),
-        };
-        let stamp = client.handshake().stamp.clone();
-        let budget = args.max_instructions.map(|max| max.to_string());
-        let mut headers = vec![
-            ("op", "eval"),
-            ("for", stamp.as_str()),
-            ("state", args.state.as_str()),
-        ];
-        if let Some(name) = &args.chunkname {
-            headers.push(("chunkname", name.as_str()));
-        }
-        if let Some(budget) = &budget {
-            headers.push(("max_instructions", budget.as_str()));
-        }
-        let spec = Spec::new(&headers, args.code.as_bytes());
-        Ok(one(&client, spec, waiting(args.wait_seconds)))
+        Ok(eval(
+            self,
+            args.host.as_deref(),
+            &args.state,
+            &args.code,
+            args.chunkname.as_deref(),
+            args.max_instructions,
+            waiting(args.wait_seconds),
+        )
+        .answer)
     }
 
     /// The same, over a file this server reads. The path is judged before any
@@ -246,57 +395,15 @@ impl Serve {
         &self,
         Parameters(args): Parameters<EvalFile>,
     ) -> Result<CallToolResult, ErrorData> {
-        let client = match client_for(self, args.host.as_deref()) {
-            Ok(client) => client,
-            Err(no) => return Ok(no),
-        };
-        let refused = |why: String| Ok(refuse("refused", vec![why]));
-        let real = match paths::resolve(Path::new(&args.path)) {
-            Ok(real) => real,
-            Err(why) => return refused(why.to_string()),
-        };
-        // No root is allowed, because nothing configures one yet, and an
-        // empty allowed list admits nothing rather than everything. Every
-        // path is refused here until a root can be named.
-        let roots = match Roots::new(&[], &writedirs(self), None) {
-            Ok(roots) => roots,
-            Err(why) => return refused(why.to_string()),
-        };
-        let chunkname = match source::chunkname(&real) {
-            Ok(name) => name,
-            Err(why) => return refused(why.to_string()),
-        };
-        let stamp = client.handshake().stamp.clone();
-        let budget = args.max_instructions.map(|max| max.to_string());
-        let mut headers = vec![
-            ("op", "eval"),
-            ("for", stamp.as_str()),
-            ("state", args.state.as_str()),
-            ("chunkname", chunkname.as_str()),
-        ];
-        if let Some(budget) = &budget {
-            headers.push(("max_instructions", budget.as_str()));
-        }
-        // The same header slice measures the file and frames the request, so
-        // the ceiling the file was admitted under is the one the request is
-        // really written against.
-        let admitted = match file::check(&roots, client.handshake(), &headers, &real) {
-            Ok(admitted) => admitted,
-            Err(why) => return refused(why.to_string()),
-        };
-        let source = match source::read(&admitted) {
-            Ok(source) => source,
-            Err(why) => return refused(why.to_string()),
-        };
-        let spec = Spec::new(&headers, source.body());
-        let mut answer = one(&client, spec, waiting(args.wait_seconds));
-        // Which bytes ran, said beside the answer rather than instead of it.
-        answer.content.push(ContentBlock::text(format!(
-            "source: {}\nsha256: {}",
-            source.path(),
-            source.sha256_hex()
-        )));
-        Ok(answer)
+        Ok(eval_file(
+            self,
+            args.host.as_deref(),
+            &args.state,
+            &args.path,
+            args.max_instructions,
+            waiting(args.wait_seconds),
+        )
+        .answer)
     }
 
     /// Pick up a reply a `pending` answer left behind. One look, no waiting,

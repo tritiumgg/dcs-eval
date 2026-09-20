@@ -131,6 +131,15 @@ impl DataDir {
         self.root.as_path().join("parked")
     }
 
+    /// The directory a captured reply is kept in, one file per id.
+    ///
+    /// Beside the park store rather than inside it: a parked file is somebody
+    /// else's, moved out of the way and owed back, and a captured reply is
+    /// this build's own copy of something it was given.
+    pub fn replies_root(&self) -> PathBuf {
+        self.root.as_path().join("replies")
+    }
+
     /// The register, to write one action's rows through.
     pub fn register(&self, action: Action) -> Register<'_> {
         Register { data: self, action }
