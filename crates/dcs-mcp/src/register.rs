@@ -386,6 +386,42 @@ impl Register<'_> {
         })?;
         Ok(dir)
     }
+
+    /// Move the file at `parked` back out of the store to `destination`,
+    /// inside a row of its own.
+    ///
+    /// It is a move, and that is the half of it worth saying. A copy would
+    /// leave the store holding a file it has already given back, and the
+    /// next run to look would hand that copy out a second time — over
+    /// whatever is at the destination by then, which by that point is the
+    /// very file this one restored. The minted directory itself is left
+    /// standing, empty: nothing under the data directory is ever deleted,
+    /// and an empty directory is the record that something came out of it.
+    ///
+    /// The digest on the row is of the bytes going back, so the row says
+    /// what was put there rather than what was displaced — which is the
+    /// same rule the install rows follow, read from the other end.
+    pub fn restore(
+        &self,
+        now: SystemTime,
+        parked: &Path,
+        destination: &Real,
+    ) -> Result<(), RegisterError> {
+        let bytes = fs::read(parked).map_err(|why| RegisterError::Disk {
+            path: parked.to_owned(),
+            why,
+        })?;
+        let sha = sha256::hex(&sha256::digest(&bytes));
+        self.around(now, destination, &sha, || {
+            if let Some(parent) = destination.as_path().parent() {
+                fs::create_dir_all(parent).map_err(|why| RegisterError::Disk {
+                    path: parent.to_owned(),
+                    why,
+                })?;
+            }
+            move_file(parked, destination.as_path())
+        })
+    }
 }
 
 /// `file`, resolved, with its path relative to `variant` — or a refusal
