@@ -56,6 +56,29 @@ puts it back.
 > same directory and the same transport root. Running both is not a degraded
 > mode; it is two hooks answering the same request. ADR 0001.
 
+## Run it as an MCP server
+
+Point your MCP client at the binary and the `serve` verb:
+
+```
+dcs-mcp serve --saved-games "%USERPROFILE%\Saved Games" --variant DCS.openbeta
+```
+
+Add `--host export` to talk to the Export.lua half instead of the hook.
+
+It speaks MCP over stdin and stdout, so stdout carries nothing but protocol
+frames and every diagnostic goes to stderr — which is where your client's log
+will show them.
+
+The executor is looked for afresh on every call rather than once at start-up:
+its directory appears the first time DCS loads it, so you can point a client at
+the server before you install and before the game is running, and nothing has
+to be restarted afterwards.
+
+`--saved-games` and `--variant` must both be given; finding your `Saved Games`
+folder and its `DCS*` variants for you is *not built*. The server offers no
+tools yet — *not built*; the six below are what it will offer.
+
 ## The six tools — *not built*
 
 | Tool | What it says |

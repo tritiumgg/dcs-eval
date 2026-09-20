@@ -508,6 +508,49 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ---
 
+## Stage 7 — the MCP server and CLI
+
+### serve/diagnostic-to-stdout
+
+- task: T37
+- command: `mise exec -- cargo test -p dcs-mcp serve`
+- reddens: `serve_writes_only_protocol_frames_to_stdout`
+- note: the one line that decides where a diagnostic goes, which is why that
+  choice sits in a module of its own. `std::io::stdout` satisfies the same
+  bound as `std::io::stderr`, so the mutation compiles and the red is the
+  assertion rather than the type checker. What was observed is the start-up
+  line arriving on the transport: `stdout carried a line that is not a
+  protocol frame`, with the log line printed whole after it.
+
+```sweep-edit crates/dcs-mcp/src/diag.rs
+-         .with_writer(std::io::stderr)
++         .with_writer(std::io::stdout)
+```
+
+### serve/client-resolved-once
+
+- task: T37
+- command: `mise exec -- cargo test -p dcs-mcp serve`
+- reddens: `a_root_that_appears_between_two_calls_is_resolved_by_the_second`
+- note: turns "built per call" into "built once and kept". The assertion that
+  goes is `the second call resolves the root that appeared between them`. Both `Client` and
+  `NoSession` derive `Clone` and hold only `Sync` fields, which is what lets a
+  `static` hold one — and the reason `NoSession` renders its reason to a
+  `String` rather than carrying the `io::Error` that raised it. Observed red is
+  two tests, not one: `a_second_serve_over_the_same_options_resolves_independently`
+  fails beside it, because the only call in the suite that could ever cache an
+  `Ok` is the one this control is about.
+
+```sweep-edit crates/dcs-mcp/src/serve.rs
+-     pub fn client(&self) -> Result<Client, NoSession> {
+-         Client::resolve(&self.opts)
++     pub fn client(&self) -> Result<Client, NoSession> {
++         static ONCE: std::sync::OnceLock<Result<Client, NoSession>> = std::sync::OnceLock::new();
++         ONCE.get_or_init(|| Client::resolve(&self.opts)).clone()
+```
+
+---
+
 ## Stage 8 — the installer and embedding
 
 ### embed/stale-embedded-copy
@@ -604,13 +647,13 @@ an entry here like any other, and both figures move.
 - out-of-scope: not swept. Stages 7 to 9 are the MCP server, the installer and
   the live proofs; the coverage figure is summed over Stages 3 to 6 and does
   not reach them, and the last of them needs a running game rather than a
-  runner. Stage 8 has begun to be built, so what keeps the rows below here is
-  the figure's scope and not an absence of code to mutate.
-- controls: 22
-- breakdown: T38, T39, T58, T59 one each, 4; T37, T40, T41, T60, T44,
-  T61, T46 two each, 14; T45 three, 3; T52 one, 1. Stage 9's remaining rows name
-  no mutation and are owed none. This figure falls as Stages 7 and 8 are built
-  and their rows move into the inventory proper.
+  runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
+  below here is the figure's scope and not an absence of code to mutate.
+- controls: 20
+- breakdown: T38, T39, T58, T59 one each, 4; T40, T41, T60, T44, T61, T46 two
+  each, 12; T45 three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
+  and are owed none. This figure falls as Stages 7 and 8 are built and their
+  rows move into the inventory proper.
 
 ### out/the-runner-itself
 
