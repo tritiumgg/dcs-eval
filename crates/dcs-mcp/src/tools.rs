@@ -490,6 +490,60 @@ mod tests {
         server.cancel().await.expect("the server comes down");
     }
 
+    /// The one answer whose wording is decided here rather than in the
+    /// renderer: a collect that found nothing chooses the phase it reports,
+    /// because one look at the disk says nothing about which one the session
+    /// is in. The renderer cannot be held to a choice its caller makes, so
+    /// this drives the body over the wire and reads what came back — and its
+    /// name carries `wording` so the filtered command that owns that question
+    /// selects it along with the rest.
+    ///
+    /// Not an error, and that half matters as much: a caller branching on the
+    /// error flag must be told to look again, not to give up.
+    #[tokio::test]
+    async fn tools_listed_wording_of_an_uncollected_id_names_a_phase() {
+        let box_ = Sandbox::new();
+        let (server, client) = pair(&box_).await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert(
+            "id".to_owned(),
+            serde_json::Value::String("0000000001-abcd1234".to_owned()),
+        );
+        let answer = client
+            .call_tool(CallToolRequestParams::new("dcs_collect").with_arguments(arguments))
+            .await
+            .expect("dcs_collect answers");
+
+        let rendered = answer
+            .content
+            .iter()
+            .filter_map(|block| block.as_text().map(|text| text.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert_ne!(
+            answer.is_error,
+            Some(true),
+            "nothing failed, so the answer is not an error: {rendered}"
+        );
+        assert_eq!(
+            rendered.lines().next().unwrap_or_default(),
+            "pending",
+            "it is headed `pending`: {rendered}"
+        );
+        assert!(
+            rendered.contains("id: 0000000001-abcd1234"),
+            "it names the id to collect under: {rendered}"
+        );
+        assert!(
+            rendered.contains("phase: "),
+            "it names a phase rather than leaving one out: {rendered}"
+        );
+
+        client.cancel().await.expect("the client hangs up");
+        server.cancel().await.expect("the server comes down");
+    }
+
     /// The claim made on the wire, read off the client's own copy of what
     /// `initialize` answered. A server holding six tools and announcing no
     /// tool capability is one a client never asks for a listing.
