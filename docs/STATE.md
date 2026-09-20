@@ -17,10 +17,10 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-**Wave 4 of Milestone C is building:** T40, T45, T46, one worktree each off
-`192d238` — `../dcs-eval-wt-a`, `-b`, `-c`; nothing of theirs is on `main`, and
-a stopped wave leaves its branches there. Three branches in flight would all
-conflict on this file, so it is written between waves until Stage 8 closes.
+Nothing. **Milestone C is closed:** all fourteen Stage 7 and Stage 8 rows are on
+`main`, and the sweep the cadence rule asks for before a milestone closes was
+run against `906282a`: **57 reddened, 0 stayed green, 0 unperformed, 0
+failures**, 58 of 58 in scope, tree identical afterward.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -28,33 +28,31 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T39** — one renderer for every reply: each refusing status reads as a non-empty refusal headed by its own word, an unknown wire word falls to the refusing side, and `pending` names its id and phase and is never an error.
-- **T44** — `install` places the hook by rename from a `.tmp` in the destination directory, over four dispositions: absent, a shipped hash, a foreign hash refused without `--replace`, and the incumbent's two files.
-- **T61** — the `Export.lua` line appended by its exact marker, a missing trailing newline added first rather than joined onto, and every other byte identical afterward.
+- **T40, T45, T46** — the read-and-eval CLI verbs with `--out`/`--capture` worded by the one renderer; `uninstall` removing its own `dofile` line by whole-line equality and restoring what it parked; `verify` reading everything and writing nothing. **Stage 8 is closed.**
+- **T58, T59** — the run record takes the reader's own digest, never a recomputed one, and a file eval refused before it read a byte writes no line (ADR 0021); sixty seconds of silence wake nothing, measured on the runtime's own paused clock rather than by sleeping. **Stage 7 is closed.**
+- **T42, T43, T60, T44, T61** — the installer's half of Milestone C: the embedded executor and its shipped-hash list, the `Saved Games` locator, the register and park store, the hook placed by rename, the `Export.lua` line. ADR 0019, ADR 0020.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Wave 5** once wave 4 lands: T58 and T59, which close Stage 7 and Milestone C.
+**Stage 9**, the live proofs. It is the critical path, it cannot be shortened by
+parallel effort, and **only the maintainer can verify any of it**, at a running
+install. Everything provable off DCS is now proved.
 
-Stages 7 and 8 were re-split before being built, ten rows into fourteen; the
-stage prose in `docs/PLAN.md` says why. Stage 8 needs nothing from Stage 7, so
-the fourteen rows build in five waves of three, each wave cut from a `main`
-that already carries the last.
-
-**An agent verifies** every row of both stages: Milestone C is proved off DCS.
+The MCP registration still points at `dcs-api-bridge`; the swap was parked on
+Milestone C, which has now closed. That is the maintainer's call to make.
 
 ## After that
 
-- **Stages 0 to 2 are closed, and Milestone A with them:** the wire proven off
-  DCS, the stand-in, the interop and round-trip controls. T17 closed it.
-- **Stage 3 is closed:** eval across the carriers with `<file>:47` true in
-  every state, and the `a_do_script` shift reproduced.
-- **Stage 4's path is closed and Stage 5 has opened:** `tick-budget: 524`, `instr-budget: 2209`, `fence: 583`, `events: 114`, `dormant: 40`, `arming: 95`, `heartbeat: 300`. Stage 6 has opened on the client side: `paths: 15`, `readers: 24`, `wait: 32`, `status: 24`, `id: 7`, `pipeline: 17`, `file_refusals: 27`, `file_source: 40`, `watch: 13`, `game_reads: 55`, `game_state: 92` under `cargo test`, the crate at 448.
-  Milestone B is closed: every Stage 3 to 6 row is built and swept.
-- **Stage 9** is the critical path and cannot be shortened by parallel effort.
-  Everything provable off DCS is proved before it.
+- **Milestone A is closed:** Stages 0 to 2 — the wire proven off DCS, the
+  stand-in, the interop and round-trip controls.
+- **Milestone B is closed:** Stages 3 to 6 — eval across the carriers with
+  `<file>:47` true in every state, the budgets and crash safety, the dormant
+  frame, and the client library. Every row built and swept; figures in git log.
+- **Milestone C is closed:** Stages 7 and 8 — the MCP server and its six tools,
+  one wording for every reply, the CLI, the run record, the server's idle and
+  the installer under park-and-restore. Fourteen rows, 26 controls all seen red.
 
 ## Carries forward
 
