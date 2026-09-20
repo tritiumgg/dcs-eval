@@ -32,7 +32,7 @@ use rmcp::model::{CallToolResult, ContentBlock};
 use rmcp::{tool, tool_router};
 
 use crate::serve::{Client, Serve, host_of};
-use crate::wording::{answered, refuse, reply_lines, say};
+use crate::wording::{self, answered, pending, refuse, say};
 
 /// How long a call waits on a reply before answering `pending`.
 ///
@@ -311,7 +311,10 @@ impl Serve {
             Err(no) => return Ok(no),
         };
         Ok(match wait::collect(client.session(), &args.id) {
-            Ok(Collected::Reply(envelope)) => say("reply", reply_lines(&envelope)),
+            // Through the same renderer a waited-for reply goes through: a
+            // reply that refused is a refusal whether it was waited on or
+            // picked up afterwards.
+            Ok(Collected::Reply(envelope)) => wording::reply(&envelope),
             Ok(Collected::Foreign { saw, wanted }) => refuse(
                 "stale-session",
                 vec![format!(
@@ -319,12 +322,16 @@ impl Serve {
                     args.id
                 )],
             ),
-            Ok(Collected::Nothing) => say(
-                "pending",
-                vec![
-                    format!("id: {}", args.id),
-                    "nothing has landed under that id yet".to_owned(),
-                ],
+            // Nothing has landed, and one look says nothing about why, so
+            // the phase is the one the wait carries when the disk says
+            // nothing either — named rather than left out, because a caller
+            // deciding whether to look again needs the same two facts here
+            // as in the `pending` that sent it.
+            Ok(Collected::Nothing) => pending(
+                &args.id,
+                wait::PHASE_UNKNOWN,
+                None,
+                Some("nothing has landed under that id yet"),
             ),
             Err(why) => refuse("refused", vec![why.to_string()]),
         })
