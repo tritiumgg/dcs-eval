@@ -20,7 +20,15 @@ pub mod diag;
 // which trees a target may not be in.
 pub mod locate;
 
+// The MCP server itself: the options it is started with, the client it builds
+// per call, and the stdio transport it speaks over.
+pub mod serve;
+
 // The Win32 calls this crate makes, declared here and nowhere else. The
 // client crate declares its own; decision record 0019 is why the two sets
 // are not one file.
 pub mod sys;
+
+// Scaffolding the tests in this crate share. Never in the binary.
+#[cfg(test)]
+mod testing;
