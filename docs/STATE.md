@@ -28,9 +28,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T52's code half** — the installer's incumbent refusal and `verify`'s `dcsapi` stray prefix are gone (ADR 0022): `install` reads one leaf name in `Scripts\Hooks\` and `verify` reports only a second copy of our own executor. What remains of T52 is live and manual.
 - **T40, T45, T46** — the read-and-eval CLI verbs with `--out`/`--capture` worded by the one renderer; `uninstall` removing its own `dofile` line by whole-line equality and restoring what it parked; `verify` reading everything and writing nothing. **Stage 8 is closed.**
 - **T58, T59** — the run record takes the reader's own digest, never a recomputed one, and a file eval refused before it read a byte writes no line (ADR 0021); sixty seconds of silence wake nothing, measured on the runtime's own paused clock rather than by sleeping. **Stage 7 is closed.**
-- **T42, T43, T60, T44, T61** — the installer's half of Milestone C: the embedded executor and its shipped-hash list, the `Saved Games` locator, the register and park store, the hook placed by rename, the `Export.lua` line. ADR 0019, ADR 0020.
 
 *The last three at most, one line each. Git log holds the rest.*
 
@@ -61,9 +61,9 @@ resolved, and say where. Mark an entry only the maintainer can settle. Ten
 entries at most: an eleventh means something here is finished, or belongs in
 `docs/decisions/` or `CLAUDE.md` instead.
 
-- **Cutover — the incumbent goes before this executor installs.** `dcs-api-bridge`'s
-  `DcsApiEval.lua` sits in the same `Scripts\Hooks\`; ADR 0002 is why the names
-  differ; T52 proves two hooks on one root cannot happen.
+- **Cutover — by hand, and nothing checks it.** `DcsApiEval.lua` and its `Export.lua`
+  line go before this installs. ADR 0022 removed the refusal, so installing beside it
+  now succeeds and both poll. Maintainer's; the README is the only warning.
 - **Maintainer decision — when the MCP registration is swapped.** Claude Code still
   points at `dcs-api-bridge`; the swap strands a session mid-task, so it happens at
   Milestone C. ADR 0001.

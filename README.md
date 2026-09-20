@@ -54,9 +54,15 @@ nothing under there is ever deleted.
 
 `verify` re-checks the installation and writes nothing.
 
-> **Uninstall `dcs-api-bridge` first.** This replaces it, and the two use the
-> same directory and the same transport root. Running both is not a degraded
-> mode; it is two hooks answering the same request. ADR 0001.
+> **Uninstall `dcs-api-bridge` first, by hand.** This replaces it, and the two
+> use the same directory and the same transport root. Running both is not a
+> degraded mode; it is two hooks answering the same request, at twice the idle
+> cost. Delete `Scripts\Hooks\DcsApiEval.lua` and remove its `dofile` line from
+> `Scripts\Export.lua` before you install.
+>
+> **Nothing here checks that you did.** `install` looks for one file name in
+> `Scripts\Hooks\` — its own — and `verify` reports only what this project put
+> there. What else you load is yours. ADR 0001, ADR 0022.
 
 ## Run it as an MCP server
 
