@@ -18,6 +18,15 @@ every Stage 3–6 plan row naming a mutation has an entry here, but it checks
 presence per task, not per mutation, so a second control added to a row that
 already has an entry can still go unwritten if nobody writes it.
 
+**Which rows may hold an entry is wider than which rows owe one.** Stages 3–6
+are what the coverage figure below is summed over, and so what is owed an
+entry. An entry filed under any row in Stage 3 or later is accepted, because a
+task past Stage 6 that builds a control writes its entry in the same pull
+request like every other, and a gate calling that entry stray would make the
+rule impossible to follow. Stages 0–2 are the one place an entry is refused:
+the coverage figure declares them out of scope with a hand count, and an entry
+filed under a row there would be counted once by hand and once by the sweep.
+
 **`reddens:` is what was observed, not what was predicted.** Where the red a
 mutation produced is not the red its plan cell named, the entry says so in a
 `note:`; that difference is the interesting part, because it says what the
