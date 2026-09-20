@@ -11,9 +11,6 @@
 
 use dcs_mcp::serve;
 
-// The executor the binary carries, and the hashes that recognise it.
-mod embed;
-
 /// Every word this binary answers to today. The installer and the command
 /// line that mirrors the tools are not built, so anything else is a usage
 /// line rather than a silence.

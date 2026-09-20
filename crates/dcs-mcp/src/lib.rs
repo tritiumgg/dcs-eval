@@ -16,6 +16,9 @@
 // Where every diagnostic goes, decided once. Stdout belongs to the protocol.
 pub mod diag;
 
+// The executor the binary carries, and the hashes that recognise it.
+pub mod embed;
+
 // The one line appended to `Export.lua`, the marker that makes its removal
 // exact, and the copy parked before it goes in.
 pub mod export_line;
