@@ -253,6 +253,43 @@ pub struct Swept {
     pub left: Vec<(String, io::Error)>,
 }
 
+/// How deep a session goes: `<stamp>/req` and `<stamp>/res`, with files in
+/// those. The executor's sweep goes no further, on the reasoning that a
+/// directory below that is not one a session made, so this one does not
+/// either.
+const SESSION_DEPTH: u32 = 2;
+
+/// One sibling session, removed the way the executor removes one: the names
+/// read before anything goes, files first and the directory once it is
+/// empty, stopping at the first refusal, and going no deeper than a session
+/// does.
+///
+/// The depth limit is not caution about this double's own test tree, which
+/// is two deep and made by `open`. It is fidelity: an unbounded removal
+/// would clear a leftover the real sweep would leave named and standing,
+/// and a test asking what happens to such a leftover would then get the
+/// stand-in's answer rather than the executor's.
+fn remove_session(path: &Path, depth: u32) -> io::Result<()> {
+    if depth > SESSION_DEPTH {
+        return Err(io::Error::other(format!(
+            "{} is deeper than a session goes",
+            path.display()
+        )));
+    }
+    let mut names = Vec::new();
+    for entry in fs::read_dir(path)? {
+        names.push(entry?.path());
+    }
+    for entry in names {
+        if entry.is_dir() {
+            remove_session(&entry, depth + 1)?;
+        } else {
+            fs::remove_file(&entry)?;
+        }
+    }
+    fs::remove_dir(path)
+}
+
 /// One stand-in executor session: a stamped directory under a root, a
 /// tick counter, and the three values every reply names. The public fields
 /// are a test's to set between ticks, the way a live session's phase
@@ -376,13 +413,23 @@ impl Standin {
         &self.arm
     }
 
-    /// The sweep a load does before it writes anything: every entry under
-    /// `<output>/rpc` whose name is not this session's stamp is removed,
-    /// requests and replies together, because each is a session that has
-    /// ended and nothing in it is addressed to this one.
+    /// The sweep a load does before it writes anything, on demand instead
+    /// of at load: every sibling directory under `<output>/rpc` whose name
+    /// is not this session's stamp is removed, requests and replies
+    /// together, because each is a session that has ended and nothing in
+    /// it is addressed to this one.
+    ///
+    /// **`open` does not call this; the executor's load does.** The
+    /// stand-in sweeps only when a test asks, because a test wants the
+    /// sweep placed exactly — between two calls, or while one is still in
+    /// flight — and a sweep folded into `open` could land in only one of
+    /// those places. A test that means "a load happened here" writes the
+    /// two steps out.
     ///
     /// A transport root that is not there yet is an empty sweep and not a
-    /// refusal: the first load of all has no siblings to find.
+    /// refusal: the first load of all has no siblings to find. A file
+    /// directly under the root is not a session and is left alone,
+    /// unnamed, as the executor leaves one.
     pub fn sweep(&self) -> Swept {
         let mut swept = Swept {
             removed: Vec::new(),
@@ -393,10 +440,10 @@ impl Standin {
         };
         for entry in entries.flatten() {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if name == self.stamp {
+            if name == self.stamp || !entry.path().is_dir() {
                 continue;
             }
-            match fs::remove_dir_all(entry.path()) {
+            match remove_session(&entry.path(), 1) {
                 Ok(()) => swept.removed.push(name),
                 Err(why) => swept.left.push((name, why)),
             }
