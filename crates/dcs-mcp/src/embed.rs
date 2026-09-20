@@ -25,24 +25,13 @@
 //! converted them and fails everywhere else. That is a legible failure here
 //! rather than a mystery in CI.
 
-// The verbs that spend these — placing the hook, recognising an upgrade,
-// hash-gating a removal, naming the build in `verify` — are not built yet, so
-// the binary has no caller for them today while clippy runs with `-D
-// warnings`. The tests below are the callers until then. Each item says so for
-// itself rather than the module saying it once: a blanket allow here would go
-// on silencing the warning for whatever is added next, including something
-// genuinely dead, long after these attributes have come off one by one.
-
 /// The executor as committed, carried in the binary.
-#[allow(dead_code)]
 pub const EXECUTOR: &[u8] = include_bytes!("../../../executor/DcsEvalExecutor.lua");
 
 /// The leaf name the installer writes into `Scripts\Hooks\`.
-#[allow(dead_code)]
 pub const EXECUTOR_FILE_NAME: &str = "DcsEvalExecutor.lua";
 
 /// The SHA-256 of `EXECUTOR`, written by hand so that it can be found wrong.
-#[allow(dead_code)]
 pub const EXECUTOR_SHA256: &str =
     "2a66399b06e4c14141179e3769d6180e9bf2e85ae27047a901c27d5f083ad871";
 
@@ -52,14 +41,17 @@ pub const EXECUTOR_SHA256: &str =
 /// An entry is never removed and never reordered: a user's already-installed
 /// file has to stay recognisable as ours however old it is, and an entry that
 /// left this list would turn one of our own releases into a stranger's file.
-#[allow(dead_code)]
 pub const SHIPPED: &[&str] = &[
     // The executor of the first release, and what this binary carries today.
     "2a66399b06e4c14141179e3769d6180e9bf2e85ae27047a901c27d5f083ad871",
 ];
 
 /// Whether a hook file with this hash is one this project put there.
-#[allow(dead_code)]
+///
+/// The installer does not call this: its shipped list is a parameter, so that
+/// an upgrade from genuinely different bytes is reachable in a test while the
+/// real list has one entry. This is the same question asked of the list this
+/// binary actually carries, for the verbs that have no release handed to them.
 pub fn is_shipped(hash: &str) -> bool {
     SHIPPED.contains(&hash)
 }
@@ -69,7 +61,6 @@ pub fn is_shipped(hash: &str) -> bool {
 /// Composed here and deliberately not printed from `main`, whose stdout
 /// carries protocol frames and nothing else. The verbs that emit it are
 /// `verify` and the command line.
-#[allow(dead_code)]
 pub fn release_line() -> String {
     format!(
         "dcs-mcp {} · executor {} sha256 {}",
