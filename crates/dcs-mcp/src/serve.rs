@@ -16,6 +16,7 @@ use std::path::{Path, PathBuf};
 use dcs_eval::paths::{self, Real};
 use dcs_eval::readers::Handshake;
 use dcs_eval::wait::Session;
+use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
 use rmcp::transport::stdio;
 use rmcp::{ServerHandler, ServiceExt};
@@ -93,11 +94,9 @@ impl Options {
                 )?,
                 "--variant" => once(&mut variant, "--variant", value("--variant")?)?,
                 "--host" => {
-                    let word = match value("--host")?.as_str() {
-                        "hook" => Host::Hook,
-                        "export" => Host::Export,
-                        other => return Err(format!("--host is hook or export, not {other}")),
-                    };
+                    let given = value("--host")?;
+                    let word = host_of(&given)
+                        .ok_or_else(|| format!("--host is hook or export, not {given}"))?;
                     once(&mut host, "--host", word)?
                 }
                 other => return Err(format!("serve does not take {other}")),
@@ -108,6 +107,33 @@ impl Options {
             variant: variant.ok_or("serve wants --variant <name>")?,
             host: host.unwrap_or(Host::Hook),
         })
+    }
+
+    /// The same options aimed at another host.
+    ///
+    /// A call may name a host of its own, and the executor's two hosts write
+    /// into two directories, so a call that names one is asking to be
+    /// resolved somewhere other than where the flag points. Everything else
+    /// about the install is the same, which is why this replaces one field
+    /// rather than taking a second set of flags.
+    pub fn at_host(&self, host: Host) -> Options {
+        Options {
+            host,
+            ..self.clone()
+        }
+    }
+}
+
+/// The host a word names, or nothing where it names neither.
+///
+/// The flag and a call's `host` argument accept the same two words. Spelling
+/// them in two places is how the two would come to disagree, so the refusal
+/// stays with each caller and the words stay here.
+pub fn host_of(word: &str) -> Option<Host> {
+    match word {
+        "hook" => Some(Host::Hook),
+        "export" => Some(Host::Export),
+        _ => None,
     }
 }
 
@@ -188,16 +214,24 @@ impl Client {
     }
 }
 
-/// The server: the options, and nothing resolved.
+/// The server: the options, the tools it answers over them, and nothing
+/// resolved.
 #[derive(Debug, Clone)]
 pub struct Serve {
     opts: Options,
+    /// The one router. What is registered in it is what is listed, because
+    /// the listing is taken from it and there is no second list to fall out
+    /// of step with.
+    tools: ToolRouter<Serve>,
 }
 
 impl Serve {
     /// Hold the options. Deliberately does no looking: see the module note.
     pub fn new(opts: Options) -> Self {
-        Self { opts }
+        Self {
+            opts,
+            tools: Self::tool_router(),
+        }
     }
 
     pub fn options(&self) -> &Options {
@@ -218,17 +252,36 @@ impl Serve {
     pub fn client(&self) -> Result<Client, NoSession> {
         Client::resolve(&self.opts)
     }
+
+    /// The executor for a host other than the one the flag names, which is
+    /// what a call's own `host` argument asks for. Resolved afresh, for the
+    /// reason the module note gives.
+    pub fn client_at(&self, host: Host) -> Result<Client, NoSession> {
+        Client::resolve(&self.opts.at_host(host))
+    }
 }
 
+#[rmcp::tool_handler(router = self.tools)]
 impl ServerHandler for Serve {
     fn get_info(&self) -> ServerConfig {
-        let mut info = ServerConfig::new(ServerCapabilities::default());
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.server_info = Implementation::new("dcs-mcp", env!("CARGO_PKG_VERSION"));
-        // No capability is declared: the tools are not built yet, and a server
-        // that announced tools it cannot list would be a worse lie than one
-        // that announces none.
-        info.instructions =
-            Some("Evaluate Lua inside a running DCS World. No tools yet.".to_owned());
+        // The capability is claimed because the tools are registered, and
+        // what is listed comes off the same router they are registered in.
+        //
+        // The wording below is a placeholder and is known to be one: how a
+        // reply reads — a refusal that reads as a refusal, a `pending` that
+        // names its id and phase — is settled in one place, and not here.
+        info.instructions = Some(
+            "Evaluate Lua inside a running DCS World. `dcs_status` reports what \
+             is readable without asking the executor anything; `dcs_ping` proves \
+             it is alive; `dcs_game_state` says what the game is doing; \
+             `dcs_eval` and `dcs_eval_file` run a chunk; `dcs_collect` picks up \
+             a reply left pending. The wait on a call is a wait and never a \
+             limit: a mission load can outlast it, and the answer is then a \
+             `pending` to collect by id."
+                .to_owned(),
+        );
         info
     }
 }

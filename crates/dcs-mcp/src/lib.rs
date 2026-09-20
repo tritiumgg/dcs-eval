@@ -28,6 +28,10 @@ pub mod register;
 // per call, and the stdio transport it speaks over.
 pub mod serve;
 
+// The six tools the server offers, decided in one block so that the set that
+// is registered is the set that is listed.
+pub mod tools;
+
 // The Win32 calls this crate makes, declared here and nowhere else. The
 // client crate declares its own; decision record 0019 is why the two sets
 // are not one file.
