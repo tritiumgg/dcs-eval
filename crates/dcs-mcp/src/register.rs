@@ -22,7 +22,8 @@
 //! under either DCS tree.** A store that pruned itself would throw away the
 //! one copy of a file somebody wants back, and a store inside `Saved Games`
 //! would be swept up by the very uninstall it exists to survive. The second
-//! is enforced: [`DataDir::at`] refuses a root under any tree it is handed.
+//! is enforced: every way of naming the root ends in [`DataDir::at`], which
+//! refuses one under any tree it is handed.
 
 use std::fmt;
 use std::fs;
@@ -80,12 +81,18 @@ pub struct DataDir {
 }
 
 impl DataDir {
-    /// `<Local AppData>\dcs-mcp`, resolved.
-    pub fn known() -> Result<Self, RegisterError> {
+    /// `<Local AppData>\dcs-mcp`, resolved, and refused if it lies under
+    /// any of `trees`.
+    ///
+    /// The known folder is nobody's idea of a place to keep DCS, so the
+    /// refusal is all but unreachable here — it takes a profile relocated
+    /// on top of `Saved Games` to fire. It goes through [`DataDir::at`]
+    /// anyway because an invariant held by only the override path is one
+    /// the product does not have, and the shape of a machine is not this
+    /// module's to predict.
+    pub fn known(trees: &[&Real]) -> Result<Self, RegisterError> {
         let local = sys::local_app_data().map_err(RegisterError::NoKnownFolder)?;
-        Ok(Self {
-            root: paths::resolve(&local.join("dcs-mcp"))?,
-        })
+        Self::at(&local.join("dcs-mcp"), trees)
     }
 
     /// A root the caller supplies — an override, or a fixture — refused if
@@ -132,6 +139,14 @@ impl DataDir {
     /// Every row the register holds, oldest first. A register that has
     /// never been written is no rows rather than a failure: nothing has
     /// been installed yet, which is a fact and not a problem.
+    ///
+    /// A row is one line ending in a newline, so anything after the last
+    /// newline is a write that did not finish — the very crash the writing
+    /// order exists to survive. It is dropped rather than refused: a run
+    /// killed mid-append would otherwise take every intact row before it
+    /// down with the one that was in flight, which is the opposite of what
+    /// a record is for. A line that is whole and still holds no five
+    /// columns is corruption of another kind and is refused.
     pub fn rows(&self) -> Result<Vec<Row>, RegisterError> {
         let path = self.register_path();
         let text = match fs::read_to_string(&path) {
@@ -139,7 +154,12 @@ impl DataDir {
             Err(why) if why.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
             Err(why) => return Err(RegisterError::Disk { path, why }),
         };
-        text.lines()
+        let whole = match text.rfind('\n') {
+            Some(last) => &text[..=last],
+            None => "",
+        };
+        whole
+            .lines()
             .filter(|line| !line.is_empty())
             .map(Row::parse)
             .collect()
@@ -332,7 +352,7 @@ impl Register<'_> {
                 path: parked.clone(),
                 why,
             })?;
-            let dir = mint(&parked, &stamp(now))?;
+            let dir = mint(&parked, &stamp(now), PARKS_PER_SECOND)?;
             let destination = dir.join(&relative);
             if let Some(parent) = destination.parent() {
                 fs::create_dir_all(parent).map_err(|why| RegisterError::Disk {
@@ -354,8 +374,12 @@ impl Register<'_> {
 /// taken, and the next suffix is tried — so the second park lands in a
 /// directory of its own without either park having to know about the
 /// other.
-fn mint(parked: &Path, stamp: &str) -> Result<PathBuf, RegisterError> {
-    for n in 1..=PARKS_PER_SECOND {
+///
+/// `limit` is how many names that second may take, handed in rather than
+/// read off the constant so that giving up is reachable in a test without
+/// minting a thousand directories to get there.
+fn mint(parked: &Path, stamp: &str, limit: u32) -> Result<PathBuf, RegisterError> {
+    for n in 1..=limit {
         let dir = parked.join(if n == 1 {
             stamp.to_owned()
         } else {
@@ -369,6 +393,7 @@ fn mint(parked: &Path, stamp: &str) -> Result<PathBuf, RegisterError> {
     }
     Err(RegisterError::Crowded {
         stamp: stamp.to_owned(),
+        limit,
     })
 }
 
@@ -447,7 +472,7 @@ pub enum RegisterError {
     NotUnderVariant { file: Real, variant: Real },
     Disk { path: PathBuf, why: io::Error },
     MalformedRow { line: String },
-    Crowded { stamp: String },
+    Crowded { stamp: String, limit: u32 },
 }
 
 impl From<PathError> for RegisterError {
@@ -474,9 +499,9 @@ impl fmt::Display for RegisterError {
             Self::MalformedRow { line } => {
                 write!(f, "the register holds a row of no five columns: {line}")
             }
-            Self::Crowded { stamp } => write!(
+            Self::Crowded { stamp, limit } => write!(
                 f,
-                "{stamp}: that second already holds {PARKS_PER_SECOND} parked directories"
+                "{stamp}: that second already holds {limit} parked directories"
             ),
         }
     }
@@ -571,7 +596,8 @@ mod tests {
         // status field is the byte the closure saw.
         let mut expected = seen.clone();
         let at = expected.len() - 1 - STATUS_WIDTH;
-        expected[at..at + STATUS_WIDTH].copy_from_slice(format!("{:<11}", "installed").as_bytes());
+        expected[at..at + STATUS_WIDTH]
+            .copy_from_slice(format!("{:<STATUS_WIDTH$}", "installed").as_bytes());
         assert_eq!(after, expected, "only the status field changed");
     }
 
@@ -721,6 +747,77 @@ mod tests {
     }
 
     #[test]
+    fn a_row_torn_off_by_a_crash_does_not_hide_the_rows_before_it() {
+        let (b, _variant, data) = fixture();
+        let hook = b.join("saved/DCS.openbeta/Scripts/Hooks/DcsEvalExecutor.lua");
+        put(&hook, b"-- an executor\n");
+        let hook = real(&hook);
+        data.register(Action::Install)
+            .around(an_instant(), &hook, "0", || Ok(()))
+            .expect("the row goes in");
+
+        // What a run killed part-way through an append leaves behind: a
+        // line with no newline on the end of it.
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(data.register_path())
+            .expect("the register opens");
+        f.write_all(b"20251009T085320Z\tinstall\tC:\\half")
+            .expect("half a row is written");
+        drop(f);
+
+        let rows = data.rows().expect("the intact rows still read back");
+        assert_eq!(rows.len(), 1, "the torn tail is dropped, not the rest");
+        assert_eq!(rows[0].status, "installed");
+
+        // A line that is whole and still short of five columns is not a
+        // torn write, and is refused rather than skipped.
+        let mut f = fs::OpenOptions::new()
+            .append(true)
+            .open(data.register_path())
+            .expect("the register opens");
+        f.write_all(b"\n").expect("the tear is closed off");
+        drop(f);
+        let err = data
+            .rows()
+            .expect_err("a whole row of three columns is not a row");
+        assert!(matches!(err, RegisterError::MalformedRow { .. }), "{err}");
+    }
+
+    #[test]
+    fn an_uninstall_row_carries_the_uninstall_words() {
+        let (b, _variant, data) = fixture();
+        let hook = b.join("saved/DCS.openbeta/Scripts/Hooks/DcsEvalExecutor.lua");
+        put(&hook, b"-- an executor\n");
+        let hook = real(&hook);
+        data.register(Action::Uninstall)
+            .around(an_instant(), &hook, "0", || Ok(()))
+            .expect("the removal is recorded");
+        let rows = data.rows().expect("the register reads");
+        assert_eq!(rows[0].action, "uninstall");
+        assert_eq!(
+            rows[0].status, "uninstalled",
+            "the longest word the column is sized for, written into it"
+        );
+    }
+
+    #[test]
+    fn a_second_that_has_run_out_of_names_is_refused_naming_the_stamp() {
+        let b = Sandbox::new();
+        let parked = b.dir("parked");
+        let stamp = "20251009T085320Z";
+        // Two names, both taken by minting them, so the third has nowhere
+        // to go. The real bound is far larger and is the same arithmetic.
+        mint(&parked, stamp, 2).expect("the first name is free");
+        mint(&parked, stamp, 2).expect("the second name is free");
+        let err = mint(&parked, stamp, 2).expect_err("and there is no third");
+        assert!(matches!(err, RegisterError::Crowded { .. }), "{err}");
+        let line = err.to_string();
+        assert!(line.contains(stamp), "the line names the second: {line}");
+        assert!(line.contains('2'), "and how many it tried: {line}");
+    }
+
+    #[test]
     fn the_stamp_is_utc_to_the_second() {
         for (secs, expected) in [
             (0, "19700101T000000Z"),
@@ -742,7 +839,9 @@ mod tests {
         // particular host, which nothing in a fixture could show.
         let local = sys::local_app_data().expect("the shell says where Local AppData is");
         assert!(local.is_absolute(), "an absolute path: {}", local.display());
-        let data = DataDir::known().expect("and the data directory resolves under it");
+        // No trees to compare against: the refusal has its own test, and
+        // this one is about the known folder being reachable at all.
+        let data = DataDir::known(&[]).expect("and the data directory resolves under it");
         assert_eq!(*data.path(), real(&local.join("dcs-mcp")));
     }
 }
