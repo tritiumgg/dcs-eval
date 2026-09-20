@@ -1018,6 +1018,60 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +                 })
 ```
 
+### verify/a-write-during-verify
+
+- task: T46
+- command: `mise exec -- cargo test -p dcs-mcp verify`
+- reddens: `verify::tests::the_tree_verify_read_is_git_clean_afterwards`
+- note: a log dropped beside what was inspected is the ordinary way this
+  verb goes wrong, and the mutant compiles clean and warns about nothing —
+  `fs` is already imported for the reads, and the `let _` answers the
+  `must_use` — because every read is unaffected and the report is byte for
+  byte the report it was. The only thing that changes is the tree. The
+  check goes red at its `git status --porcelain` assertion, which printed
+  `verify wrote into the install it was asked about:` and under it
+  `?? DCS.openbeta/Scripts/Hooks/verify.log`. The same test carries a second
+  assertion, a byte-for-byte snapshot of the fixture taken before the call,
+  and it is not redundant: git does not track an empty directory, so a
+  `create_dir_all` on the way to a read is something git would call clean
+  and the snapshot would not. This mutation reddens the porcelain assertion
+  first, so the snapshot's own message is not observed here. No other check
+  goes red: nothing else in the module looks at what is on disk after the
+  call, which is what says this control watches the writing and not the
+  reading.
+
+```sweep-edit crates/dcs-mcp/src/verify.rs
+-     let hooks = variant.as_path().join("Scripts").join("Hooks");
++     let hooks = variant.as_path().join("Scripts").join("Hooks");
++     let _ = fs::write(hooks.join("verify.log"), b"");
+```
+
+### verify/app-version-treated-as-a-failure
+
+- task: T46
+- command: `mise exec -- cargo test -p dcs-mcp verify`
+- reddens: `verify::tests::a_differing_app_version_is_a_difference_and_never_a_refusal`
+- note: this is why the report has no problem variant a version could be
+  filed under — there is nowhere for a difference to be put, so the only way
+  to treat one as a fault is to let it decide the verdict, which is the
+  defect exactly. It compiles because `VersionCheck` is imported by name for
+  the field's own type. One check goes red and no other, because every other
+  fixture is handed a measured build that agrees or none at all; the pair
+  with `a_matching_app_version_says_so` is what says the control watches the
+  difference rather than the field being read at all. The observed message
+  is the verdict assertion's own,
+  `a build that differs from the one measured is a difference, not a
+  refusal`. The `Display` assertion in the same test — that the rendered
+  report still ends `verified` — would go red with it, but the verdict is
+  asserted first and is what was seen.
+
+```sweep-edit crates/dcs-mcp/src/verify.rs
+-         self.problems.is_empty() && self.session.problems.is_empty()
++         self.problems.is_empty()
++             && self.session.problems.is_empty()
++             && !matches!(self.app_version, VersionCheck::Differs { .. })
+```
+
 ---
 
 ## Out of scope
@@ -1062,8 +1116,8 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 5
-- breakdown: T58, T59 one each, 2; T46 two, 2; T52 one, 1. T40's two are in
+- controls: 3
+- breakdown: T58, T59 one each, 2; T52 one, 1. T40's two and T46's two are in
   the inventory above and are counted there rather than here. Stage 9's
   remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
