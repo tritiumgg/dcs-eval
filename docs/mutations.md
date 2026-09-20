@@ -756,7 +756,12 @@ not cover is printed by the sweep itself rather than left to be assumed.
   the early return stays reachable and the mutant carries no unreachable-code
   warning — the red is the assertion and nothing else. A second `install` then
   no longer recognises the line the first one wrote and appends another beside
-  it, which is the defect the plan cell names.
+  it, which is the defect the plan cell names. The line that goes red is the
+  outcome comparison — `the line it wrote is the line it finds`, `left:
+  Appended { .. } / right: AlreadyThere` — and not the count of dofile lines
+  below it, which the check never reaches. The count is the assertion that says
+  what the wrong outcome costs the file; the outcome is what is observed going
+  red.
   `a_crlf_terminated_copy_of_the_line_is_still_the_line` goes red alongside it,
   for the same reason from the other side: it too asks the guard to recognise a
   line that is already there. `every_other_byte_of_the_file_is_the_byte_it_was`
