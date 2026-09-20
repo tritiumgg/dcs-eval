@@ -10,7 +10,9 @@
 //! work is a `cargo test` filtered on `serve`, and `cargo test` exits 0 when a
 //! filter matches nothing at all — so a test named some other way would make
 //! that command vacuously green. The unit tests earn the same substring
-//! through their module path.
+//! through their module path. A rule written only in a comment is one a later
+//! test is added in breach of, so `serve_names_every_test_here_serve` reads
+//! this file and holds it.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::process::{Command, Stdio};
@@ -155,4 +157,40 @@ fn serve_writes_only_protocol_frames_to_stdout() {
         err.contains("DcsEval"),
         "stderr carries the start-up line naming where the executor will be looked for: {err}"
     );
+}
+
+/// The naming rule, enforced rather than described.
+///
+/// The filtered command that is this work's done-condition selects by
+/// substring, so a test here under another name is not run by it and not
+/// missed by it either — it simply is not part of the proof. This reads the
+/// source it is itself written in and fails on the first test that would slip
+/// out that way.
+#[test]
+fn serve_names_every_test_here_serve() {
+    let source = include_str!("serve.rs");
+    let mut lines = source.lines().enumerate();
+    while let Some((number, line)) = lines.next() {
+        if line.trim() != concat!("#[", "test]") {
+            continue;
+        }
+        // Attributes may stack between the marker and the signature, so walk
+        // on to the declaration itself.
+        let declared = lines
+            .by_ref()
+            .map(|(_, next)| next.trim_start())
+            .find(|next| next.contains("fn "))
+            .unwrap_or_else(|| panic!("the test marker on line {} declares nothing", number + 1));
+        let name = declared
+            .split("fn ")
+            .nth(1)
+            .and_then(|rest| rest.split(['(', '<']).next())
+            .expect("the declaration names the function");
+        assert!(
+            name.starts_with("serve_"),
+            "the test marked on line {} is named `{name}`, which the filtered \
+             command this file is proved by would not select",
+            number + 1
+        );
+    }
 }
