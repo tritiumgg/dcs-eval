@@ -801,6 +801,65 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +     };
 ```
 
+### idle/keepalive-ping-on-a-timer
+
+- task: T59
+- command: `mise exec -- cargo test -p dcs-mcp idle`
+- reddens: `idle::sixty_seconds_of_silence_wakes_nothing`
+- note: a keepalive on a fifteen-second timer, publishing a `ping` into
+  whatever session resolves. It is the natural wrong way to write it — a
+  server that wants its executor awake when a call arrives — and it is the one
+  thing the specification's "never hold the bridge armed" forbids by name.
+  Guarded on `Handle::try_current` because `Serve::new` is also called from a
+  plain synchronous `cli::run`, where a bare spawn would panic and turn the
+  mutation into a crash in an unrelated command rather than a red assertion in
+  this one. The id is a well-formed one, checked by hand against
+  `publish::is_id`: a malformed one would be refused before anything touched
+  the disk and the mutation would quietly redden nothing.
+
+  Observed red is exactly one assertion in one test — the never-held-armed
+  check in the first quiet beat, printing the arm path it found: `the executor
+  was armed while no call was in flight: …\rpc\<stamp>\arm`. The name above is
+  what the runner can see, since it reads the `... FAILED` lines and not a
+  panic message; it is spelt with its module because the command's `idle`
+  filter also selects T41's
+  `watching::a_sibling_sweep_succeeds_while_the_server_is_idle_between_two_calls`,
+  which carries the word and stays green here.
+
+  The transport byte count is **not** moved by this edit, and that is worth
+  saying: a keepalive that touches the executor is not one that touches the
+  wire, and the two instruments watch the two halves of the rule apart.
+
+  Nothing else in the crate was observed failing: the other 107 tests of
+  `cargo test -p dcs-mcp` passed under the edit, T41's `watching` command
+  among them. `serve`'s and `watching`'s tests are plain `#[test]`s with no
+  runtime, so `try_current` fails there; `tools`'s tests do run under one, and
+  their calls finished before the first tick published anything.
+
+```sweep-edit crates/dcs-mcp/src/serve.rs
+-     pub fn new(opts: Options) -> Self {
++     pub fn new(opts: Options) -> Self {
++         if let Ok(handle) = tokio::runtime::Handle::try_current() {
++             let keeping = opts.clone();
++             handle.spawn(async move {
++                 let mut every = tokio::time::interval(std::time::Duration::from_secs(15));
++                 loop {
++                     every.tick().await;
++                     if let Ok(client) = Client::resolve(&keeping) {
++                         let h = client.handshake();
++                         let _ = dcs_eval::publish::send(
++                             h.req.as_path(),
++                             h.arm.as_path(),
++                             "0000000009-keep",
++                             &[("op", "ping"), ("for", h.stamp.as_str())],
++                             b"",
++                         );
++                     }
++                 }
++             });
++         }
+```
+
 ---
 
 ## Stage 8 — the installer and embedding
@@ -1182,12 +1241,12 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 2
-- breakdown: T59 one, 1; T52 one, 1. T40's two, T46's two and T58's two are in
-  the inventory above and are counted there rather than here. Stage 9's
+- controls: 1
+- breakdown: T52 one, 1. Every other Stage 7 and Stage 8 row is built, and its
+  mutations are entries above, counted there rather than here. Stage 9's
   remaining rows name no mutation
-  and are owed none. This figure falls as Stages 7 and 8 are built and their
-  rows move into the inventory proper.
+  and are owed none. Only T52 keeps this group alive: it is Stage 9's, and it
+  needs a running game rather than a runner.
 
 ### out/the-runner-itself
 
