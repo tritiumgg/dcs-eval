@@ -797,7 +797,7 @@ not cover is printed by the sweep itself rather than left to be assumed.
 ### install/final-name-written-directly
 
 - task: T44
-- command: `mise exec -- cargo test -p dcs-mcp install`
+- command: `mise exec -- cargo test -p dcs-mcp install::`
 - reddens: `install::tests::the_hook_never_appears_half_written`
 - note: the bytes go straight to the name DCS loads, so the rename that
   follows renames the file onto itself. Windows accepts that, and the mutant
@@ -807,8 +807,13 @@ not cover is printed by the sweep itself rather than left to be assumed.
   other check in the module stays green, because read afterwards the two
   orderings are byte-identical; that is why the red one makes its assertions
   from *inside* the closure, between the write and the rename. The observed red
-  is `the name DCS loads holds nothing until the rename: …\Scripts\Hooks\DcsEvalExecutor.lua`,
-  one failing test and no more. The sibling assertion in the same closure — that
+  is `the name DCS loads holds nothing until the rename: …\Scripts\Hooks\DcsEvalExecutor.lua`.
+  A second check goes red with it,
+  `the_placement_puts_the_bytes_down_under_the_staging_name_first`, and it is
+  the one that says the whole placement still goes through the staging and not
+  merely that the staging works when it is called: it occupies the staging name
+  with a directory, which a placement writing straight to the final name would
+  sail past. The sibling assertion in the same closure — that
   the staging file's parent is the destination directory — is what holds the
   other half of this row, a `.tmp` written on another volume, where the rename
   becomes a copy and the window reopens; no mutation is named for it here
@@ -823,7 +828,7 @@ not cover is printed by the sweep itself rather than left to be assumed.
 ### install/foreign-hash-replaced-without-replace
 
 - task: T44
-- command: `mise exec -- cargo test -p dcs-mcp install`
+- command: `mise exec -- cargo test -p dcs-mcp install::`
 - reddens: `install::tests::a_foreign_hook_is_refused_and_named_without_replace`
 - note: the guard is deleted outright, so a hook file this project never
   shipped is parked and replaced with nobody having said it may be. The run
