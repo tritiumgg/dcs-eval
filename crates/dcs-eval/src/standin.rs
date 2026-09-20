@@ -235,6 +235,24 @@ struct Script {
     body: Vec<u8>,
 }
 
+/// What a load-time sweep did: the sibling sessions it removed, and the
+/// ones it could not, each with the reason.
+///
+/// A sibling that will not go is reported and left rather than raised.
+/// That is what the executor does — on Windows a directory a client is
+/// still watching refuses its own removal, the executor logs it and
+/// carries on loading, and the next load tries again — and it is the whole
+/// reason this type has two lists instead of returning `io::Result<()>`.
+/// Nothing derives past `Debug`: an `io::Error` is neither `Clone` nor
+/// `PartialEq`.
+#[derive(Debug)]
+pub struct Swept {
+    /// The directory names that went, in the order they were read.
+    pub removed: Vec<String>,
+    /// The directory names that would not go, and why.
+    pub left: Vec<(String, io::Error)>,
+}
+
 /// One stand-in executor session: a stamped directory under a root, a
 /// tick counter, and the three values every reply names. The public fields
 /// are a test's to set between ticks, the way a live session's phase
@@ -289,7 +307,21 @@ impl Standin {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let stamp = format!("{secs}-{}", std::process::id());
+        Self::open_stamped(root, host, &format!("{secs}-{}", std::process::id()))
+    }
+
+    /// The same session, with the stamp handed in rather than minted.
+    ///
+    /// A second load is a second session, and a test that wants two of
+    /// them has to name the second one itself: [`open`](Self::open) mints
+    /// `<seconds>-<pid>`, and two loads inside the same second in the same
+    /// process would mint the same directory name. A real reload is at
+    /// least a second apart; a test's is microseconds. Nothing checks the
+    /// shape of what is given, because nothing else here validates
+    /// anything either — a stamp with a path separator in it makes a
+    /// directory somewhere surprising and that is the caller's to avoid.
+    pub fn open_stamped(root: &Path, host: &str, stamp: &str) -> io::Result<Self> {
+        let stamp = stamp.to_owned();
         let session = root.join("rpc").join(&stamp);
         let req = session.join("req");
         let res = session.join("res");
@@ -342,6 +374,34 @@ impl Standin {
     /// The arm file's path, which a client makes and this side leaves.
     pub fn arm(&self) -> &Path {
         &self.arm
+    }
+
+    /// The sweep a load does before it writes anything: every entry under
+    /// `<output>/rpc` whose name is not this session's stamp is removed,
+    /// requests and replies together, because each is a session that has
+    /// ended and nothing in it is addressed to this one.
+    ///
+    /// A transport root that is not there yet is an empty sweep and not a
+    /// refusal: the first load of all has no siblings to find.
+    pub fn sweep(&self) -> Swept {
+        let mut swept = Swept {
+            removed: Vec::new(),
+            left: Vec::new(),
+        };
+        let Ok(entries) = fs::read_dir(self.output.join("rpc")) else {
+            return swept;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name == self.stamp {
+                continue;
+            }
+            match fs::remove_dir_all(entry.path()) {
+                Ok(()) => swept.removed.push(name),
+                Err(why) => swept.left.push((name, why)),
+            }
+        }
+        swept
     }
 
     /// Every request this side has read off the disk, in the order it
@@ -1389,6 +1449,71 @@ mod tests {
             "onSimulationStart,onMissionLoadEnd",
             "joined with commas, as the executor concatenates them"
         );
+    }
+
+    // ---- the load-time sweep --------------------------------------------------
+
+    #[test]
+    fn sweep_removes_every_sibling_and_never_this_sessions_own() {
+        let b = Sandbox::new();
+        let gone = Standin::open_stamped(&b.path, "hook", "1000000000-1").expect("the first opens");
+        sent(&gone, "0000000001-abcd", &[("op", "ping")], b"");
+        let now = Standin::open_stamped(&b.path, "hook", "1000000001-2").expect("the second opens");
+
+        let swept = now.sweep();
+        assert!(
+            swept.left.is_empty(),
+            "nothing held either directory: {:?}",
+            swept.left
+        );
+        assert_eq!(swept.removed, vec!["1000000000-1".to_owned()]);
+        assert!(
+            !gone.session().exists(),
+            "the ended session and its requests"
+        );
+        assert!(
+            now.req().is_dir() && now.res().is_dir(),
+            "and this session's own directories are untouched"
+        );
+
+        // A sweep with nothing left to find says so rather than raising,
+        // and so does one on a root no load has made yet.
+        assert!(now.sweep().removed.is_empty());
+        let first = Standin::open_stamped(&b.join("elsewhere"), "hook", "1-1").expect("opens");
+        fs::remove_dir_all(first.output().join("rpc")).expect("the root goes");
+        let none = first.sweep();
+        assert!(none.removed.is_empty() && none.left.is_empty(), "{none:?}");
+    }
+
+    #[test]
+    fn sweep_leaves_a_sibling_it_could_not_remove_rather_than_failing_the_load() {
+        let b = Sandbox::new();
+        let stuck =
+            Standin::open_stamped(&b.path, "hook", "1000000000-1").expect("the first opens");
+        // An open file inside it is enough to make the removal refuse here.
+        // The directory a client *watches* refusing its own removal is the
+        // case this stands for, and that one is proved where the watch is.
+        let inside = stuck.res().join("held.tmp");
+        fs::write(&inside, b"a reply half written").expect("the file is made");
+        let holding = crate::testing::held(&inside);
+        let now = Standin::open_stamped(&b.path, "hook", "1000000001-2").expect("the second opens");
+
+        let swept = now.sweep();
+        let (name, why) = swept
+            .left
+            .first()
+            .unwrap_or_else(|| panic!("a held sibling is reported left, not removed: {swept:?}"));
+        assert_eq!(name, "1000000000-1", "reported by directory name: {why}");
+        assert!(
+            now.req().is_dir(),
+            "and the load carried on rather than being failed by it"
+        );
+
+        // The next load tries again, and by then the hold is gone.
+        drop(holding);
+        let again = now.sweep();
+        assert!(again.left.is_empty(), "{:?}", again.left);
+        assert!(!stuck.session().exists());
     }
 
     // ---- the round trip -----------------------------------------------------
