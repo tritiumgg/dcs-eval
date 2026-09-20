@@ -158,14 +158,14 @@ async fn sixty_seconds_of_silence_wakes_nothing() {
     // ---- up, and asked nothing --------------------------------------------
 
     let quiet = written.load(Ordering::Relaxed);
-    let began = tokio::time::Instant::now();
+    // Under the paused clock this returns once the runtime has nothing left
+    // to run, having moved its own clock the whole sixty seconds. So there is
+    // nothing to assert about the time elapsed: it is sixty seconds by
+    // construction, and asserting it would read like a measurement while
+    // being none. The reading is what the instruments below say about the
+    // interval the sleep spanned.
     tokio::time::sleep(SILENCE).await;
 
-    assert!(
-        began.elapsed() >= SILENCE,
-        "the runtime's own clock did not reach sixty seconds: {:?}",
-        began.elapsed()
-    );
     assert_eq!(
         written.load(Ordering::Relaxed),
         quiet,
@@ -224,14 +224,8 @@ async fn sixty_seconds_of_silence_wakes_nothing() {
     std::fs::remove_file(ex.arm()).expect("the executor disarms");
 
     let answered = written.load(Ordering::Relaxed);
-    let between = tokio::time::Instant::now();
     tokio::time::sleep(SILENCE).await;
 
-    assert!(
-        between.elapsed() >= SILENCE,
-        "the runtime's own clock did not reach sixty seconds: {:?}",
-        between.elapsed()
-    );
     assert_eq!(
         written.load(Ordering::Relaxed),
         answered,
