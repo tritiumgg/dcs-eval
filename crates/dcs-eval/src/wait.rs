@@ -197,7 +197,12 @@ pub const WAKE_DEADLINE: Duration = Duration::from_secs(10);
 /// The phase carried where nothing on the disk says what it is: a session
 /// that has never armed has written no heartbeat, and a heartbeat from
 /// another session is not evidence about this one.
-pub(crate) const PHASE_UNKNOWN: &str = "unknown";
+///
+/// Public because a `pending` the server answers without having waited —
+/// a collect that found nothing — must name the same word this module
+/// would have named, and a second `"unknown"` spelt in the server is a
+/// second place for the two to drift apart.
+pub const PHASE_UNKNOWN: &str = "unknown";
 
 /// The phase a mission load takes, during which nothing fires at all.
 pub(crate) const PHASE_LOAD: &str = "load";
