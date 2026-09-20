@@ -534,6 +534,25 @@ not cover is printed by the sweep itself rather than left to be assumed.
 -     "2a66399b06e4c14141179e3769d6180e9bf2e85ae27047a901c27d5f083ad871",
 ```
 
+### locate/ambiguity-picked
+
+- task: T43
+- command: `mise exec -- cargo test -p dcs-mcp locate`
+- reddens: `two_variants_are_an_ambiguity_carrying_both`
+- note: the bound is raised rather than the guard removed, so the `return`
+  stays reachable and the mutated build carries no unreachable-code warning —
+  the red that comes back is the assertion and nothing else. It is also the
+  closer reading of the plan cell: with the bound at two, three variants are
+  still refused and two are picked from, which is the defect.
+  `a_named_variant_settles_the_ambiguity` stays green, because a named variant
+  is filtered to one before the guard is reached; that separation is what says
+  this control watches the ambiguity and not the filter.
+
+```sweep-edit crates/dcs-mcp/src/locate.rs
+-         if found.len() > 1 {
++         if found.len() > 2 {
+```
+
 ---
 
 ## Out of scope
@@ -578,8 +597,8 @@ an entry here like any other, and both figures move.
   moved into the inventory proper, while the rows still counted here have no
   code to mutate yet and the last of the three needs a running game rather
   than a runner.
-- controls: 23
-- breakdown: T38, T39, T58, T59, T43 one each, 5; T37, T40, T41, T60, T44,
+- controls: 22
+- breakdown: T38, T39, T58, T59 one each, 4; T37, T40, T41, T60, T44,
   T61, T46 two each, 14; T45 three, 3; T52 one, 1. Stage 9's remaining rows name
   no mutation and are owed none. This figure falls as Stages 7 and 8 are built
   and their rows move into the inventory proper.
