@@ -106,6 +106,10 @@ fn fixture(box_: &Sandbox) -> (Options, Standin) {
         saved_games: box_.path.clone(),
         variant: "DCS.openbeta".to_owned(),
         host: Host::Hook,
+        // Inside the sandbox: every evaluation appends a line to the run
+        // record under this directory, and the machine's own is not this
+        // suite's to write into.
+        data_dir: Some(box_.join("data")),
     };
     let mut ex = Standin::open(&opts.output(), "hook").expect("the stand-in opens");
     // A session whose process really is running, so what a call gets back is
