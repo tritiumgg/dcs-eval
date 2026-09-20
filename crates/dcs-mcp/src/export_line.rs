@@ -67,6 +67,49 @@ fn occurrences(bytes: &[u8]) -> usize {
         .count()
 }
 
+/// `bytes` with every line that *is* the line taken out, terminator and
+/// all, or `None` where no line was.
+///
+/// Never a rebuild. Each surviving line is copied back as the bytes it
+/// was, so a CRLF stays a CRLF, a byte that is not UTF-8 stays that byte,
+/// and a file with no final newline does not gain one on the way through.
+/// A `split` and a `join` would decide all three of those, and would
+/// decide them for a file this build has no business reformatting.
+///
+/// The comparison strips one trailing carriage return, the same way
+/// [`occurrences`] does, so a file an editor converted to CRLF after the
+/// line went in is still a file the line can be taken out of. And it is a
+/// whole line that is compared, never a prefix of one: the marker on the
+/// end is what tells our line from a hand-written `dofile` of the same
+/// hook, and a match that stopped short of it would eat the neighbour.
+pub fn without(bytes: &[u8]) -> Option<Vec<u8>> {
+    let mut kept = Vec::with_capacity(bytes.len());
+    let mut found = false;
+    let mut start = 0;
+    while start < bytes.len() {
+        let end = match bytes[start..].iter().position(|b| *b == b'\n') {
+            Some(at) => start + at + 1,
+            None => bytes.len(),
+        };
+        let whole = &bytes[start..end];
+        let content: &[u8] = match whole.split_last() {
+            Some((last, head)) if *last == b'\n' => head,
+            _ => whole,
+        };
+        let content: &[u8] = match content.split_last() {
+            Some((last, head)) if *last == b'\r' => head,
+            _ => content,
+        };
+        if content == LINE.as_bytes() {
+            found = true;
+        } else {
+            kept.extend_from_slice(whole);
+        }
+        start = end;
+    }
+    found.then_some(kept)
+}
+
 /// What [`ensure`] found and what it did about it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -350,6 +393,40 @@ mod tests {
             "and it loads the hook this build installs: {LINE}"
         );
         assert!(!LINE.contains('\n'), "one line: {LINE}");
+    }
+
+    #[test]
+    fn a_crlf_terminated_copy_of_the_line_is_removed_with_its_crlf() {
+        let before = b"-- Tacview\r\n".to_vec();
+        let after = b"local Tacview = 1\n".to_vec();
+        let whole = [
+            before.clone(),
+            LINE.as_bytes().to_vec(),
+            b"\r\n".to_vec(),
+            after.clone(),
+        ]
+        .concat();
+
+        assert_eq!(
+            without(&whole).expect("the line is in there"),
+            [before, after].concat(),
+            "the line goes, and the carriage return it ended in goes with it"
+        );
+    }
+
+    #[test]
+    fn a_file_holding_no_such_line_answers_that_there_was_none() {
+        assert_eq!(
+            without(AWKWARD),
+            None,
+            "nothing of ours is in it, so there is nothing to write back"
+        );
+        let handwritten = "dofile(lfs.writedir() .. 'Scripts/Hooks/DcsEvalExecutor.lua')\n";
+        assert_eq!(
+            without(handwritten.as_bytes()),
+            None,
+            "and a hand-written dofile of the same hook is not our line: {handwritten}"
+        );
     }
 
     #[test]
