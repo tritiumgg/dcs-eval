@@ -17,7 +17,10 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T57 landed and Milestone B closed with it.
+**Wave 2 of Milestone C is building:** T38, T60, T41, one worktree each off
+`4ad77ab` — `../dcs-eval-wt-a`, `-b`, `-c`; nothing of theirs is on `main`, and
+a stopped wave leaves its branches there. Three branches in flight would all
+conflict on this file, so it is written between waves until Stage 8 closes.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,22 +28,20 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **T57** — the mutation sweep: `sh tools/sweep.sh` performs 31 of the 71 mutations the Stage 3–6 plan cells name, 3m31s warm, all 31 red, tree identical. 40 are out of scope and the run says so, as it says what its figure counts. `docs/mutations.md` is the inventory, `sweep-cover.sh` holds it to the plan, `.github/workflows/sweep.yml` runs it weekly — **the maintainer** sees that first scheduled run.
-- **T53** — the two whole echoes cut at eighty: `ping: 336`, `eval-hook: 672`, `standin` 34, harness 8545. Comparing the dialects first turned up a third: the stand-in echoed a malformed `state` whole where the Lua already cut it. All five mutations seen red. The pull request holds the rest.
-- **T36** — the game-state derivation: `game_state` prints 92, the crate 448. Six axes and the `ui` record, every `unknown` naming its reason, no axis filled from another's evidence (ADR 0018). The axes the first live run is meant to fill in are left undecided on purpose. All eight mutations seen red — one only after the sweep was widened to spoil every arm rather than one in seven.
+- **T37** — `rmcp` over stdio, the `serve` role, the client built per call. Both mutations red under `sweep.sh --only serve/`. No tool is registered yet, deliberately: that is T38's count to make.
+- **T42** — the executor embedded with its SHA-256 and the list of every hash this project has shipped, which is what lets a later row call a file an upgrade rather than a stranger.
+- **T43** — `Saved Games` located through `FOLDERID_SavedGames`, two variants reported as an ambiguity rather than picked, a target under the install refused. ADR 0019 puts the Win32 declarations in the binary.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Task T37** — Milestone C opens: `rmcp` stdio wiring, the `serve` role, the
-client built per call. Done when `cargo test -p dcs-mcp serve` shows only
-protocol frames on stdout and diagnostics on stderr; the mutations are a
-diagnostic written to stdout and a client resolved once at start-up.
+**Wave 3** once wave 2 lands: T39, T44, T61. Then T40, T45, T46; then T58, T59.
 
 Stages 7 and 8 were re-split before being built, ten rows into fourteen; the
 stage prose in `docs/PLAN.md` says why. Stage 8 needs nothing from Stage 7, so
-the two build as separate fronts.
+the fourteen rows build in five waves of three, each wave cut from a `main`
+that already carries the last.
 
 **An agent verifies** every row of both stages: Milestone C is proved off DCS.
 
