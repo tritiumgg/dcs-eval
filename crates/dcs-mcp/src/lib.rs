@@ -16,6 +16,10 @@
 // Where every diagnostic goes, decided once. Stdout belongs to the protocol.
 pub mod diag;
 
+// The one line appended to `Export.lua`, the marker that makes its removal
+// exact, and the copy parked before it goes in.
+pub mod export_line;
+
 // Where `Saved Games` is, which `DCS*` variant under it is the target, and
 // which trees a target may not be in.
 pub mod locate;
