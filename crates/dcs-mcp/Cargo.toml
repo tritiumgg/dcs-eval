@@ -47,6 +47,14 @@ dcs-eval = { path = "../dcs-eval", features = ["standin"] }
 # `cargo build` resolves none of these, so the shipped binary links no client.
 rmcp = { version = "3.4", default-features = false, features = ["client"] }
 # The drivers those tests need beyond the server's own: `macros` for
-# `#[tokio::test]`, and `io-util` for the duplex pair the two halves of a
-# session speak over.
-tokio = { version = "1", features = ["rt", "time", "macros", "io-util"] }
+# `#[tokio::test]`, `io-util` for the duplex pair the two halves of a session
+# speak over, and `test-util` for the paused clock the idle control measures
+# its silence against — sixty seconds of a runtime's own clock, rather than
+# two real minutes of CI spent measuring the machine.
+tokio = { version = "1", features = [
+    "rt",
+    "time",
+    "macros",
+    "io-util",
+    "test-util",
+] }

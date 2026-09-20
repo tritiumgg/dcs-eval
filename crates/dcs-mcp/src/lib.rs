@@ -79,3 +79,10 @@ mod testing;
 // is to be only one of those.
 #[cfg(test)]
 mod watching;
+
+// What the server costs while nobody is asking it anything. A unit module for
+// the same reason as the one above — it drives `testing` — and what it
+// watches is the server doing nothing: no byte on the wire and no arm file on
+// the executor, over sixty seconds of the runtime's own clock.
+#[cfg(test)]
+mod idle;
