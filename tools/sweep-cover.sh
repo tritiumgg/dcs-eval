@@ -18,8 +18,9 @@
 # deliberate. Presence is owed only by Stages 3 to 6, which are built: a later
 # stage's row has no code to mutate yet, and demanding an entry for it would
 # fail every run until the last row landed. A stray is checked against the rows
-# of every stage, because a stage being unbuilt is no reason to call the first
-# entry written for it a control filed under a row that names no mutation.
+# of every stage, however far the plan grows, because a stage being unbuilt is
+# no reason to call the first entry written for it a control filed under a row
+# that names no mutation.
 #
 # No toolchain, so it runs inside `mise run check` and in CI's preflight job.
 
@@ -44,14 +45,22 @@ done
 # a plan task ID anywhere outside docs/, CLAUDE.md and README.md.
 ID='T[0-9][0-9]'
 
-# Every row of stages $1 to $2 whose done-condition names a mutation. The stage
-# is read from the heading above the table. The row is matched whole rather than
-# by column: a cell can carry a literal pipe inside backticks, which shifts
-# every column after it and would drop the row silently.
+# Every row of stages $1 to $2 whose done-condition names a mutation, where an
+# empty $2 means every stage from $1 upwards. The stage is read from the
+# heading above the table, so a row above the first heading belongs to no stage
+# and is read by neither direction: a numeric ceiling would have to be raised
+# the day a stage passed it, and a floor of zero would silently swallow a row
+# the plan had not filed under a stage at all.
+#
+# The row is matched whole rather than by column: a cell can carry a literal
+# pipe inside backticks, which shifts every column after it and would drop the
+# row silently.
 rows() {
     awk -v id="$ID" -v lo="$1" -v hi="$2" '
+        BEGIN { stage = -1 }
         /^## Stage / { stage = $3 + 0 }
-        stage < lo || stage > hi { next }
+        stage < 0 || stage < lo { next }
+        hi != "" && stage > hi { next }
         $0 !~ ("^\\|[ \t]*" id "[ \t]*\\|") { next }
         /mutations?:/ {
             row = $0
@@ -64,7 +73,7 @@ rows() {
 
 # What an entry is owed for, and what an entry is allowed to name.
 claimed=$(rows 3 6)
-named=$(rows 0 99)
+named=$(rows 0 '')
 
 # Every task the inventory names, in-scope entry and out-of-scope entry alike:
 # a `task:` bullet is read the same way wherever it sits. The runner's own row

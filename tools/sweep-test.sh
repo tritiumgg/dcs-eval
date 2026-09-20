@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=34
+CASES=36
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -813,6 +813,32 @@ covered_both "$one" "$three"
 out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
 check 'an entry for a row outside the presence window is not a stray' \
     0 "$got" "1 plan rows name a mutation" "$out"
+
+# The stray check reads every stage, and "every" has to mean it however far the
+# plan grows: a numeric ceiling would quietly start calling a real entry a
+# stray the day a stage passed it. A row above the first stage heading belongs
+# to no stage at all, and is read by neither direction rather than falling into
+# the lowest one.
+four=$(printf 'T%s' 94)
+cat > "$cover/docs/PLAN.md" <<EOF
+| $four | a row filed under no stage | it holds; mutation: break it | — | developer-only |
+
+## Stage 100 — a fixture stage far ahead of any ceiling
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $three | a far later fixture | it holds; mutation: break it | — | developer-only |
+EOF
+
+covered "$three"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'an entry for a row in a stage past any ceiling is not a stray' \
+    0 "$got" "0 plan rows name a mutation" "$out"
+
+covered "$four"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'an entry for a row filed under no stage is a stray' \
+    1 "$got" "files a control under $four" "$out"
 
 
 # --- the tally --------------------------------------------------------------
