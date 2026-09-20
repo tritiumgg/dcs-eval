@@ -284,43 +284,10 @@ mod tests {
     use super::*;
 
     use std::fs;
-    use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// A fresh directory under the host's temp directory, gone when the
-    /// test ends. `dcs_eval::testing` is the crate's own test module and
-    /// is not reachable from here, so this is the same shape written
-    /// again rather than shared: two other lanes are editing this crate,
-    /// and whoever needs it second is the one who should lift it out.
-    struct Sandbox {
-        path: PathBuf,
-    }
-
-    impl Sandbox {
-        fn new() -> Self {
-            static N: AtomicUsize = AtomicUsize::new(0);
-            let n = N.fetch_add(1, Ordering::Relaxed);
-            let path = std::env::temp_dir().join(format!("dcs-mcp-{}-{n}", std::process::id()));
-            let _ = fs::remove_dir_all(&path);
-            fs::create_dir_all(&path).expect("the box is made");
-            Self { path }
-        }
-
-        fn join(&self, name: &str) -> PathBuf {
-            self.path.join(name)
-        }
-
-        fn dir(&self, name: &str) -> PathBuf {
-            let path = self.join(name);
-            fs::create_dir_all(&path).expect("the directory is made");
-            path
-        }
-    }
-
-    impl Drop for Sandbox {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.path);
-        }
-    }
+    // The crate has one of these, in `testing`. See the note there for why
+    // a second copy beside it is not a spare but a collision.
+    use crate::testing::Sandbox;
 
     /// A directory junction at `link` onto `target`. Junctions need no
     /// privilege, which is why the wrong-tree controls use one. It panics

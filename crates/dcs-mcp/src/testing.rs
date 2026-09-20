@@ -5,6 +5,11 @@
 //! rather than made public there, because a test helper that two crates share
 //! is a third thing to keep working, and this one is small enough that the
 //! copy costs less than the seam would.
+//!
+//! Within *this* crate it is one helper and must stay one. Two of these side
+//! by side would name their directories the same way and count from zero
+//! apart, so two tests in the same binary would be handed the same path and
+//! each would clear the other's tree out from under it.
 
 use std::fs;
 use std::path::PathBuf;
@@ -25,6 +30,19 @@ impl Sandbox {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("the box is made");
         Self { path }
+    }
+
+    /// A path inside the box. Nothing is made; the caller decides what the
+    /// name is going to be.
+    pub(crate) fn join(&self, name: &str) -> PathBuf {
+        self.path.join(name)
+    }
+
+    /// A directory inside the box, made along with any parent it names.
+    pub(crate) fn dir(&self, name: &str) -> PathBuf {
+        let path = self.join(name);
+        fs::create_dir_all(&path).expect("the directory is made");
+        path
     }
 }
 
