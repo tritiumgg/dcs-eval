@@ -237,11 +237,18 @@ impl ServerHandler for Serve {
 ///
 /// One current-thread runtime, because the work behind every call is a
 /// handful of small local file reads. Tokio's stdin and stdout are served by
-/// its blocking pool rather than by the IO driver, so no driver is enabled
-/// here; a compiler that disagrees is naming a feature to add, not a reason to
-/// reach for `enable_all`.
+/// its blocking pool rather than by the IO driver, so the IO driver stays off;
+/// a compiler or a panic that disagrees is naming a driver to enable, not a
+/// reason to reach for `enable_all`.
+///
+/// The timer is on for rmcp rather than for anything written here: it puts a
+/// timeout around the end of a session, and on a runtime without timers that
+/// panics *after* the last frame has been written — a client sees a clean
+/// conversation and a crashed server.
 pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()?;
     runtime.block_on(async move {
         // The one start-up line, and it says where the executor will be looked
         // for rather than what was found there: nothing is resolved yet, and

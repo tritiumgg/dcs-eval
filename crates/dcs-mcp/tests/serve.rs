@@ -108,7 +108,17 @@ fn serve_writes_only_protocol_frames_to_stdout() {
     };
     let out = collect("stdout", &out);
     let err = collect("stderr", &err);
-    let _ = child.wait();
+
+    // Both pipes reached EOF, so the child is on its way down; how it went
+    // down is a second claim. A server that answered correctly and then
+    // panicked writes its stack trace to stderr, which is asserted on below
+    // only by one substring — so without this the transport would look clean
+    // over a process that crashed on the way out.
+    let status = child.wait().expect("the server is waited for");
+    assert!(
+        status.success(),
+        "the server answered and then exited {status}; it said this on stderr: {err}"
+    );
 
     assert!(
         !out.trim().is_empty(),

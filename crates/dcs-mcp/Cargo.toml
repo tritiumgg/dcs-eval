@@ -18,8 +18,10 @@ rmcp = { version = "3.4", default-features = false, features = [
     "transport-io",
 ] }
 # The runtime rmcp's transport is written against. One current-thread runtime
-# is enough: the server's work is a handful of file reads per call.
-tokio = { version = "1", features = ["rt"] }
+# is enough: the server's work is a handful of file reads per call. `time` is
+# not for this crate's own code but for rmcp's shutdown, which puts a timeout
+# around the last of the session and panics on a runtime without timers.
+tokio = { version = "1", features = ["rt", "time"] }
 tracing = "0.1"
 tracing-subscriber = "0.3"
 
