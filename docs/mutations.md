@@ -585,6 +585,37 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +             tools: Self::tool_router().with_disabled("dcs_collect"),
 ```
 
+### wording/oversize-worded-as-an-answer
+
+- task: T39
+- command: `mise exec -- cargo test -p dcs-mcp wording`
+- reddens: `an_oversize_reply_is_a_refusal_and_not_an_empty_answer`
+- note: the fault the cell names is a refusal worded like an empty result, and
+  `oversize` is the sharpest case of it: the executor ran the chunk, refused
+  the result whole rather than cutting it, and said so under `stage:
+  oversize`. Judged in one arm of `verdict`, so the mutation is one arm, and
+  the sentence sits inline in it rather than in a named constant — a constant
+  would be left unused by the edit and the red would be the compiler rather
+  than the assertion. The mutated build renders the reply through the
+  answering path: headed `reply`, not marked an error, and nothing in it
+  saying anything failed. A caller then sees a successful call whose content
+  is a pile of headers, and has to infer from `stage: oversize` buried among
+  them that nothing came back.
+
+  Observed red is two tests, not one, and that is expected rather than an
+  over-broad edit. The table in `every_refusing_status_reads_as_a_non_empty_refusal`
+  is the plan cell's "each status", and `oversize` is one of them, so it fails
+  on that row beside the named test: `assertion left == right failed: oversize
+  is marked an error / left: Some(false) / right: Some(true)`. The two watch
+  the same word from different angles — one the whole vocabulary, one the
+  single case with its own headers and sentence — and the named one is the
+  test that exists only for this control.
+
+```sweep-edit crates/dcs-mcp/src/wording.rs
+-         "oversize" => Verdict::Refused("the result was refused whole, not cut"),
++         "oversize" => Verdict::Answered,
+```
+
 ### watching/handle-left-open-across-a-call
 
 - task: T41
@@ -896,8 +927,8 @@ an entry here like any other, and both figures move.
   not reach them, and the last of them needs a running game rather than a
   runner. Stages 7 and 8 have both begun to be built, so what keeps the rows
   below here is the figure's scope and not an absence of code to mutate.
-- controls: 11
-- breakdown: T39, T58, T59 one each, 3; T40, T46 two each, 4; T45
+- controls: 10
+- breakdown: T58, T59 one each, 2; T40, T46 two each, 4; T45
   three, 3; T52 one, 1. Stage 9's remaining rows name no mutation
   and are owed none. This figure falls as Stages 7 and 8 are built and their
   rows move into the inventory proper.

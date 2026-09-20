@@ -98,8 +98,14 @@ lists and answers all six tools below; each takes an optional `host`, which is
 | `dcs_eval_file` | the same from a file, with its path and content hash recorded |
 | `dcs_collect` | pick up a reply that was still pending, by id |
 
-What each answer *says* is settled; how it is worded is not — *not built*. For
-now a reply comes back as a status word and a line each, and it will change.
+An answer comes back as one word on the first line and a line each after it. A
+reply the executor answered is headed `reply` and carries its headers and then
+its body. A reply that refused — `no-mission`, `stale-session`, `oversize` and
+`budget` among them — is headed by the word that refused it, says in one line
+why, and is marked an error, so a refusal never reads as a call that succeeded
+and came back empty. A `pending` names the id to collect under and the phase
+the session was in, and is *not* an error: nothing failed, and the reply is
+picked up afterwards.
 
 A call that names no `wait_seconds` waits 15 seconds. That is a wait and never
 a limit: when it runs out the request is still published, the answer names an
