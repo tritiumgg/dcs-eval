@@ -592,11 +592,11 @@ an entry here like any other, and both figures move.
 
 ### out/stages-7-to-9
 
-- out-of-scope: mostly not built. Stages 7 to 9 are the MCP server, the
-  installer and the live proofs; Stage 8 has begun and its first rows have
-  moved into the inventory proper, while the rows still counted here have no
-  code to mutate yet and the last of the three needs a running game rather
-  than a runner.
+- out-of-scope: not swept. Stages 7 to 9 are the MCP server, the installer and
+  the live proofs; the coverage figure is summed over Stages 3 to 6 and does
+  not reach them, and the last of them needs a running game rather than a
+  runner. Stage 8 has begun to be built, so what keeps the rows below here is
+  the figure's scope and not an absence of code to mutate.
 - controls: 22
 - breakdown: T38, T39, T58, T59 one each, 4; T37, T40, T41, T60, T44,
   T61, T46 two each, 14; T45 three, 3; T52 one, 1. Stage 9's remaining rows name
