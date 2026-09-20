@@ -16,6 +16,9 @@ use std::path::{Path, PathBuf};
 use dcs_eval::paths::{self, Real};
 use dcs_eval::readers::Handshake;
 use dcs_eval::wait::Session;
+use rmcp::model::{Implementation, ServerCapabilities, ServerConfig};
+use rmcp::transport::stdio;
+use rmcp::{ServerHandler, ServiceExt};
 
 /// Which of the executor's two hosts to talk to. Each writes into its own
 /// directory, so the word is part of where the client looks.
@@ -196,6 +199,42 @@ impl Serve {
     pub fn client(&self) -> Result<Client, NoSession> {
         Client::resolve(&self.opts)
     }
+}
+
+impl ServerHandler for Serve {
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::default());
+        info.server_info = Implementation::new("dcs-mcp", env!("CARGO_PKG_VERSION"));
+        // No capability is declared: the tools are not built yet, and a server
+        // that announced tools it cannot list would be a worse lie than one
+        // that announces none.
+        info.instructions =
+            Some("Evaluate Lua inside a running DCS World. No tools yet.".to_owned());
+        info
+    }
+}
+
+/// Speak MCP over stdin and stdout until the client hangs up.
+///
+/// One current-thread runtime, because the work behind every call is a
+/// handful of small local file reads. Tokio's stdin and stdout are served by
+/// its blocking pool rather than by the IO driver, so no driver is enabled
+/// here; a compiler that disagrees is naming a feature to add, not a reason to
+/// reach for `enable_all`.
+pub fn run(opts: Options) -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+    runtime.block_on(async move {
+        // The one start-up line, and it says where the executor will be looked
+        // for rather than what was found there: nothing is resolved yet, and
+        // a wrong `--saved-games` is the commonest thing to get wrong.
+        tracing::info!(
+            "serving MCP over stdio; the executor is looked for afresh on every call, in {}",
+            opts.output().display()
+        );
+        let service = Serve::new(opts).serve(stdio()).await?;
+        service.waiting().await?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]
