@@ -297,12 +297,20 @@ pub fn measured_against(running: Option<&str>, measured: Option<&str>) -> Versio
     }
 }
 
-/// Whether two paths that should be the same directory are.
+/// Whether the executor's temp directory is this client's, or lies in it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Agreement {
     /// The executor said plainly that its own read did not answer.
     Absent,
     Agree(Real),
+    /// Under this client's, at a segment boundary: DCS keeps a folder of
+    /// its own inside the user's temp directory and hands its process that
+    /// (ADR 0029).
+    Within {
+        executor: Real,
+        client: Real,
+    },
+    /// Neither the same directory nor under it.
     Differ {
         executor: Real,
         client: Real,
@@ -319,6 +327,9 @@ impl fmt::Display for Agreement {
         match self {
             Self::Absent => f.write_str("the executor's read did not answer"),
             Self::Agree(path) => write!(f, "{path}, which this client agrees with"),
+            Self::Within { executor, client } => {
+                write!(f, "{executor}, under this client's {client}")
+            }
             Self::Differ { executor, client } => {
                 write!(f, "{executor}, and this client's is {client}")
             }
@@ -357,8 +368,7 @@ pub enum Problem {
     /// asked whether anything has armed the session got no answer — and
     /// worded so that it can never be read as "nothing has".
     ArmUndecided { path: PathBuf, why: String },
-    /// The executor's temp directory and this client's are not the same
-    /// directory.
+    /// The executor's temp directory is neither this client's nor under it.
     TempdirDisagrees { executor: Real, client: Real },
     /// A path the executor reported rather than used, which the filesystem
     /// would not resolve. A finding about what the session saw, not a
@@ -406,7 +416,8 @@ impl fmt::Display for Problem {
             ),
             Self::TempdirDisagrees { executor, client } => write!(
                 f,
-                "the executor's temp directory is {executor}, and this client's is {client}"
+                "the executor's temp directory is {executor}, which is neither this \
+                 client's {client} nor under it"
             ),
             Self::Unresolved { name, named, why } => {
                 write!(f, "{name}: {named} would not resolve: {why}")
@@ -502,7 +513,9 @@ fn same_place(a: &Real, b: &Real) -> bool {
 
 /// The executor's temp directory against this client's. A report and not
 /// an accusation: where either side will not resolve the field carries the
-/// resolver's own words instead of naming a culprit.
+/// resolver's own words instead of naming a culprit. One under this
+/// client's is what DCS was measured to hand its process (ADR 0029), and is
+/// its own answer rather than a disagreement.
 fn tempdir_of(named: &Diagnostic) -> Agreement {
     let executor = match named {
         Diagnostic::Absent => return Agreement::Absent,
@@ -522,6 +535,8 @@ fn tempdir_of(named: &Diagnostic) -> Agreement {
     };
     if same_place(&executor, &client) {
         Agreement::Agree(executor)
+    } else if client.contains(&executor) {
+        Agreement::Within { executor, client }
     } else {
         Agreement::Differ { executor, client }
     }
@@ -612,7 +627,7 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
     problems.extend(unresolved("install_guard", &handshake.install_guard));
     let tempdir = tempdir_of(&handshake.lfs_tempdir);
     // Only a disagreement between two paths that both resolved is worth
-    // reporting. Absent is the executor saying its own read did not
+    // reporting, and one under this client's is none. Absent is the executor saying its own read did not
     // answer, and undecided is a path one side or the other could not
     // resolve — which is somebody's finding, but not this one.
     if let Agreement::Differ { executor, client } = &tempdir {
@@ -1070,6 +1085,59 @@ mod tests {
                 client,
             },
             "the field is the report and the problem is what it is worth saying"
+        );
+    }
+
+    /// What DCS was measured to hand its process: a folder of its own
+    /// inside the user's temp directory (ADR 0029). It need not exist for
+    /// the resolver to place it, and nothing here makes it.
+    #[test]
+    fn lfs_tempdir_under_this_clients_temp_directory_is_within_and_no_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let client = paths::resolve(&std::env::temp_dir()).expect("this host has a temp directory");
+        let dcs = client.as_path().join("DCS");
+        respell(
+            &s.output().join("executor.txt"),
+            "lfs_tempdir",
+            &dcs.display().to_string(),
+        );
+        let report = status(s.output());
+        assert!(
+            !report
+                .problems
+                .iter()
+                .any(|p| matches!(p, Problem::TempdirDisagrees { .. })),
+            "a temp directory DCS keeps inside this client's is not a disagreement: {:?}",
+            report.problems
+        );
+        assert_eq!(
+            report.session.expect("the session reports").tempdir,
+            Agreement::Within {
+                executor: real(&dcs),
+                client,
+            }
+        );
+    }
+
+    /// Within is containment at a segment boundary, not a shared prefix:
+    /// `...\TempDCS` spells the client's directory and more, and is not in
+    /// it.
+    #[test]
+    fn lfs_tempdir_sharing_only_this_clients_bytes_is_a_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let client = paths::resolve(&std::env::temp_dir()).expect("this host has a temp directory");
+        let sibling = format!("{client}DCS");
+        respell(&s.output().join("executor.txt"), "lfs_tempdir", &sibling);
+        let report = status(s.output());
+        assert!(
+            report.problems.contains(&Problem::TempdirDisagrees {
+                executor: real(Path::new(&sibling)),
+                client,
+            }),
+            "saw {:?}",
+            report.problems
         );
     }
 
