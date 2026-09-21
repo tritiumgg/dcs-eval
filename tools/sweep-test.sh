@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=37
+CASES=39
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -748,24 +748,34 @@ check 'a mutation that never built comes off the coverage figure too' \
 # side of the sweep's coverage line, so the sweep would report full coverage of
 # a set it had quietly shrunk. These prove the gate that catches that.
 #
-# The three fixture IDs are assembled rather than written: tools/nospecrefs.sh
+# The fixture IDs are assembled rather than written: tools/nospecrefs.sh
 # refuses a plan task ID anywhere outside docs/, and a fixture plan has to
 # carry IDs shaped exactly like the real ones or the gate would not read them.
 one=$(printf 'T%s' 91)
 two=$(printf 'T%s' 92)
 three=$(printf 'T%s' 93)
 four=$(printf 'T%s' 94)
+floor=$(printf 'T%s' 95)
+ceiling=$(printf 'T%s' 96)
 
 cover="$sandbox/cover"
 mkdir -p "$cover/docs" "$cover/tools"
 cp tools/sweep-cover.sh "$cover/tools/sweep-cover.sh"
 
-# A four-row fixture plan. The stage heading is what the gate reads the stage
+# A six-row fixture plan. The stage heading is what the gate reads the stage
 # off. The second row names no mutation, so it is owed no entry; the third sits
 # outside the window presence is owed in, so it is owed no entry either — but
 # an entry written for it early is not a stray; the fourth sits before Stage 3,
-# which the stray check reads like any other stage.
+# which is owed an entry like any other built stage. The last two sit on the
+# window's two edges, Stage 0 and Stage 8, so narrowing it at either end drops
+# a row that is owed an entry.
 cat > "$cover/docs/PLAN.md" <<EOF
+## Stage 0 — the fixture's floor
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $floor | a floor fixture | it holds; mutation: break it and it does not | — | developer-only |
+
 ## Stage 1 — an earlier fixture stage
 
 | id | task | done when | needs | runs on |
@@ -779,31 +789,35 @@ cat > "$cover/docs/PLAN.md" <<EOF
 | $one | a fixture | it holds; mutation: break it and it does not | — | developer-only |
 | $two | another | it holds | — | developer-only |
 
-## Stage 8 — a fixture stage built later
+## Stage 8 — the fixture's last built stage
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $ceiling | a ceiling fixture | it holds; mutation: break it and it does not | — | developer-only |
+
+## Stage 9 — a fixture stage built later
 
 | id | task | done when | needs | runs on |
 |---|---|---|---|---|
 | $three | a later fixture | it holds; mutation: break it | — | developer-only |
 EOF
 
+# An inventory of one entry per ID named, so a row outside the presence window
+# can be seen being accepted rather than called a stray.
 covered() {
-    printf '### fixture/one\n\n- task: %s\n- reddens: held\n' "$1" \
-        > "$cover/docs/mutations.md"
+    : > "$cover/docs/mutations.md"
+    n=0
+    for id in "$@"; do
+        n=$((n + 1))
+        printf '### fixture/entry-%s\n\n- task: %s\n- reddens: held\n\n' "$n" "$id" \
+            >> "$cover/docs/mutations.md"
+    done
 }
 
-# Two entries, one per named ID, so a row outside the presence window can be
-# seen being accepted rather than called a stray.
-covered_both() {
-    printf '### fixture/one\n\n- task: %s\n- reddens: held\n\n' "$1" \
-        > "$cover/docs/mutations.md"
-    printf '### fixture/later\n\n- task: %s\n- reddens: held\n' "$2" \
-        >> "$cover/docs/mutations.md"
-}
-
-covered "$one"
+covered "$one" "$four" "$floor" "$ceiling"
 out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
 check 'a plan row and an entry for it is the case that passes' \
-    0 "$got" "1 plan rows name a mutation" "$out"
+    0 "$got" "4 plan rows name a mutation" "$out"
 
 covered "$two"
 out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
@@ -817,20 +831,33 @@ check 'an entry filed under a row that names no mutation is named too' \
 # written for one of its rows arrives before the rest of the stage exists. The
 # stray check reads every stage so that entry is accepted; the tally still
 # counts only the rows presence is owed for.
-covered_both "$one" "$three"
+covered "$one" "$three" "$four" "$floor" "$ceiling"
 out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
 check 'an entry for a row outside the presence window is not a stray' \
-    0 "$got" "1 plan rows name a mutation" "$out"
+    0 "$got" "4 plan rows name a mutation" "$out"
 
 # Stages 0 to 2 were once refused an entry, because the inventory counted them
-# by hand. Nothing counts them by hand now, so an entry filed under a row there
-# is read like any other: accepted, and not called a stray.
-covered_both "$one" "$four"
+# by hand. Nothing counts them by hand now, so a row there is owed an entry
+# like any other built stage, and one missing is named.
+covered "$one" "$floor" "$ceiling"
 out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
-check 'an entry for a row before Stage 3 is not a stray' \
-    0 "$got" "1 plan rows name a mutation" "$out"
+check 'a row before Stage 3 is owed an entry like any other' \
+    1 "$got" "the plan names a mutation for $four and the inventory has no entry" "$out"
 
-# The stray check reads every stage from the third up, and "every" has to mean
+# The window is Stage 0 to Stage 8 at both ends. Raise the floor to Stage 1 or
+# drop the ceiling below Stage 8 and one of these rows stops being owed an
+# entry, so its missing entry passes unnoticed.
+covered "$one" "$four" "$ceiling"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'a Stage 0 row is owed an entry' \
+    1 "$got" "the plan names a mutation for $floor and the inventory has no entry" "$out"
+
+covered "$one" "$four" "$floor"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'a Stage 8 row is owed an entry' \
+    1 "$got" "the plan names a mutation for $ceiling and the inventory has no entry" "$out"
+
+# The stray check reads every stage from Stage 0 up, and "every" has to mean
 # it however far the plan grows: a numeric ceiling would quietly start calling
 # a real entry a stray the day a stage passed it. A row above the first stage
 # heading belongs to no stage at all, and is read by neither direction rather

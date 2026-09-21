@@ -14,17 +14,19 @@ too, never a silent skip.
 
 **A task that builds a control adds its entry here, in the same pull request.**
 That is the only way the file stays honest. `tools/sweep-cover.sh` checks that
-every Stage 3–6 plan row naming a mutation has an entry here, but it checks
+every Stage 0–8 plan row naming a mutation has an entry here, but it checks
 presence per task, not per mutation, so a second control added to a row that
 already has an entry can still go unwritten if nobody writes it.
 
-**Which rows may hold an entry is wider than which rows owe one.** Stages 3–6
-are what the coverage figure below is summed over, and so what is owed an
-entry. An entry filed under any row in Stage 3 or later is accepted, because a
-task past Stage 6 that builds a control writes its entry in the same pull
-request like every other, and a gate calling that entry stray would make the
-rule impossible to follow. Stages 0–2 accept an entry too,
-and each of their mutations now has one.
+**Which rows owe an entry, and which may hold one.** Every row from Stage 0 to
+Stage 8 — every stage that is built — whose done-condition names a mutation
+owes one, and an entry filed under any row from Stage 0 upward is accepted,
+because a task past Stage 8 that builds a control writes its entry in the same
+pull request like every other. Stages 0–2 were once the one place an entry was
+refused: they closed before this runner existed and stood in the figure as one
+hand-counted group, so an entry under one of their rows would have been
+counted twice. Each of their mutations now has an entry of its own, and the
+hand count went with the reason for the refusal.
 
 **`reddens:` is what was observed, not what was predicted.** Where the red a
 mutation produced is not the red its plan cell named, the entry says so in a
@@ -2008,7 +2010,7 @@ entries here too.
 ## Out of scope
 
 The counts below are read off `docs/PLAN.md` by hand, and nothing re-derives
-them: `tools/sweep-cover.sh` checks that a Stage 3–6 row has an entry, not what
+them: `tools/sweep-cover.sh` checks that a Stage 0–8 row has an entry, not what
 any row's count is. They are part of the figure every run prints, so each one
 carries its per-row working below and can be re-counted against the plan.
 

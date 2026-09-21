@@ -595,7 +595,8 @@ EOF
 
 printf '\n'
 # What the total counts is said in the line itself. It is one per mutation a
-# Stage 3–6 plan done-condition names, which is neither the number of checks
+# plan done-condition names that the inventory enters, Stage 0 upward, in scope
+# or out, which is neither the number of checks
 # this build has nor the number of mutations its sessions performed: several
 # proved more by hand than their plan cell asked for, and those are in no
 # figure here. The out-of-scope half is a hand count in the inventory that

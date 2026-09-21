@@ -7,7 +7,7 @@
 # of a set it had quietly shrunk. That is, one level up, exactly the defect the
 # sweep exists to catch.
 #
-# What it checks is presence per plan row, not per mutation: every Stage 3 to 6
+# What it checks is presence per plan row, not per mutation: every Stage 0 to 8
 # row whose done-condition names a mutation has at least one entry in the
 # inventory, and every entry names a row the plan carries. A row naming three
 # mutations with one entry written for it passes here. That gap is held by the
@@ -15,12 +15,21 @@
 # entry in the same pull request — and by nothing else.
 #
 # The two directions read different windows of the plan, and the difference is
-# deliberate. Presence is owed only by Stages 3 to 6, which are built: a later
-# stage's row has no code to mutate yet, and demanding an entry for it would
-# fail every run until the last row landed. A stray is checked against the rows
-# of Stage 0 upwards, however far the plan grows, because a stage being unbuilt
-# is no reason to call the first entry written for it a control filed under a
-# row that names no mutation.
+# deliberate. Presence is owed only by Stages 0 to 8, the stages that are
+# built: a later stage's row has no code to mutate yet, and demanding an entry
+# for it would fail every run until the last row landed. Stage 9's rows are
+# live proofs, and the few that name a mutation have entries written as their
+# code landed. A stray is checked against the rows of Stage 0 upwards, however
+# far the plan grows, because a stage being unbuilt is no reason to call the
+# first entry written for it a control filed under a row that names no
+# mutation.
+#
+# Stages 0 to 2 were once refused an entry outright: they closed before the
+# sweep existed and stood in its figure as one hand-counted group, so an entry
+# under one of their rows would have been counted twice. Each of their
+# mutations now has an entry of its own, and the refusal went with the count.
+# Presence has to be owed there, not merely allowed, or a Stage 0 to 2 entry
+# deleted later would shrink the in-scope figure with nothing noticing.
 #
 # No toolchain, so it runs inside `mise run check` and in CI's preflight job.
 
@@ -50,7 +59,9 @@ ID='T[0-9][0-9]'
 # heading above the table, so a row above the first heading belongs to no stage
 # and is read by neither direction: a numeric ceiling would have to be raised
 # the day a stage passed it, and a floor of zero would silently swallow a row
-# the plan had not filed under a stage at all.
+# the plan had not filed under a stage at all. That is why the stage starts
+# below zero rather than at it: both directions now ask from Stage 0, and a
+# row above every heading must still be read by neither.
 #
 # The row is matched whole rather than by column: a cell can carry a literal
 # pipe inside backticks, which shifts every column after it and would drop the
@@ -72,7 +83,7 @@ rows() {
 }
 
 # What an entry is owed for, and what an entry is allowed to name.
-claimed=$(rows 3 6)
+claimed=$(rows 0 8)
 named=$(rows 0 '')
 
 # Every task the inventory names, in-scope entry and out-of-scope entry alike:
