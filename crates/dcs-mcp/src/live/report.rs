@@ -257,12 +257,39 @@ fn latest<'a>(row: &Row, entries: &'a [Entry]) -> Option<&'a Entry> {
     entries.iter().rev().find(|e| e.row == row.key)
 }
 
+/// The newest entry for a row in each scene it was taken in, in the order
+/// the scenes first appear. An opt-in read is tested scene by scene, and a
+/// read that answers in a mission says nothing about the menu, so neither
+/// hides the other.
+fn latest_per_scene<'a>(row: &Row, entries: &'a [Entry]) -> Vec<&'a Entry> {
+    let mut scenes: Vec<Option<&str>> = Vec::new();
+    for e in entries.iter().filter(|e| e.row == row.key) {
+        if !scenes.contains(&e.scene.as_deref()) {
+            scenes.push(e.scene.as_deref());
+        }
+    }
+    scenes
+        .into_iter()
+        .filter_map(|scene| {
+            entries
+                .iter()
+                .rev()
+                .find(|e| e.row == row.key && e.scene.as_deref() == scene)
+        })
+        .collect()
+}
+
 /// Print every row, then every entry no row owns, then every ledger line
 /// that would not parse.
 pub fn print(entries: &[Entry], malformed: &[String], out: &mut dyn Write) -> io::Result<()> {
     let rows = rows();
     for row in rows.iter() {
         match latest(row, entries) {
+            Some(_) if row.key.starts_with("read.") => {
+                for e in latest_per_scene(row, entries) {
+                    writeln!(out, "{}", measured(row, e))?;
+                }
+            }
             Some(e) => writeln!(out, "{}", measured(row, e))?,
             None => writeln!(out, "{}", unmeasured(row))?,
         }
@@ -355,6 +382,42 @@ mod tests {
             .find(|l| l.starts_with("seven-state generation: "))
             .expect("the row prints");
         assert!(line.contains("newer figure"), "{line}");
+    }
+
+    #[test]
+    fn an_opt_in_read_prints_its_latest_in_every_scene() {
+        let at = |scene: &str, said: &str| {
+            let session = Session {
+                stamp: "0000000001-abcd".to_owned(),
+                host: "hook".to_owned(),
+                app_version: Some("2.9.28.26385".to_owned()),
+                scene: Some(scene.to_owned()),
+            };
+            Entry::new("read", "read.mission_theatre", &session, said)
+        };
+        let text = printed(
+            &[
+                at("menu", "session gone at the menu"),
+                at("mission", "answered: string Caucasus"),
+                at("menu", "answered: a nil"),
+            ],
+            &[],
+        );
+        let lines: Vec<&str> = text
+            .lines()
+            .filter(|l| l.starts_with("opt-in read mission_theatre: "))
+            .collect();
+        assert_eq!(lines.len(), 2, "one line per scene: {lines:?}");
+        assert!(
+            lines[0].contains("answered: a nil") && lines[0].contains("[menu, "),
+            "the menu's latest, not its first: {}",
+            lines[0]
+        );
+        assert!(
+            lines[1].contains("Caucasus") && lines[1].contains("[mission, "),
+            "{}",
+            lines[1]
+        );
     }
 
     #[test]

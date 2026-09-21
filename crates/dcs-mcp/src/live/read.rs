@@ -9,7 +9,7 @@
 //! none, which is the clean case: a session that goes down holding one
 //! request was taken down by that request, and nothing earlier in it can
 //! have set the crash up. `live read all` sends every read that has no
-//! outcome yet, one after another in one session, and stops at the first
+//! outcome yet in the scene `--label` names, one after another in one session, and stops at the first
 //! that does not answer (ADR 0028). Sent in turn, each still alone on the
 //! disk, a crash still names the read in flight; what a sequence cannot rule
 //! out is damage an earlier read did that surfaced later, so the one that
@@ -135,20 +135,29 @@ fn opt_in_keys() -> Vec<&'static str> {
         .collect()
 }
 
-/// Whether the ledger already holds what `key` came to, in any session.
+/// Whether the ledger already holds what `key` came to in `scene`, in any
+/// session.
+///
+/// Scene by scene, because a read that answers in a settled mission may not
+/// at the menu, where the objects it reads are not there, and the reason a
+/// read is tested is to find that out. No label is a scene of its own.
 ///
 /// The entry written before a read is sent is not an outcome, and neither
 /// is one saying it was refused before the disk: a key with only those
 /// never came to anything, and is sent again.
-fn has_outcome(rows: &[Entry], key: &str) -> bool {
+fn has_outcome(rows: &[Entry], key: &str, scene: Option<&str>) -> bool {
     let row = format!("read.{key}");
     rows.iter().any(|e| {
-        e.phase == "read" && e.row == row && e.said != SENT && !e.said.starts_with("not sent:")
+        e.phase == "read"
+            && e.row == row
+            && e.scene.as_deref() == scene
+            && e.said != SENT
+            && !e.said.starts_with("not sent:")
     })
 }
 
-/// Send every opt-in read with no outcome yet, one after another in this
-/// session, each alone and each written down before and after, stopping at
+/// Send every opt-in read with no outcome yet in this session's scene, one
+/// after another in this session, each alone and each written down before and after, stopping at
 /// the first that does not answer. The exit code: 0 when every read sent
 /// answered, 1 when one did not.
 ///
@@ -172,7 +181,7 @@ pub(crate) fn run_all(
     refuse_a_second(rows, &session.stamp)?;
     let todo: Vec<&str> = opt_in_keys()
         .into_iter()
-        .filter(|key| !has_outcome(rows, key))
+        .filter(|key| !has_outcome(rows, key, session.scene.as_deref()))
         .collect();
     let say =
         |out: &mut dyn Write, line: String| writeln!(out, "{line}").map_err(|why| why.to_string());
@@ -509,6 +518,43 @@ mod tests {
             got
         };
         assert_eq!(again, 0, "{shown}");
+        assert!(shown.contains("nothing was sent"), "{shown}");
+    }
+
+    #[test]
+    fn all_runs_again_in_a_scene_it_has_not_been_run_in() {
+        let b = Sandbox::new();
+        let labelled = |key: &str, label: &str| {
+            let mut words = line(&b, key);
+            words.extend(["--label".to_owned(), label.to_owned()]);
+            words
+        };
+        let mut s = standin(&b, "0000000001-4242");
+        let (code, shown) = driven(&mut s, |out| {
+            crate::live::run(labelled("all", "menu"), out).expect("the line parses")
+        });
+        assert_eq!(code, 0, "{shown}");
+        assert_eq!(s.seen().len(), 7);
+        drop(s);
+
+        let mut s = standin(&b, "0000000002-4242");
+        let (code, shown) = driven(&mut s, |out| {
+            crate::live::run(labelled("all", "mission"), out).expect("the line parses")
+        });
+        assert_eq!(code, 0, "{shown}");
+        assert_eq!(
+            s.seen().len(),
+            7,
+            "a result at the menu says nothing of a mission"
+        );
+        drop(s);
+
+        let mut s = standin(&b, "0000000003-4242");
+        let (code, shown) = driven(&mut s, |out| {
+            crate::live::run(labelled("all", "mission"), out).expect("the line parses")
+        });
+        assert_eq!(code, 0, "{shown}");
+        assert!(s.seen().is_empty(), "the mission's reads were sent twice");
         assert!(shown.contains("nothing was sent"), "{shown}");
     }
 

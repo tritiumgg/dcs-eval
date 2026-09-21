@@ -2036,6 +2036,35 @@ entries here too.
 -             return Ok(1);
 ```
 
+### live/all-skips-a-read-tested-in-another-scene
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-mcp live::read`
+- reddens: `all_runs_again_in_a_scene_it_has_not_been_run_in`
+- note: the hunk drops the scene from the skip, so a read with a result at
+  the menu is never sent in a mission — the one test the maintainer runs the
+  reads twice for. `scene` is then unused, which warns and does not stop
+  `cargo test`; the red is the second pass's request count, 0 where 7 is
+  asserted.
+
+```sweep-edit crates/dcs-mcp/src/live/read.rs
+-             && e.scene.as_deref() == scene
+```
+
+### live/read-row-hides-a-scene
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-mcp live::report`
+- reddens: `an_opt_in_read_prints_its_latest_in_every_scene`
+- note: the hunk turns the per-scene arm off, so an opt-in read's row prints
+  its newest entry alone and a result at the menu vanishes behind one taken
+  in a mission. It compiles clean.
+
+```sweep-edit crates/dcs-mcp/src/live/report.rs
+-             Some(_) if row.key.starts_with("read.") => {
++             Some(_) if false => {
+```
+
 ### live/read-recorded-only-after-its-answer
 
 - task: T50
