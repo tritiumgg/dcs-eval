@@ -18,7 +18,7 @@ citations below point into documents that still say "bridge".
 
 ## Granularity
 
-This plan carries **63 tasks across 10 stages**. The count is driven by the four right-sizing
+This plan carries **64 tasks across 10 stages**. The count is driven by the four right-sizing
 tests, and the splits fall at interfaces rather than at steps: each Lua carrier (`hook` local,
 `net.dostring_in`, `a_do_script`) is one task because changing how one crosses a state
 boundary must not rewrite the others; the client and the server are separate crates and separate
@@ -247,8 +247,9 @@ while the game is played and wakes on a file.
 | T27 | The dormant path: zero allocations, zero kernel entries per frame, one `lfs.attributes` every `PROBE_EVERY` frames, as a byte-count control | `lua5.1 tools/harness.lua executor/dormant` shows 100,000 dormant ticks growing `collectgarbage('count')` by zero and 12,500 ticks calling the stubbed `lfs.attributes` exactly 12,500 times, `lfs.dir` never; mutation: reintroducing the per-call closure in the callback wrapper reddens the byte count | T04,T12 | developer-only |
 | T28 | Arming and disarming: the arm-file wake, the ordered `QUIET_S` disarm, the race proof, and state-in-target surviving a disarm | `lua5.1 tools/harness.lua executor/arming` shows a request published while dormant answered within `PROBE_EVERY`+1 ticks, one published on the disarm tick still answered, an abandoned arm file costing one quiet period, and every arm and disarm appended to `events.log` as a line whose first field is neither `B` nor `O`, which is what ADR 0007 narrowed that file against; mutation: reversing the `os.remove`/list order in disarm reddens the strand-a-request proof | T27 | developer-only |
 | T29 | The heartbeat writer: `armed`/`since`/`phase`/`ticks`/`last_callback`/`callbacks`, event-driven while dormant and 2 s while armed | `lua5.1 tools/harness.lua executor/heartbeat` shows it written at every arm, disarm and phase change and never per dormant frame, with every phase change also appended to `events.log` under a first field that is neither `B` nor `O` (ADR 0007); mutation: a dormant executor that keeps writing every 2 s reddens the dormant-write-count check | T28 | developer-only |
+| T64 | The uncollected-reply sweep: a reply kept 300 s from the frame it was published on and removed by the first armed frame to find it that old, the disarming frame included, off a ledger of what the session published rather than a listing of `res/` — the client removes nothing it reads — with the removals spent from the tick budget and nothing done while dormant (ADR 0027) | `lua5.1 tools/harness.lua executor/uncollected` shows a reply kept at 299 s and removed at 300 s while armed, one removed by the frame that disarms, one past 300 s still on the disk after a hundred dormant frames and gone once an armed frame runs, a reply already removed costing nothing, a backlog of three cleared across two frames under the 8 ms budget, one removal made by a frame whose requests spent that budget, and the 300 s removal on the export host too; mutations: never calling the sweep reddens the 300 s removal; a limit of zero reddens the reply on the disk the frame it is answered; dropping the budget test reddens the backlog left for the next frame; testing the budget before the first removal reddens the removal made with the budget gone; sweeping on the dormant path reddens the dormant keep | T29 | developer-only |
 
-**Stage command:** `lua5.1 tools/harness.lua executor/dormant executor/arming executor/heartbeat`.
+**Stage command:** `lua5.1 tools/harness.lua executor/dormant executor/arming executor/heartbeat executor/uncollected`.
 
 ---
 

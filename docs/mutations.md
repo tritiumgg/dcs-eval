@@ -328,6 +328,80 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +   began = nil
 ```
 
+### uncollected/never-expired
+
+- task: T64
+- command: `mise exec -- lua5.1 tools/harness.lua executor/uncollected`
+- reddens: `armed: the reply 300 s old is removed`
+- note: the call deleted, so nothing ever removes a reply. Every case before
+  this check passes, because each only reads what was answered.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   expire(now, clock, start)
+```
+
+### uncollected/kept-for-no-time
+
+- task: T64
+- command: `mise exec -- lua5.1 tools/harness.lua executor/uncollected`
+- reddens: `armed: the reply is on the disk the frame it is answered`
+- note: with the limit at zero, a reply is removed by the frame that published
+  it, since the sweep runs after the requests. This is the "everything goes at
+  once" reading of the specification's "once at disarm", in its sharpest form.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+- local UNCOLLECTED_S = 300
++ local UNCOLLECTED_S = 0
+```
+
+### uncollected/backlog-cleared-in-one-frame
+
+- task: T64
+- command: `mise exec -- lua5.1 tools/harness.lua executor/uncollected`
+- reddens: `backlog: one reply is left for the next frame`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     if not first and (clock() - start) * 1000 >= TICK_BUDGET_MS then
++     if false then
+```
+
+### uncollected/none-removed-once-spent
+
+- task: T64
+- command: `mise exec -- lua5.1 tools/harness.lua executor/uncollected`
+- reddens: `spent: one expired reply is removed even with the budget gone`
+- note: the budget read before the first removal as well as the ones after
+  it. The backlog case cannot see this, because its frames answer nothing and
+  the first reading is 0 ms either way; only a frame whose requests spent the
+  budget can.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     if not first and (clock() - start) * 1000 >= TICK_BUDGET_MS then
++     if (clock() - start) * 1000 >= TICK_BUDGET_MS then
+```
+
+### uncollected/expired-while-dormant
+
+- task: T64
+- command: `mise exec -- lua5.1 tools/harness.lua executor/uncollected`
+- reddens: `asleep: a reply past 300 s stays until the executor wakes`
+- note: the sweep put on the sleeping path, with a clock read to feed it, which
+  is exactly what the dormant budget forbids. `executor/dormant`'s byte count
+  is not what reddens: `os.time` and `rawget` allocate nothing, and an empty
+  ledger removes nothing. It is this suite that sees a reply go while nothing
+  is awake. The anchor is the one `heartbeat/dormant-keeps-beating` uses; two
+  controls may share an anchor, because each is applied alone.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     return
+-   end
+-   began = nil
++     expire(rawget(rawget(_G, "os"), "time")(), rawget(rawget(_G, "os"), "clock"), 0)
++     return
++   end
++   began = nil
+```
+
 ---
 
 ## Stage 6 — the client library
