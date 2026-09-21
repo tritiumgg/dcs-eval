@@ -178,8 +178,11 @@ answers `server` true in single player too — and `hosting` where both say
 true. Outside a mission and a load, the editor's map says where the game is,
 `at the main menu (read)` or `in the mission editor (read)`; where the
 `gui` state refuses the read, as on a client joined to a server, the answer
-stays at the main menu or in the mission editor and says why. Every read no
-summary is made of is printed on a line of its own.
+stays at the main menu or in the mission editor and says why. In a mission
+the answer adds the theatre and your unit, and names the mission by its
+file where DCS gives `tempMission` for the name, as it does for every
+single-player mission. Every read no summary is made of is printed on a line
+of its own.
 
 `dcs_eval_file` reads any file this server can read, wherever it lies — much
 as a chunk could open it with `io.open` in the `hook` state — and

@@ -2351,6 +2351,55 @@ here too, and so are the ones for what T50's figures decided.
 +         return Activity::Menu;
 ```
 
+### game/placeholder-shown-as-the-name
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_state`
+- reddens: `the_placeholder_name_is_never_shown_as_the_missions`
+- note: the placeholder spelt as something DCS never answers, so
+  `tempMission` is shown as the mission's name, which is what the old
+  answer did.
+
+```sweep-edit crates/dcs-eval/src/game.rs
+- const PLACEHOLDER: &str = "tempMission";
++ const PLACEHOLDER: &str = "neverMission";
+```
+
+### game/doubled-slash-shown
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_state`
+- reddens: `a_doubled_slash_in_the_mission_file_is_shown_once`
+- note: the placeholder test goes red beside it, since it holds the tidied
+  file too.
+
+```sweep-edit crates/dcs-eval/src/game.rs
+-         if c == '/' && out.len() > 1 && out.ends_with('/') {
++         if false {
+```
+
+### game/theatre-dropped
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_state`
+- reddens: `a_mission_names_its_theatre_and_the_players_unit`
+
+```sweep-edit crates/dcs-eval/src/game.rs
+-             theatre: string_of(theatre),
++             theatre: None,
+```
+
+### game/player-unit-dropped
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_state`
+- reddens: `a_mission_names_its_theatre_and_the_players_unit`
+
+```sweep-edit crates/dcs-eval/src/game.rs
+-             unit: string_of(unit),
++             unit: None,
+```
+
 ---
 
 ## Out of scope

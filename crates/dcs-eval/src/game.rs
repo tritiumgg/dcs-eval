@@ -413,14 +413,25 @@ fn unusable(beat: Option<&Beat>) -> Option<Why> {
 /// and what is left where the `gui` state refused it: the axis knows the
 /// game is at one of the two, and the value's name holds the indeterminacy
 /// rather than picking.
+///
+/// A mission carries what identifies it beside its name: the file, tidied
+/// for display, and the theatre and the player's unit where each read
+/// answered a string. They are details of the value, never what decides it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Activity {
     Loading,
-    Mission { name: String },
+    Mission {
+        name: String,
+        file: Option<String>,
+        theatre: Option<String>,
+        unit: Option<String>,
+    },
     Menu,
     Editor,
     MenuOrEditor,
-    Unknown { why: Why },
+    Unknown {
+        why: Why,
+    },
 }
 
 impl Activity {
@@ -441,7 +452,33 @@ impl fmt::Display for Activity {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Loading => f.write_str("loading"),
-            Self::Mission { name } => write!(f, "in a mission, {name}"),
+            Self::Mission {
+                name,
+                file,
+                theatre,
+                unit,
+            } => {
+                f.write_str("in a mission, ")?;
+                match (name == PLACEHOLDER, file) {
+                    (false, Some(file)) => write!(f, "{name} ({file})")?,
+                    (false, None) => f.write_str(name)?,
+                    (true, Some(file)) => write!(
+                        f,
+                        "{file} (DCS gave the name {PLACEHOLDER}, its single-player placeholder)"
+                    )?,
+                    (true, None) => write!(
+                        f,
+                        "unnamed: DCS gave {PLACEHOLDER}, its single-player placeholder, and no file"
+                    )?,
+                }
+                if let Some(theatre) = theatre {
+                    write!(f, ", theatre {theatre}")?;
+                }
+                if let Some(unit) = unit {
+                    write!(f, ", player unit {unit}")?;
+                }
+                Ok(())
+            }
             Self::Menu => f.write_str("at the main menu (read)"),
             Self::Editor => f.write_str("in the mission editor (read)"),
             Self::MenuOrEditor => f.write_str(
@@ -479,6 +516,65 @@ pub fn editor_of(activity: Activity, map_visible: Option<&crate::reads::Answer>)
         Ok(false) => Activity::Menu,
         Err(why) => Activity::Unknown { why },
     }
+}
+
+/// The name `DCS.getMissionName()` gives every single-player mission, a
+/// bug ED has acknowledged: it is not the mission's name and is never
+/// shown as one (ADR 0031).
+const PLACEHOLDER: &str = "tempMission";
+
+/// A mission activity with what identifies it filled in from its own
+/// reads: the file, tidied, and the theatre and the player's unit.
+///
+/// Each detail is taken only where its read answered a non-empty string.
+/// A read that failed or answered nothing leaves its detail out, and its
+/// own line among the recorded reads says why. Every other activity passes
+/// through untouched.
+#[must_use]
+pub fn detailed(
+    activity: Activity,
+    file: Option<&crate::reads::Answer>,
+    theatre: Option<&crate::reads::Answer>,
+    unit: Option<&crate::reads::Answer>,
+) -> Activity {
+    match activity {
+        Activity::Mission { name, .. } => Activity::Mission {
+            name,
+            file: string_of(file).map(|path| tidied(&path)),
+            theatre: string_of(theatre),
+            unit: string_of(unit),
+        },
+        other @ (Activity::Loading
+        | Activity::Menu
+        | Activity::Editor
+        | Activity::MenuOrEditor
+        | Activity::Unknown { .. }) => other,
+    }
+}
+
+/// The text of a read that answered a non-empty string, and nothing for
+/// any other answer.
+fn string_of(answer: Option<&crate::reads::Answer>) -> Option<String> {
+    match answer {
+        Some(crate::reads::Answer::Value { lua_type, value }) if lua_type == "string" => {
+            value.clone().filter(|text| !text.is_empty())
+        }
+        Some(_) | None => None,
+    }
+}
+
+/// A path as DCS gives it, with its doubled slashes made single — DCS
+/// writes `Missions/TESTING/CLEAN//name.miz` — except a leading pair,
+/// which is a share's and not a doubling.
+fn tidied(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    for c in path.chars() {
+        if c == '/' && out.len() > 1 && out.ends_with('/') {
+            continue;
+        }
+        out.push(c);
+    }
+    out
 }
 
 /// What the session is doing, from the heartbeat verdict and then the
@@ -544,7 +640,12 @@ fn named_mission(phase: &Phase, mission_name: Option<&crate::reads::Answer>) -> 
     let unknown = |why| Activity::Unknown { why };
     match mission_name {
         Some(Answer::Value { lua_type, value }) if lua_type == "string" => match value {
-            Some(name) if !name.is_empty() => Activity::Mission { name: name.clone() },
+            Some(name) if !name.is_empty() => Activity::Mission {
+                name: name.clone(),
+                file: None,
+                theatre: None,
+                unit: None,
+            },
             // The phase says a mission and the read says there is no
             // name. Both facts are printed: the disagreement is itself
             // the finding.
@@ -1342,11 +1443,12 @@ impl Evidence {
 ///
 /// `sim_mode` is recorded verbatim and maps to nothing: the values measured
 /// live, 1 at the menu and in the editor and 4 in a mission (ADR 0031), say
-/// nothing the phase does not. `mission_file`, `model_time`, `player_id`,
-/// `player_unit_type` and `mission_theatre` are gathered on the same window
-/// and no row of the vocabulary reads them. A reader that wants them should
-/// not have to go back to the wire for them, so they are carried as inert
-/// data.
+/// nothing the phase does not. `model_time` and `player_id` are gathered on
+/// the same window and no row of the vocabulary reads them. `mission_file`,
+/// `player_unit_type` and `mission_theatre` decide nothing either: a mission
+/// shows them tidied, where they answered a string, and they are carried
+/// here verbatim so that one which did not still says why. A reader that
+/// wants any of them should not have to go back to the wire for it.
 const UNMAPPED_READS: [&str; 6] = [
     "sim_mode",
     "mission_file",
@@ -1488,6 +1590,12 @@ pub fn derive(e: &Evidence) -> GameState {
     let activity = editor_of(
         activity_of(e.beat.as_ref(), e.of("mission_name")),
         e.of("map_visible"),
+    );
+    let activity = detailed(
+        activity,
+        e.of("mission_file"),
+        e.of("mission_theatre"),
+        e.of("player_unit_type"),
     );
     let pause = pause_of(&activity, e.beat.as_ref(), e.of("pause"));
     let session = session_of(
@@ -1638,6 +1746,85 @@ mod game_state {
         }
     }
 
+    /// A mission named `name`, with nothing else read about it.
+    fn named(name: &str) -> Activity {
+        Activity::Mission {
+            name: name.to_owned(),
+            file: None,
+            theatre: None,
+            unit: None,
+        }
+    }
+
+    const FILE: &str =
+        "C:/Users/tritiumgg/Saved Games/DCS/Missions/TESTING/CLEAN//Caucuses_Empty_UH-1H.miz";
+
+    #[test]
+    fn a_doubled_slash_in_the_mission_file_is_shown_once() {
+        assert_eq!(
+            tidied(FILE),
+            "C:/Users/tritiumgg/Saved Games/DCS/Missions/TESTING/CLEAN/Caucuses_Empty_UH-1H.miz"
+        );
+        assert_eq!(tidied("//server/share//m.miz"), "//server/share/m.miz");
+        assert_eq!(tidied(""), "");
+    }
+
+    #[test]
+    fn the_placeholder_name_is_never_shown_as_the_missions() {
+        let with_file = detailed(named("tempMission"), Some(&said(FILE)), None, None);
+        let line = with_file.to_string();
+        assert!(
+            line.starts_with("in a mission, C:/Users/"),
+            "the file identifies it: {line}"
+        );
+        assert!(line.contains("single-player placeholder"), "{line}");
+        assert!(!line.contains("CLEAN//"), "{line}");
+        let without = named("tempMission").to_string();
+        assert!(
+            !without.starts_with("in a mission, tempMission"),
+            "{without}"
+        );
+        assert!(without.contains("single-player placeholder"), "{without}");
+        // A real name is still the name.
+        assert_eq!(
+            named("Caucasus TvT").to_string(),
+            "in a mission, Caucasus TvT"
+        );
+    }
+
+    #[test]
+    fn a_mission_names_its_theatre_and_the_players_unit() {
+        let got = detailed(
+            named("Caucasus TvT"),
+            None,
+            Some(&said("Afghanistan")),
+            Some(&said("F-4E-45MC")),
+        );
+        assert_eq!(
+            got.to_string(),
+            "in a mission, Caucasus TvT, theatre Afghanistan, player unit F-4E-45MC"
+        );
+        // A read that failed or answered nil leaves its detail out.
+        let nil = reads::Answer::Value {
+            lua_type: "nil".to_owned(),
+            value: Some("nil".to_owned()),
+        };
+        assert_eq!(
+            detailed(named("Caucasus TvT"), Some(&raised()), Some(&nil), None),
+            named("Caucasus TvT")
+        );
+    }
+
+    #[test]
+    fn the_details_move_no_activity_but_a_mission() {
+        for activity in [Activity::Loading, Activity::Menu, Activity::Editor] {
+            assert_eq!(
+                detailed(activity.clone(), Some(&said(FILE)), Some(&said("x")), None),
+                activity
+            );
+        }
+    }
+
     /// A read that threw inside its own `pcall`.
     fn raised() -> reads::Answer {
         reads::Answer::Raised {
@@ -1746,9 +1933,7 @@ mod game_state {
                 Some(&ours(Host::Hook, "sim", true)),
                 Some(&said("Caucasus TvT"))
             ),
-            Activity::Mission {
-                name: "Caucasus TvT".to_owned()
-            }
+            named("Caucasus TvT")
         );
     }
 
@@ -1759,9 +1944,7 @@ mod game_state {
                 Some(&ours(Host::Hook, "paused", true)),
                 Some(&said("Caucasus TvT"))
             ),
-            Activity::Mission {
-                name: "Caucasus TvT".to_owned()
-            }
+            named("Caucasus TvT")
         );
     }
 
@@ -1890,9 +2073,7 @@ mod game_state {
         let mine = Beat::verdict(&hb, &s.stamp, &Host::Hook);
         assert_eq!(
             activity_of(Some(&mine), Some(&said("Caucasus TvT"))),
-            Activity::Mission {
-                name: "Caucasus TvT".to_owned()
-            },
+            named("Caucasus TvT"),
             "the positive control: this session's own beat does decide"
         );
 
@@ -1988,9 +2169,7 @@ mod game_state {
         let activity = activity_of(Some(&beat), Some(&said("Caucasus TvT")));
         assert_eq!(
             activity,
-            Activity::Mission {
-                name: "Caucasus TvT".to_owned()
-            },
+            named("Caucasus TvT"),
             "the fixture is not in a mission"
         );
         (beat, activity)
@@ -2960,12 +3139,7 @@ mod game_state {
             b"net.dostring_in returned nil",
         );
         let state = derived(&mut s, 14);
-        assert_eq!(
-            state.activity,
-            Activity::Mission {
-                name: "Caucasus TvT".to_owned()
-            }
-        );
+        assert_eq!(state.activity, named("Caucasus TvT"));
         assert_eq!(state.session, SessionAxis::Client);
     }
 
@@ -3038,12 +3212,7 @@ mod game_state {
             },
             "the getPause read raised, so pause is unknown and the phase is not an answer"
         );
-        assert_eq!(
-            state.activity,
-            Activity::Mission {
-                name: "Caucasus TvT".to_owned()
-            }
-        );
+        assert_eq!(state.activity, named("Caucasus TvT"));
         assert_eq!(state.session, SessionAxis::Single);
     }
 
@@ -3452,12 +3621,7 @@ mod game_state {
         let whole = derive(&maximal(&s));
         assert_eq!(whole.process, ProcessAxis::Running);
         assert_eq!(whole.bridge, BridgeAxis::Armed);
-        assert_eq!(
-            whole.activity,
-            Activity::Mission {
-                name: "Caucasus TvT".to_owned()
-            }
-        );
+        assert_eq!(whole.activity, named("Caucasus TvT"));
         assert_eq!(whole.pause.value, Pause::Running);
         assert_eq!(whole.session, SessionAxis::Single);
         assert_eq!(whole.track, Track::Live);
