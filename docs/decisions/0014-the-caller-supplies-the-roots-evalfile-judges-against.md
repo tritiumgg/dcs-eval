@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0026](0026-a-file-evaluation-reads-any-path-and-only-its-size-is-judged.md)
 
 ## Context
 
