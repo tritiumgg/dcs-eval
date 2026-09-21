@@ -25,9 +25,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **`verify` reads at a glance (ADR 0032)**: the verdict first, a row per part worded `ok`, `PROBLEM`, `waiting` or `note` with a `fix:`; `--verbose`, `status` and `dcs_status` add the exact problems and a `details` block where the Debug dump was. A reply's body follows a blank line. Three controls under T46; how it reads in conhost is the maintainer's to see.
 - **Stage 9's live run recorded (ADR 0031)**: dormant 0.0011 ms/frame, round trips p50 ~13.9 ms. Six reads answered and are sent by every game-state, `getMissionLoaded` crashed DCS twice and left the list, `--reads` and `reads` are gone, the editor is read from `MapWindow.getVisible()` in `gui`, a `tempMission` name gives way to the file; s17 dropped. Nine controls under T50, proved off DCS; how they read a live game is the maintainer's to see.
 - **`verify` failed straight after every relaunch**: the executor writes no heartbeat at load, so the last session's file read as two problems; one written before the handshake is now a leftover and no problem, one since still one (ADR 0030). Client-only, no reinstall; four controls under T32 and T46.
-- **`verify` failed a session `ping` answered**: DCS gives `lfs.tempdir()` as `%TEMP%\DCS`, under the client's, and `status` read that as a disagreement; now `Within` and no problem, one outside still one (ADR 0029). The round trip always read the handshake's transport; three controls under T32.
 
 *The last three at most, one line each. Git log holds the rest.*
 

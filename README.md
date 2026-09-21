@@ -89,11 +89,29 @@ dcs-mcp uninstall --variant DCS
 ```
 
 `verify` reads the installation and the executor's session and writes
-nothing. It ends `verified`, or `not verified` with a line per problem, and
-until DCS has started once with the executor in place there is no session to
-read, which it reports as one. `--host export` reports the `Export.lua`
-host's session instead of the hook's. `uninstall` takes the executor out —
-only a file whose hash this project shipped — and our one line out of
+nothing. Its first line is `verified` or `not verified`, with the folder it
+looked at, and under it is a row for each part with what to do where
+something is wrong:
+
+```
+verified: C:\Users\you\Saved Games\DCS
+
+  ok       hook          Scripts\Hooks\DcsEvalExecutor.lua, this release
+  ok       Export.lua    loads the executor once
+  ok       DCS           running (process 25924), not used yet since it started
+  note     DCS version   2.9.29.27468
+  note     autoexec.cfg  net.allow_unsafe_api is not set
+  note     autoexec.cfg  net.allow_dostring_in is not set
+```
+
+Until DCS has started once with the executor in place there is no session
+to read, so the DCS row says `waiting` and the report is `not verified`.
+`--verbose` adds every problem in its exact words and every fact read: the
+hashes, the paths, the session's stamp and heartbeat. `--host export`
+reports the `Export.lua` host's session instead of the hook's.
+
+`uninstall` takes the executor out — only a file whose hash this project
+shipped — and our one line out of
 `Export.lua`, and puts back every file `install` moved aside. A file at our
 name that we did not ship is left where it is and named. If `install` created
 `Export.lua`, `uninstall` leaves it empty rather than deleting a file nothing
@@ -139,7 +157,7 @@ registers, lists and answers all six tools below; each takes an optional
 
 | Tool | What it says |
 |---|---|
-| `dcs_status` | what is readable without asking the executor anything, and it writes nothing: the hook's hash against the release this build carries, the `Export.lua` line present exactly once, any second hook beside ours, the two `autoexec.cfg` policy keys as they are written — then the session, alive, phase, armed, every problem found. A DCS build that differs from the one this was measured on is reported as a difference and never as a fault |
+| `dcs_status` | what is readable without asking the executor anything, and it writes nothing: the hook's hash against the release this build carries, the `Export.lua` line present exactly once, any second hook beside ours, the two `autoexec.cfg` policy keys as they are written — then the session, alive, phase, armed, every problem found. It is `verify --verbose` under the word `status`: the verdict and a row per part, every problem in its exact words, then every fact under `details`. A DCS build that differs from the one this was measured on is reported as a difference and never as a fault |
 | `dcs_ping` | liveness proved by a reply, with the phase and tick |
 | `dcs_game_state` | what the game is doing, every fact it rests on, and the basis of each value |
 | `dcs_eval` | evaluate a chunk in the state you name |
