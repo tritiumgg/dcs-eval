@@ -26,4 +26,5 @@ return {
   "executor/dormant",
   "executor/arming",
   "executor/heartbeat",
+  "live/dormant-probe",
 }
