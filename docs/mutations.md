@@ -26,7 +26,10 @@ pull request like every other. Stages 0–2 were once the one place an entry was
 refused: they closed before this runner existed and stood in the figure as one
 hand-counted group, so an entry under one of their rows would have been
 counted twice. Each of their mutations now has an entry of its own, and the
-hand count went with the reason for the refusal.
+hand count went with the reason for the refusal. Stage 9's rows are live
+proofs and owe nothing; the six that name a mutation of something that runs
+off DCS — T47, T48, T50, T52, T62 and T63 — have their entries above all the
+same, written as their code landed, and counted in scope.
 
 **`reddens:` is what was observed, not what was predicted.** Where the red a
 mutation produced is not the red its plan cell named, the entry says so in a
@@ -2009,10 +2012,12 @@ entries here too.
 
 ## Out of scope
 
-The counts below are read off `docs/PLAN.md` by hand, and nothing re-derives
-them: `tools/sweep-cover.sh` checks that a Stage 0–8 row has an entry, not what
-any row's count is. They are part of the figure every run prints, so each one
-carries its per-row working below and can be re-counted against the plan.
+One group is left here: the runner's own two, which are the two edits T57's
+cell names and are proved by `tools/sweep-test.sh` instead. Nothing re-derives
+an out-of-scope count — `tools/sweep-cover.sh` checks that a Stage 0–8 row has
+an entry, not what any row's count is — yet each is part of the figure every
+run prints, so a group added here later carries its per-row working beside it
+and can be re-counted against the plan.
 
 The rule: one for each distinct code edit a row's `mutations:` clause names, so
 a cell naming two edits counts two. An edit named to show that a control does
@@ -2029,22 +2034,6 @@ not counted at all — and nothing would notice one of them going quiet, which
 is the same gap one level down that this whole file exists to close. A row
 that wants one of them re-run names it in `docs/PLAN.md` first; it then gets
 an entry here like any other, and both figures move.
-
-### out/stages-7-to-9
-
-- out-of-scope: nothing. Every mutation a Stage 7 to 9 row names is an entry
-  above and counted in scope there, so this group stands for none; it stays
-  so that the figure every run prints says where Stages 7 to 9 went rather
-  than leaving it to be assumed.
-- controls: 0
-- breakdown: none, 0. Every Stage 7 and Stage 8 row is built, and its
-  mutations are entries above. In Stage 9, T52's one mutation is
-  `verify/stray-prefix-aimed-at-the-wrong-project`, and T62 and T63, Stage
-  9's two developer-only rows, have entries of their own; all are counted in
-  scope. T47, T48 and T50 name mutations of the live instrument, which runs
-  off DCS, and their five controls are entries above, counted in scope.
-  Stage 9's other rows need a running game, name no mutation and are owed
-  none.
 
 ### out/the-runner-itself
 
