@@ -159,7 +159,8 @@ pub fn rows() -> Vec<Row> {
         Absent::NotBuilt("the s17 fixture mission is not ported"),
     ));
 
-    // One DCS launch each: the phase refuses a second in one session.
+    // `live read all` sends these in turn; one that stops it is retested
+    // alone, and the latest entry is the row.
     for (key, phase) in [
         ("multiplayer", "read multiplayer"),
         ("server", "read server"),
@@ -171,7 +172,7 @@ pub fn rows() -> Vec<Row> {
     ] {
         rows.push(row(
             format!("read.{key}"),
-            format!("opt-in read {key}, sent alone"),
+            format!("opt-in read {key}"),
             "none: never sent from a hook",
             Absent::Run(phase),
         ));

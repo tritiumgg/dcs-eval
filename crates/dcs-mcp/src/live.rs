@@ -32,7 +32,7 @@ use crate::tools;
 use ledger::{Entry, Session};
 
 /// The usage line, which is also the list of phases this verb answers to.
-pub const USAGE: &str = "usage: dcs-mcp live dormant | rtt | read <key> | report\n       \
+pub const USAGE: &str = "usage: dcs-mcp live dormant | rtt | read <key>|all | report\n       \
      --saved-games <dir> --variant <name> [--host hook|export] [--data-dir <dir>]\n       \
      [--wait-seconds <n>] [--count <n>] [--label <word>]";
 
@@ -262,6 +262,12 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
                     );
                 }
             };
+            if parsed.key == "all" {
+                return match read::run_all(h, &session, &rows, &data, upto, out) {
+                    Ok(code) => Ok(code),
+                    Err(why) => refused(out, why),
+                };
+            }
             match read::run(h, &session, &parsed.key, rows, &data, upto) {
                 Ok(entries) => entries,
                 Err(why) => return refused(out, why),

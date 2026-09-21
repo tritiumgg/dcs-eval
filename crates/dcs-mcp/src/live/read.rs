@@ -1,19 +1,26 @@
-//! The opt-in read phase: one of the seven reads nothing sends by default,
-//! sent alone, once per DCS session, and whatever it came to written down.
+//! The opt-in read phase: the seven reads nothing sends by default, each
+//! sent alone, and whatever each came to written down.
 //!
 //! Alone means the only request on the disk: no ping, no tier-1 read and no
-//! probe beside it. One per session means one per executor stamp, which
-//! changes when DCS restarts. The two together are what make a crash name
-//! its read: a session that goes down holding one request was taken down by
-//! that request, and the next read starts in a session nothing else has
-//! touched.
+//! probe beside it. A session is one executor stamp, which changes when DCS
+//! restarts.
+//!
+//! Two ways in. `live read <key>` sends one read into a session that has had
+//! none, which is the clean case: a session that goes down holding one
+//! request was taken down by that request, and nothing earlier in it can
+//! have set the crash up. `live read all` sends every read that has no
+//! outcome yet, one after another in one session, and stops at the first
+//! that does not answer (ADR 0028). Sent in turn, each still alone on the
+//! disk, a crash still names the read in flight; what a sequence cannot rule
+//! out is damage an earlier read did that surfaced later, so the one that
+//! stopped it is retested alone in a fresh session before it is believed.
 //!
 //! **This phase refuses a read only to keep a crash attributable; it bans
-//! none.** A second opt-in read in a session that already had one is
-//! refused, because a crash after two would name neither. And a ledger that
-//! cannot be read in full, or cannot be written, refuses the read too,
-//! because the phase could not then prove the session had not had one, or
-//! could not make the next run see this one.
+//! none.** Either way in is refused in a session that already had a read,
+//! because a crash then could name neither. And a ledger that cannot be read
+//! in full, or cannot be written, refuses the read too, because the phase
+//! could not then prove the session had not had one, or could not make the
+//! next run see this one.
 //!
 //! The read is written to the ledger as sent *before* it is published, and
 //! its outcome is appended after. A read that was sent and never answered
@@ -22,6 +29,7 @@
 //! with a hung game — would leave no trace, and the next run would admit a
 //! second read into the same session.
 
+use std::io::Write;
 use std::time::Duration;
 
 use dcs_eval::readers::Handshake;
@@ -107,6 +115,109 @@ pub(crate) fn run(
     let tiers = opt_in(key)?;
     let stamp = session.stamp.as_str();
     refuse_a_second(&rows, stamp)?;
+    let (entry, _) = send(h, session, key, tiers, data, upto)?;
+    Ok(vec![entry])
+}
+
+/// The seven opt-in keys, in the table's order: tier 2's four, then the
+/// three from the crashing batch, so the reads with the least against them
+/// go first.
+fn opt_in_keys() -> Vec<&'static str> {
+    let every = Tiers::from_words(["extra", "suspect"]).expect("both groups are the table's");
+    let base: Vec<&str> = reads::listed(Tiers::default())
+        .iter()
+        .map(|r| r.key())
+        .collect();
+    reads::listed(every)
+        .iter()
+        .map(|r| r.key())
+        .filter(|key| !base.contains(key))
+        .collect()
+}
+
+/// Whether the ledger already holds what `key` came to, in any session.
+///
+/// The entry written before a read is sent is not an outcome, and neither
+/// is one saying it was refused before the disk: a key with only those
+/// never came to anything, and is sent again.
+fn has_outcome(rows: &[Entry], key: &str) -> bool {
+    let row = format!("read.{key}");
+    rows.iter().any(|e| {
+        e.phase == "read" && e.row == row && e.said != SENT && !e.said.starts_with("not sent:")
+    })
+}
+
+/// Send every opt-in read with no outcome yet, one after another in this
+/// session, each alone and each written down before and after, stopping at
+/// the first that does not answer. The exit code: 0 when every read sent
+/// answered, 1 when one did not.
+///
+/// A read that raises inside its pcall, or answers in a shape nobody
+/// expected, answered: the session is up and the next is sent. One that
+/// never answers stops the run, because the session may be gone, and a read
+/// sent after it would be sent into a game nobody can vouch for.
+///
+/// # Errors
+///
+/// The refusal, in words, where the session already had a read, a read was
+/// refused before the disk, or the ledger will not take an entry.
+pub(crate) fn run_all(
+    h: &Handshake,
+    session: &Session,
+    rows: &[Entry],
+    data: &DataDir,
+    upto: Duration,
+    out: &mut dyn Write,
+) -> Result<i32, String> {
+    refuse_a_second(rows, &session.stamp)?;
+    let todo: Vec<&str> = opt_in_keys()
+        .into_iter()
+        .filter(|key| !has_outcome(rows, key))
+        .collect();
+    let say =
+        |out: &mut dyn Write, line: String| writeln!(out, "{line}").map_err(|why| why.to_string());
+    if todo.is_empty() {
+        say(
+            out,
+            "every opt-in read already has an outcome in the ledger; nothing was sent".into(),
+        )?;
+        return Ok(0);
+    }
+    for key in todo {
+        let (entry, answered) = send(h, session, key, opt_in(key)?, data, upto)?;
+        ledger::append(data, &entry).map_err(|why| {
+            format!(
+                "{}: {why}, after {} was sent and came to: {}",
+                data.live_path().display(),
+                entry.row,
+                entry.said
+            )
+        })?;
+        say(out, format!("{}: {}", entry.row, entry.said))?;
+        if !answered {
+            say(
+                out,
+                format!(
+                    "stopped: {key} did not answer, so nothing after it was sent; restart DCS, \
+                     confirm it alone with `live read {key}`, then `live read all` for the rest"
+                ),
+            )?;
+            return Ok(1);
+        }
+    }
+    Ok(0)
+}
+
+/// Send one opt-in read, alone, having first written it down as sent: what
+/// it came to, and whether the session answered at all.
+fn send(
+    h: &Handshake,
+    session: &Session,
+    key: &str,
+    tiers: Tiers,
+    data: &DataDir,
+    upto: Duration,
+) -> Result<(Entry, bool), String> {
     let row = format!("read.{key}");
     ledger::append(data, &Entry::new("read", &row, session, SENT)).map_err(|why| {
         format!(
@@ -126,7 +237,11 @@ pub(crate) fn run(
             return Err(why.to_string());
         }
     };
-    Ok(vec![Entry::new("read", &row, session, said(&answer))])
+    let answered = matches!(
+        answer,
+        Answer::Value { .. } | Answer::Raised { .. } | Answer::Malformed { .. }
+    );
+    Ok((Entry::new("read", &row, session, said(&answer)), answered))
 }
 
 #[cfg(test)]
@@ -293,6 +408,121 @@ mod tests {
             "{}",
             entries[1].said
         );
+    }
+
+    /// The rows the ledger holds an entry for, in the order they landed,
+    /// once each.
+    fn rows_seen(entries: &[ledger::Entry]) -> Vec<String> {
+        let mut rows: Vec<String> = Vec::new();
+        for e in entries {
+            if !rows.contains(&e.row) {
+                rows.push(e.row.clone());
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn all_sends_every_opt_in_read_in_turn_each_alone() {
+        let b = Sandbox::new();
+        let mut s = standin(&b, "0000000001-4242");
+        let (code, shown, entries) = read(&b, &mut s, "all");
+        assert_eq!(code, 0, "{shown}");
+        assert_eq!(
+            s.seen().len(),
+            7,
+            "one request per read, and nothing beside"
+        );
+        assert_eq!(
+            rows_seen(&entries),
+            [
+                "read.multiplayer",
+                "read.server",
+                "read.track",
+                "read.player_id",
+                "read.mission_loaded",
+                "read.player_unit_type",
+                "read.mission_theatre",
+            ],
+            "tier 2 first, then the three from the crashing batch"
+        );
+        assert_eq!(
+            entries.len(),
+            14,
+            "each written down as sent, then as answered"
+        );
+    }
+
+    #[test]
+    fn all_stops_at_the_first_read_that_does_not_answer() {
+        let b = Sandbox::new();
+        let mut s = standin(&b, "0000000001-4242");
+        // A process nobody is running and a dormant heartbeat: the first
+        // read finds the session gone, as one that took DCS down would.
+        s.pid = u32::MAX - 1;
+        s.armed = false;
+        s.handshake().expect("the handshake publishes");
+        s.beat(std::time::SystemTime::now())
+            .expect("the heartbeat publishes");
+        let mut shown = Vec::new();
+        let code = crate::live::run(line(&b, "all"), &mut shown).expect("the line parses");
+        let shown = String::from_utf8_lossy(&shown);
+        assert_eq!(code, 1, "{shown}");
+        assert!(
+            shown.contains("stopped: multiplayer did not answer"),
+            "{shown}"
+        );
+        let entries = entries(&b);
+        assert_eq!(
+            rows_seen(&entries),
+            ["read.multiplayer"],
+            "nothing was sent after the read that did not answer"
+        );
+        assert!(
+            entries[1]
+                .said
+                .starts_with("session gone before it answered"),
+            "{}",
+            entries[1].said
+        );
+    }
+
+    #[test]
+    fn all_skips_every_read_that_already_came_to_something() {
+        let b = Sandbox::new();
+        let mut s = standin(&b, "0000000001-4242");
+        assert_eq!(read(&b, &mut s, "multiplayer").0, 0);
+        drop(s);
+        let mut s = standin(&b, "0000000002-4242");
+        let (code, shown, entries) = read(&b, &mut s, "all");
+        assert_eq!(code, 0, "{shown}");
+        assert_eq!(s.seen().len(), 6, "multiplayer was not sent again");
+        assert_eq!(entries.len(), 14);
+        let (again, shown, _) = {
+            drop(s);
+            let mut s = standin(&b, "0000000003-4242");
+            let got = read(&b, &mut s, "all");
+            assert!(
+                s.seen().is_empty(),
+                "a read went out with nothing left to send"
+            );
+            got
+        };
+        assert_eq!(again, 0, "{shown}");
+        assert!(shown.contains("nothing was sent"), "{shown}");
+    }
+
+    #[test]
+    fn all_is_refused_in_a_session_that_already_had_a_read() {
+        let b = Sandbox::new();
+        let mut s = standin(&b, "0000000001-4242");
+        assert_eq!(read(&b, &mut s, "multiplayer").0, 0);
+        let before = s.seen().len();
+        let (code, shown, entries) = read(&b, &mut s, "all");
+        assert_eq!(code, 1, "{shown}");
+        assert!(shown.contains("already had an opt-in read"), "{shown}");
+        assert_eq!(s.seen().len(), before, "a read reached the disk");
+        assert_eq!(entries.len(), 2);
     }
 
     #[test]

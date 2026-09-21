@@ -2011,11 +2011,29 @@ entries here too.
 - task: T50
 - command: `mise exec -- cargo test -p dcs-mcp live::read`
 - reddens: `a_second_opt_in_read_in_one_session_is_refused`
-- note: the hunk deletes the line. The function it called is left unused,
-  which warns and does not stop `cargo test`; the assertion is the red.
+- note: the hunk deletes the line. `stamp` is then left unused, which warns
+  and does not stop `cargo test`; the assertion is the red. The function it
+  called is still read by `run_all`, which checks the session its own way,
+  so `all_is_refused_in_a_session_that_already_had_a_read` stays green:
+  this control watches the single read's refusal alone.
 
 ```sweep-edit crates/dcs-mcp/src/live/read.rs
 -     refuse_a_second(&rows, stamp)?;
+```
+
+### live/all-sends-past-a-read-that-did-not-answer
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-mcp live::read`
+- reddens: `all_stops_at_the_first_read_that_does_not_answer`
+- note: the hunk deletes the return, so the run prints that it stopped and
+  then sends the next read anyway, into a session that has just failed to
+  answer — the one thing ADR 0028's sequence is not allowed to do. It
+  compiles clean. The red is the exit code, 0 where 1 is asserted, printed
+  before the ledger check that would also fail.
+
+```sweep-edit crates/dcs-mcp/src/live/read.rs
+-             return Ok(1);
 ```
 
 ### live/read-recorded-only-after-its-answer
@@ -2024,8 +2042,9 @@ entries here too.
 - command: `mise exec -- cargo test -p dcs-mcp live::read`
 - reddens: `the_read_is_on_the_ledger_before_it_is_on_the_disk`
 - note: the hunk skips the entry that says the read was sent, which is the
-  ledger as it was when the outcome was the only write. The other four
-  `live::read` tests that count entries go red beside it.
+  ledger as it was when the outcome was the only write. The other
+  `live::read` tests that count entries go red beside it, the `all_` ones
+  among them, since `live read all` sends through the same line.
 
 ```sweep-edit crates/dcs-mcp/src/live/read.rs
 -     ledger::append(data, &Entry::new("read", &row, session, SENT)).map_err(|why| {
