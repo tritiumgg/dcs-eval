@@ -559,10 +559,9 @@ fn tempdir_of(named: &Diagnostic) -> Agreement {
 /// The three comparisons are against the handshake, and all three are
 /// worth making: two executors writing into one output directory is the
 /// thing they exist to surface. A file a gone session left before this one
-/// loaded never reaches here; the caller sets it aside as a leftover
-/// first. `host` and `transport` are carried in the
-/// file for exactly this, so comparing only the stamp would drop half of
-/// what they were kept for.
+/// loaded never reaches here; the caller sets it aside as a leftover first.
+/// `host` and `transport` are carried in the file for exactly this, so
+/// comparing only the stamp would drop half of what they were kept for.
 ///
 /// `armed` decides what the age is before the age is taken, and the arm is
 /// read off this file's own header even where the file is another
