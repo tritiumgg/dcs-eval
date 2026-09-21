@@ -357,6 +357,20 @@ impl Handshake {
         Self::from_bytes(path, &bytes)
     }
 
+    /// The handshake at `path`, with the time it was published taken off
+    /// the same handle the bytes came from, as [`Heartbeat::read`] takes
+    /// its own. A time that will not read is `None` rather than a refusal:
+    /// the file read, and what the time decides has a safe answer without
+    /// it.
+    pub fn read_published(path: &Path) -> Result<(Self, Option<SystemTime>), ReadError> {
+        let disk = |why| ReadError::at(path, ReadErrorKind::Disk(why));
+        let mut file = File::open(path).map_err(disk)?;
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).map_err(disk)?;
+        let at = file.metadata().and_then(|meta| meta.modified()).ok();
+        Ok((Self::from_bytes(path, &bytes)?, at))
+    }
+
     /// The handshake in `bytes`, `path` being what a refusal names.
     pub fn from_bytes(path: &Path, bytes: &[u8]) -> Result<Self, ReadError> {
         let h = envelope(path, bytes)?;

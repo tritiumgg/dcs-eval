@@ -277,9 +277,16 @@ impl fmt::Display for Report {
                     "session: {} pid {}, {}",
                     session.stamp, session.pid, session.process
                 )?;
-                match &session.beat {
-                    None => writeln!(f, "heartbeat: none written, so nothing has armed it")?,
-                    Some(beat) => {
+                match (&session.beat, &session.leftover) {
+                    (None, Some(stamp)) => writeln!(
+                        f,
+                        "heartbeat: none written this session, so nothing has armed it; \
+                         the file there is {stamp}'s, from before this session loaded"
+                    )?,
+                    (None, None) => {
+                        writeln!(f, "heartbeat: none written, so nothing has armed it")?;
+                    }
+                    (Some(beat), _) => {
                         writeln!(f, "heartbeat: phase {}, {}", beat.phase, beat.age)?;
                     }
                 }
@@ -1255,6 +1262,36 @@ mod tests {
             rendered(&report)
         );
         assert!(report.verified(), "{}", rendered(&report));
+    }
+
+    /// A relaunch before anything has woken the new session: the heartbeat
+    /// there is the last session's, with its stamp and its transport, and
+    /// the executor writes none at load to replace it (ADR 0030). The live
+    /// run printed two problems here and `not verified`.
+    #[test]
+    fn a_relaunch_the_last_sessions_heartbeat_outlived_verifies() {
+        let (_b, variant, output) = fixture();
+        let (release, _older, _current) = a_release();
+        let last = Standin::open_stamped(&output, "hook", "1700000000-999")
+            .expect("the last session opens");
+        last.beat(an_instant())
+            .expect("the last session's heartbeat lands");
+        let ex = installed(&variant, &output);
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+
+        assert!(report.verified(), "{}", rendered(&report));
+        let session = report.session.session.as_ref().expect("a session reports");
+        assert_eq!(session.stamp, ex.stamp);
+        assert_eq!(session.leftover.as_deref(), Some("1700000000-999"));
+        assert!(
+            rendered(&report).contains(
+                "heartbeat: none written this session, so nothing has armed it; \
+                 the file there is 1700000000-999's, from before this session loaded"
+            ),
+            "{}",
+            rendered(&report)
+        );
     }
 
     /// The first live load: DCS handed its process a folder of its own

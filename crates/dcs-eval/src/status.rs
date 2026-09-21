@@ -13,10 +13,10 @@
 //! **A problem is not a refusal.** [`status`] returns a [`Status`] and not a
 //! `Result`, by construction: a report that errored because the executor is
 //! not installed would be useless for the one question a user asks first.
-//! A file that is missing, a file that will not parse, a heartbeat left by
-//! somebody else, a process that is gone — each is reported, in the
-//! [`problems`](Status::problems) list, with the session reported as far as
-//! it could be read.
+//! A file that is missing, a file that will not parse, a heartbeat another
+//! session wrote since this one loaded, a process that is gone — each is
+//! reported, in the [`problems`](Status::problems) list, with the session
+//! reported as far as it could be read.
 //!
 //! Three fields a reader might look for are not here: how many requests are
 //! answered, how many are queued, and whether the executor is busy. The
@@ -91,8 +91,18 @@ pub struct SessionStatus {
     pub tempdir: Agreement,
     /// The heartbeat, where there was one to read. `None` means the
     /// session has never armed, or that the file would not read — and in
-    /// the second case there is a problem naming it.
+    /// the second case there is a problem naming it — or that the file
+    /// there is a leftover.
     pub beat: Option<BeatStatus>,
+    /// The stamp of a heartbeat another session wrote before this one
+    /// published its handshake, where that is the file there.
+    ///
+    /// The executor writes no heartbeat at load, so after every relaunch
+    /// the file is the last session's until the first arm replaces it. It
+    /// is no evidence about any writer since this session began, so it is
+    /// not a problem, and none of its fields are this session's, so it is
+    /// not a `beat` either (ADR 0030).
+    pub leftover: Option<String>,
 }
 
 /// The heartbeat as it was found.
@@ -350,9 +360,10 @@ pub enum Problem {
     /// The heartbeat is there and would not read. The rest of the session
     /// is still reported.
     HeartbeatUnreadable { path: PathBuf, why: String },
-    /// The heartbeat carries another session's stamp: two installs writing
-    /// into one output directory, or a file a session that is gone left
-    /// behind.
+    /// The heartbeat carries another session's stamp and was written since
+    /// this session published its handshake, or at a time that could not
+    /// be placed against it: two executors writing into one output
+    /// directory. One written before is a leftover, and no problem.
     ForeignStamp { saw: String, wanted: String },
     /// The heartbeat names a transport the handshake does not.
     ForeignTransport { saw: Real, wanted: Real },
@@ -546,9 +557,10 @@ fn tempdir_of(named: &Diagnostic) -> Agreement {
 /// worth reporting.
 ///
 /// The three comparisons are against the handshake, and all three are
-/// worth making: two installs writing into one output directory is the
-/// thing they exist to surface, and a session that is gone leaves a file
-/// behind that looks like one. `host` and `transport` are carried in the
+/// worth making: two executors writing into one output directory is the
+/// thing they exist to surface. A file a gone session left before this one
+/// loaded never reaches here; the caller sets it aside as a leftover
+/// first. `host` and `transport` are carried in the
 /// file for exactly this, so comparing only the stamp would drop half of
 /// what they were kept for.
 ///
@@ -596,6 +608,18 @@ fn beat_of(beat: &Heartbeat, h: &Handshake, now: SystemTime) -> (BeatStatus, Vec
     (status, problems)
 }
 
+/// Whether `beat` is another session's file, left before this one
+/// published `h` at `published`.
+///
+/// Before, strictly: a file whose time equals the handshake's cannot be
+/// placed on either side of it, and a time that would not read cannot be
+/// placed at all, so both stay what they were, a foreign heartbeat and a
+/// problem. Being wrong in that direction costs a line a user reads; the
+/// other would hide a second executor (ADR 0030).
+fn left_before(beat: &Heartbeat, h: &Handshake, published: Option<SystemTime>) -> bool {
+    beat.stamp != h.stamp && published.is_some_and(|at| beat.modified < at)
+}
+
 /// The report on the session whose output directory is `output`, taken
 /// against the system clock.
 pub fn status(output: &Path) -> Status {
@@ -607,8 +631,8 @@ pub fn status(output: &Path) -> Status {
 /// a test can fix what it is.
 pub fn status_at(output: &Path, now: SystemTime) -> Status {
     let mut problems = Vec::new();
-    let handshake = match Handshake::read(&output.join("executor.txt")) {
-        Ok(handshake) => handshake,
+    let (handshake, at) = match Handshake::read_published(&output.join("executor.txt")) {
+        Ok(read) => read,
         Err(err) => {
             problems.push(not_read(err));
             return Status {
@@ -649,7 +673,14 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
     let (arm_file, undecided) = arm_of(arm, std::fs::metadata(arm).map(|_| ()));
     problems.extend(undecided);
 
+    let mut leftover = None;
     let beat = match Heartbeat::read(session.heartbeat()) {
+        // The last session's, not yet replaced because this one has not
+        // armed: what every relaunch leaves.
+        Ok(beat) if left_before(&beat, &handshake, at) => {
+            leftover = Some(beat.stamp);
+            None
+        }
         Ok(beat) => {
             let (status, found) = beat_of(&beat, &handshake, now);
             problems.extend(found);
@@ -681,6 +712,7 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
             app_version: measured_against(handshake.app_version.as_deref(), MEASURED_ON),
             tempdir,
             beat,
+            leftover,
         }),
         problems,
     }
@@ -937,6 +969,104 @@ mod tests {
                 wanted: s.stamp.clone(),
             }),
             "both spellings are named: {:?}",
+            report.problems
+        );
+    }
+
+    /// `path`'s modification time set to `at`, its bytes untouched.
+    fn touched(path: &Path, at: SystemTime) {
+        fs::File::options()
+            .write(true)
+            .open(path)
+            .and_then(|file| file.set_modified(at))
+            .expect("the modification time lands");
+    }
+
+    /// What the live run met after a relaunch: the executor writes nothing
+    /// at load, so the heartbeat there is the last session's — another
+    /// stamp and another transport, written before this session's handshake
+    /// — until the first arm replaces it.
+    #[test]
+    fn a_heartbeat_the_last_session_left_before_this_one_loaded_is_no_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let now = SystemTime::now();
+        touched(
+            &s.output().join("executor.txt"),
+            now - Duration::from_secs(60),
+        );
+        let beat = beating(&s);
+        respell(&beat, "stamp", "1700000000-999");
+        respell(
+            &beat,
+            "transport",
+            &b.join("the-last-session").display().to_string(),
+        );
+        touched(&beat, now - Duration::from_secs(900));
+        let report = status_at(s.output(), now);
+        assert_eq!(
+            report.problems,
+            vec![],
+            "a file untouched since before this session loaded says nothing about a second writer"
+        );
+        let session = report.session.expect("the session reports");
+        assert_eq!(
+            session.beat, None,
+            "none of the leftover's fields are this session's"
+        );
+        assert_eq!(session.leftover.as_deref(), Some("1700000000-999"));
+    }
+
+    /// The other side of the line: a second executor that wrote into this
+    /// output after this session loaded, which is what the foreign-stamp
+    /// problem is for, however old the stamp it carries.
+    #[test]
+    fn a_heartbeat_another_session_wrote_after_this_one_loaded_is_still_a_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let now = SystemTime::now();
+        touched(
+            &s.output().join("executor.txt"),
+            now - Duration::from_secs(600),
+        );
+        let beat = beating(&s);
+        respell(&beat, "stamp", "1700000000-999");
+        touched(&beat, now - Duration::from_secs(300));
+        let report = status_at(s.output(), now);
+        assert!(
+            report.problems.contains(&Problem::ForeignStamp {
+                saw: "1700000000-999".to_owned(),
+                wanted: s.stamp.clone(),
+            }),
+            "a file written since this session loaded is a second writer: {:?}",
+            report.problems
+        );
+        let session = report.session.expect("the session reports");
+        assert_eq!(session.leftover, None);
+        assert!(
+            !session.beat.expect("the file is carried, flagged").belongs,
+            "and flagged as not this session's"
+        );
+    }
+
+    /// A file stamped at the handshake's own instant cannot be placed on
+    /// either side of it, and is not given the benefit of the doubt.
+    #[test]
+    fn a_foreign_heartbeat_written_at_the_handshakes_instant_is_still_a_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let at = SystemTime::now() - Duration::from_secs(60);
+        touched(&s.output().join("executor.txt"), at);
+        let beat = beating(&s);
+        respell(&beat, "stamp", "1700000000-999");
+        touched(&beat, at);
+        let report = status(s.output());
+        assert!(
+            report
+                .problems
+                .iter()
+                .any(|p| matches!(p, Problem::ForeignStamp { .. })),
+            "saw {:?}",
             report.problems
         );
     }

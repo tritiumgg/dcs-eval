@@ -1098,6 +1098,50 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +     } else if executor.to_string().to_lowercase().starts_with(&client.to_string().to_lowercase()) {
 ```
 
+### status/leftover-heartbeat-read-as-foreign
+
+- task: T32
+- command: `mise exec -- cargo test -p dcs-eval status`
+- reddens: `a_heartbeat_the_last_session_left_before_this_one_loaded_is_no_problem`
+- note: the live run's relaunch (ADR 0030). With no heartbeat ever read as a
+  leftover, the last session's file is two problems again, stamp and
+  transport, and nothing else in the module reddens: every other foreign
+  fixture is written after its handshake.
+
+```sweep-edit crates/dcs-eval/src/status.rs
+-     beat.stamp != h.stamp && published.is_some_and(|at| beat.modified < at)
++     false
+```
+
+### status/every-foreign-heartbeat-read-as-a-leftover
+
+- task: T32
+- command: `mise exec -- cargo test -p dcs-eval status`
+- reddens: `a_heartbeat_another_session_wrote_after_this_one_loaded_is_still_a_problem`
+- note: the time dropped, so any other stamp is a leftover and a second
+  executor writing since this session loaded goes unreported. The two older
+  foreign-stamp checks redden beside it, and outside the filter so does
+  `game`'s agreement that status flags a foreign heartbeat.
+
+```sweep-edit crates/dcs-eval/src/status.rs
+-     beat.stamp != h.stamp && published.is_some_and(|at| beat.modified < at)
++     beat.stamp != h.stamp
+```
+
+### status/heartbeat-at-the-handshakes-instant-read-as-a-leftover
+
+- task: T32
+- command: `mise exec -- cargo test -p dcs-eval status`
+- reddens: `a_foreign_heartbeat_written_at_the_handshakes_instant_is_still_a_problem`
+- note: before taken as at-or-before, so a file that cannot be placed on
+  either side of the handshake is given the benefit of the doubt. Nothing
+  else reddens.
+
+```sweep-edit crates/dcs-eval/src/status.rs
+-     beat.stamp != h.stamp && published.is_some_and(|at| beat.modified < at)
++     beat.stamp != h.stamp && published.is_some_and(|at| beat.modified <= at)
+```
+
 ### pipeline/yielded-in-arrival-order
 
 - task: T33
@@ -2002,6 +2046,21 @@ not cover is printed by the sweep itself rather than left to be assumed.
 ```sweep-edit crates/dcs-mcp/src/verify.rs
 - const STRAY_PREFIXES: [&str; 1] = ["dcseval"];
 + const STRAY_PREFIXES: [&str; 1] = ["dcsapi"];
+```
+
+### verify/relaunch-leftover-heartbeat-not-verified
+
+- task: T46
+- command: `mise exec -- cargo test -p dcs-mcp verify`
+- reddens: `verify::tests::a_relaunch_the_last_sessions_heartbeat_outlived_verifies`
+- note: the mutation is `status`'s, because `verify` prints the report
+  `status` makes. It is here so that the verb that failed live on
+  2026-09-21 has a control of its own: with no leftover recognised, the
+  fixture ends `not verified: 2 found`, as the live run did (ADR 0030).
+
+```sweep-edit crates/dcs-eval/src/status.rs
+-     beat.stamp != h.stamp && published.is_some_and(|at| beat.modified < at)
++     false
 ```
 
 ---
