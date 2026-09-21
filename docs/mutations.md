@@ -184,6 +184,158 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ---
 
+## Stage 1 — the load shell and the envelope
+
+### load/top-level-pcall-dropped
+
+- task: T06
+- command: `mise exec -- lua5.1 tools/harness.lua executor/load`
+- reddens: `raised: no host`
+- note: the plan names a registration that raises, and the suite's case for
+  it checks `mutation: the load must not raise`. With the guard gone the
+  suite never reaches that case: the load raises first in the state with
+  neither host, where the file refuses to start, and the suite reports the
+  raise. Either way it is the load raising that goes red.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+- local ok, err = pcall(main)
++ local ok, err = true, main()
+```
+
+### containment/relative-admitted
+
+- task: T07
+- command: `mise exec -- lua5.1 tools/harness.lua executor/containment`
+- reddens: `relative: Temp`
+- note: this and the two refusals below redden the same check, that the
+  directory handed in falls back to the one the executor chooses; the
+  message names the case.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if not absolute(dir) then
++   if false then
+```
+
+### containment/install-admitted
+
+- task: T07
+- command: `mise exec -- lua5.1 tools/harness.lua executor/containment`
+- reddens: `install: C:`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if install and inside(dir, install) then
++   if false then
+```
+
+### containment/saved-games-outside-logs-admitted
+
+- task: T07
+- command: `mise exec -- lua5.1 tools/harness.lua executor/containment`
+- reddens: `saved games: C:`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if inside(dir, wd) and not inside(dir, wd .. SEP .. "Logs") then
++   if false then
+```
+
+### session/getpid-test-dropped
+
+- task: T08
+- command: `mise exec -- lua5.1 tools/harness.lua executor/session`
+- reddens: `the line names os.getpid`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if type(getpid) ~= "function" then
++   if false then
+```
+
+### session/sibling-removed-as-a-file
+
+- task: T08
+- command: `mise exec -- lua5.1 tools/harness.lua executor/session`
+- reddens: `sweep: both siblings are counted`
+- note: the cell's "a request in a foreign sibling is never listed" is held
+  by removing the sibling whole; `os.remove` cannot remove a directory, so the
+  foreign sibling, and the request in it, stays on the disk.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   local ok, why = lfs.rmdir(path)
++   local ok, why = os.remove(path)
+```
+
+### framer/final-name-written-directly
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `a remove of the final name and a rename onto it`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   local tmp = path .. ".tmp"
++   local tmp = path
+
+-     ok, why = os.rename(tmp, path)
++     ok = true
+```
+
+### framer/size-test-dropped
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `limit: one byte over is not`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if size > MAX_REQUEST_BYTES then
++   if false then
+```
+
+### request/for-check-dropped
+
+- task: T10
+- command: `mise exec -- lua5.1 tools/harness.lua executor/request`
+- reddens: `no for: nothing is handed back`
+- note: a request missing `for` that runs anyway, as the cell names it. Taking
+  out the missing-`for` arm alone does not do that: the request falls to the
+  stale-session arm, whose excerpt of a nil `for` raises. So the stale arm is
+  told to pass a missing `for` through too, and the request is handed back to
+  be run.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     elseif headers["for"] == nil or headers["for"] == "" then
+-       why = "no for: the request does not name the session stamp it is for"
+-     elseif headers["for"] ~= E.stamp then
++     elseif false then
++       why = "no for: the request does not name the session stamp it is for"
++     elseif headers["for"] ~= nil and headers["for"] ~= "" and headers["for"] ~= E.stamp then
+```
+
+### request/empty-body-admitted
+
+- task: T10
+- command: `mise exec -- lua5.1 tools/harness.lua executor/request`
+- reddens: `empty body: nothing is handed back`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     elseif BODY_REQUIRED[headers.op] and body == "" then
++     elseif false then
+```
+
+### handshake/transport-dropped
+
+- task: T11
+- command: `mise exec -- lua5.1 tools/harness.lua executor/handshake`
+- reddens: `every field of the table is present, and no other`
+- note: the `started` line is in the anchor because the `transport` line alone
+  matches twice, in the handshake and in the heartbeat; the pair is unique and
+  sits in the handshake.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     { "started", os.date("%Y-%m-%d %H:%M:%S", E.started) },
+-     { "transport", E.session },
++     { "started", os.date("%Y-%m-%d %H:%M:%S", E.started) },
+```
+
+---
+
 ## Stage 3 — eval and line-truth
 
 
@@ -1770,9 +1922,8 @@ an entry here like any other, and both figures move.
   its mutations are not source edits at all — a second interpreter binary, a CI
   step removed, a workspace member removed. No plan row asks for a sweep over
   them, and one is owed.
-- controls: 20
-- breakdown: T06 one, 1; T07 three refusals, 3; T08, T09, T10 two
-  each, 6; T11 one, 1; T12 one, 1; T13 two, 2; T14, T15 one each, 2; T16 two
+- controls: 9
+- breakdown: T12 one, 1; T13 two, 2; T14, T15 one each, 2; T16 two
   (the comment byte uncounted), 2; T17 two, 2 — the `superseded` half its cell
   defers is swept under T54 as `e2e/stamp-change-not-superseded` and counted
   there.
