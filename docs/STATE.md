@@ -28,9 +28,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **The round trip's `superseded` half** — the shipped executor relaunched over one box, the client's real `wait` on the first session answers `superseded` (`cargo test -p dcs-eval e2e`); swept as `e2e/stamp-change-not-superseded`, filed under T54's row because Stages 0–2 hold no entry.
 - **Any path for a file eval** — `dcs_eval_file` and `eval --file` lost the roots, the `Config\` refusal and the install refusal (ADR 0026, superseding ADR 0014); the ceiling, judged on the stat before a byte is read, is the one refusal left.
 - **T47, T48 and T50's reads: the live instrument** — `dcs-mcp live`: `dormant`, `rtt` and `read` append to `live.jsonl`, and `live report` prints all 47 Stage 9 rows, an unmeasured one with its reason (ADR 0025 for the dormant method; `reads::alone` sends a read with nothing beside it). Proved off DCS only.
-- **T63** — `dcs-mcp install`, `verify` and `uninstall` are verbs of the binary: `Saved Games` from the known folder or `--saved-games`, several variants refused and named until `--variant` says which, never picked or prompted for (ADR 0024). Proved on fixtures; the real `Saved Games` is T52's.
 
 *The last three at most, one line each. Git log holds the rest.*
 
@@ -88,9 +88,6 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is proved
   with a file the suite keeps open. T56's directory handle refuses a removal here
   too; that no server holds one between tool calls is T41's.
-- **The round trip's `superseded` half is unblocked and unclaimed.** T17's row
-  parks it on T54, which landed the fence against the stand-in and does not ask
-  for it; no row claims it against the shipped Lua.
 - **A `Minter` has no owner.** The window mints from whatever it was handed; who
   holds one across tool calls, so two do not restart at seq 1, is Stage 7's.
   `Minter::seeded_at` resumes a counter.
