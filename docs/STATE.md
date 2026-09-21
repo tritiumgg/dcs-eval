@@ -18,7 +18,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 ## In progress
 
 **Stage 9 live run, paused 2026-09-21 at step 8 of 10** — DCS 2.9.29.27468, variant `DCS`. Done: install and verify (after PR #80 and ADR 0029); `live dormant --label menu` 0.0011 ms/frame against 0.098, an upper bound (the empty-loop floor capped before the clock); `live rtt` at the menu and in a mission, hook and export: p50 13.8–14.0 ms against 30, ~300–410 replies/s; `missionscripting` answered through `a_do_script` (T49's first half).
-`live read all --label mission`: multiplayer false, server true, track false, player_id 0; **`mission_loaded` crashed DCS** — ACCESS_VIOLATION in lua.dll `luaS_newlstr` ← `lua_next` ← edCore `ED_lua_copyindex`, the events log ending on its open marker.
+`live read all --label mission`: multiplayer false, server true, track false, player_id 0; **`mission_loaded` crashed DCS** — ACCESS_VIOLATION in lua.dll `luaS_newlstr` ← `lua_next` ← edCore `ED_lua_copyindex`, the events log ending on its open marker. A finding, not a regression; nothing is uncommitted.
 Resume: `live read mission_loaded --label mission` alone in a fresh mission (ADR 0028's retest); `live read all --label mission` for player_unit_type and mission_theatre; a fresh launch at the menu, `live read all --label menu`; `live report`. Results are in `%LOCALAPPDATA%\dcs-mcp\live.jsonl`. Then the figures into a decision record, and `live` leaves the binary.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
@@ -30,13 +30,14 @@ broken. Empty this when the task closes.*
 - **`verify` failed a session `ping` answered**: DCS gives `lfs.tempdir()` as `%TEMP%\DCS`, under the client's, and `status` read that as a disagreement; now `Within` and no problem, one outside still one (ADR 0029). The round trip always read the handshake's transport; three controls under T32.
 - **The first live load refused its handshake** as `executor.txt: nil`: DCS's own `io`/`os` answers a success with nothing, so only nil and a message is a refusal now, and a silence is settled by a stat of the final name (`publish`) or the request (`take`); modelled in `executor/framer`, eleven controls under T08, T09 and T26; `SHIPPED` gains the third hash.
 - **`live read all`** — the seven opt-in reads in turn in one DCS session, each alone, skipping any with a result in the labelled scene and stopping at the first that does not answer, which is then retested alone (ADR 0028); swept as `live/all-sends-past-a-read-that-did-not-answer`.
+
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
 **Stage 9**, the live proofs; **only the maintainer can verify any of it**, at a running
 install. The instrument is `dcs-mcp live` (README, "Measuring a live install"), proved off DCS only: whether it measures DCS correctly is the first session's to see.
-At the menu: `live dormant`, `live rtt`; in a mission: `live rtt` again (`missionscripting`, `export`) and `live rtt --host export`. The opt-in reads: `live read all --label menu` and `--label mission`, each in a fresh launch; one that stops it is retested alone with `live read <key>` in another, then `live read all` again (ADR 0028). `live report` prints all 47 rows.
+What is left of the run is In progress's resume line; `live report` prints all 47 rows.
 Not built, rows printing `unmeasured: not built`: `live scene` (T50's `sim_mode` per scene, editor-vs-menu, `mission_name` at the menu, callbacks), a follow-up branch; and the s17 fixture (T49).
 T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
 
