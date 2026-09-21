@@ -512,6 +512,10 @@ mod tests {
         paths::resolve(path).expect("the path resolves")
     }
 
+    fn first(shown: &str) -> &str {
+        shown.lines().next().expect("something was printed")
+    }
+
     fn last(shown: &str) -> &str {
         shown.lines().last().expect("something was printed")
     }
@@ -728,12 +732,7 @@ mod tests {
         let before = snapshot(&b.path);
         let (code, shown) = ran(&b, "verify", &["--variant", "DCS.openbeta"]);
         assert_eq!(code, 1, "{shown}");
-        assert!(last(&shown).starts_with("not verified"), "{shown}");
-        assert_eq!(
-            shown.lines().next(),
-            Some(embed::release_line().as_str()),
-            "{shown}"
-        );
+        assert!(first(&shown).starts_with("not verified: "), "{shown}");
         assert_eq!(
             shown.matches(&embed::release_line()).count(),
             1,
@@ -751,7 +750,7 @@ mod tests {
         let _ex = a_live_session(&serve::output_in(variant.as_path(), Host::Hook));
         let (code, shown) = ran(&b, "verify", &["--variant", "DCS.openbeta"]);
         assert_eq!(code, 0, "{shown}");
-        assert_eq!(last(&shown), "verified", "{shown}");
+        assert!(first(&shown).starts_with("verified: "), "{shown}");
     }
 
     #[test]
@@ -767,7 +766,7 @@ mod tests {
             &["--variant", "DCS.openbeta", "--host", "export"],
         );
         assert_eq!(code, 0, "{shown}");
-        assert_eq!(last(&shown), "verified", "{shown}");
+        assert!(first(&shown).starts_with("verified: "), "{shown}");
         let (code, shown) = ran(&b, "verify", &["--variant", "DCS.openbeta"]);
         assert_eq!(code, 1, "the hook's session is not there: {shown}");
     }

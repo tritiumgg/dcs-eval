@@ -125,6 +125,10 @@ fn spawned(args: &[&str]) -> (i32, String) {
     )
 }
 
+fn first(shown: &str) -> &str {
+    shown.lines().next().unwrap_or("")
+}
+
 fn last(shown: &str) -> &str {
     shown.trim_end().lines().last().unwrap_or("")
 }
@@ -176,7 +180,7 @@ fn installer_the_binary_installs_verifies_and_uninstalls() {
         "DCS.openbeta",
     ]);
     assert_eq!(code, 0, "{shown}");
-    assert_eq!(last(&shown), "verified", "{shown}");
+    assert!(first(&shown).starts_with("verified: "), "{shown}");
     drop(ex);
 
     let (code, shown) = spawned(&[

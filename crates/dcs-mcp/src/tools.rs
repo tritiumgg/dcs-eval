@@ -839,7 +839,7 @@ mod tests {
             "a report is not a refusal: {rendered}"
         );
         assert!(
-            rendered.contains("hook: not there"),
+            rendered.contains("PROBLEM  hook"),
             "the install half is reported: {rendered}"
         );
         assert!(

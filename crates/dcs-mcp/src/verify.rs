@@ -36,6 +36,10 @@ use crate::embed;
 use crate::export_line;
 use crate::install::Executor;
 
+mod render;
+
+pub use render::{Detail, render, render_session};
+
 /// What was at the hook's name, as far as its hash can say.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Hook {
@@ -209,7 +213,11 @@ pub struct Report {
     /// The release this report was taken against, as one line. For every
     /// caller but a test that is the build this binary carries.
     pub release: String,
+    /// Where the hook was looked for.
+    pub hook_path: PathBuf,
     pub hook: Hook,
+    /// Where `Export.lua` was looked for.
+    pub export_path: PathBuf,
     pub line: Line,
     /// What is readable of the executor session, taken by the same reader
     /// `dcs_status` uses, so the two can never disagree about the same two
@@ -231,97 +239,10 @@ impl Report {
     }
 }
 
+/// The full report: what `verify --verbose`, `status` and `dcs_status` print.
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        writeln!(f, "{}", self.release)?;
-        writeln!(f, "variant: {}", self.variant.display())?;
-        match &self.hook {
-            Hook::Absent => writeln!(f, "hook: not there")?,
-            Hook::Ours {
-                sha256,
-                current: true,
-            } => writeln!(
-                f,
-                "hook: ours, sha256 {sha256}, the release this binary carries"
-            )?,
-            Hook::Ours {
-                sha256,
-                current: false,
-            } => writeln!(f, "hook: ours, sha256 {sha256}, an older release")?,
-            Hook::Foreign { sha256 } => writeln!(f, "hook: sha256 {sha256}, never shipped by us")?,
-            Hook::Unreadable { why } => writeln!(f, "hook: could not be read: {why}")?,
-        }
-        match &self.line {
-            Line::Absent => writeln!(f, "Export.lua: no line loading the executor")?,
-            Line::Once => writeln!(f, "Export.lua: one line loading the executor")?,
-            Line::Repeated { count } => writeln!(f, "Export.lua: {count} such lines")?,
-            Line::NoFile => writeln!(f, "Export.lua: not there")?,
-            Line::Unreadable { why } => writeln!(f, "Export.lua: would not read: {why}")?,
-        }
-        writeln!(f, "{}: {}", self.gate.path.display(), gate_file(&self.gate))?;
-        writeln!(
-            f,
-            "net.allow_unsafe_api: {}",
-            written(&self.gate.unsafe_api)
-        )?;
-        writeln!(
-            f,
-            "net.allow_dostring_in: {}",
-            written(&self.gate.dostring_in)
-        )?;
-        match &self.session.session {
-            None => writeln!(f, "session: none published")?,
-            Some(session) => {
-                writeln!(
-                    f,
-                    "session: {} pid {}, {}",
-                    session.stamp, session.pid, session.process
-                )?;
-                match (&session.beat, &session.leftover) {
-                    (None, Some(stamp)) => writeln!(
-                        f,
-                        "heartbeat: none written this session, so nothing has armed it; \
-                         the file there is {stamp}'s, from before this session loaded"
-                    )?,
-                    (None, None) => {
-                        writeln!(f, "heartbeat: none written, so nothing has armed it")?;
-                    }
-                    (Some(beat), _) => {
-                        writeln!(f, "heartbeat: phase {}, {}", beat.phase, beat.age)?;
-                    }
-                }
-            }
-        }
-        writeln!(f, "app_version: {}", self.app_version)?;
-        for problem in &self.problems {
-            writeln!(f, "problem: {problem}")?;
-        }
-        for problem in &self.session.problems {
-            writeln!(f, "problem: {problem}")?;
-        }
-        let found = self.problems.len() + self.session.problems.len();
-        if found == 0 {
-            f.write_str("verified")
-        } else {
-            write!(f, "not verified: {found} found")
-        }
-    }
-}
-
-/// How the policy-gate file itself read, in one phrase.
-fn gate_file(gate: &Gate) -> String {
-    match &gate.file {
-        GateFile::Absent => "not there, so neither key is set".to_owned(),
-        GateFile::Read => "read".to_owned(),
-        GateFile::Unreadable { why } => format!("would not read: {why}"),
-    }
-}
-
-/// A key as it is written, or the fact that it is not written at all.
-fn written(value: &Option<String>) -> String {
-    match value {
-        Some(text) => format!("{text}, as written"),
-        None => "not set in the file".to_owned(),
+        f.write_str(&render(self, Detail::Full))
     }
 }
 
@@ -377,7 +298,9 @@ pub fn verify_at(
         // embedded one regardless: a headline naming a build no part of
         // the report under it was taken against is worse than none.
         release: embed::release_line_of(release.name, release.sha256),
+        hook_path: hooks.join(release.name),
         hook,
+        export_path: export,
         line,
         session,
         app_version,
@@ -1022,10 +945,16 @@ mod tests {
             report.verified(),
             "a build that differs from the one measured is a difference, not a refusal"
         );
+        let rendered = rendered(&report);
         assert!(
-            rendered(&report).ends_with("verified"),
-            "and the report a user reads still says so: {}",
-            rendered(&report)
+            rendered.starts_with("verified: "),
+            "and the report a user reads still says so: {rendered}"
+        );
+        assert!(
+            rendered.contains(
+                "  note     DCS version   2.9.10.1234 (dcs-eval was tested on 2.9.29.27278)"
+            ),
+            "the difference is a note: {rendered}"
         );
     }
 
@@ -1175,10 +1104,19 @@ mod tests {
             "{:?}",
             report.problems
         );
+        let rendered = rendered(&report);
         assert!(
-            rendered(&report).contains("hook: could not be read"),
-            "{}",
-            rendered(&report)
+            rendered.contains(
+                "  PROBLEM  hook          Scripts\\Hooks\\DcsEvalExecutor.lua could not be read: "
+            ),
+            "{rendered}"
+        );
+        assert!(
+            rendered.contains(&render::detail_line(
+                "hook",
+                &format!("{}, could not be read: ", hook.display())
+            )),
+            "{rendered}"
         );
     }
 
@@ -1257,7 +1195,7 @@ mod tests {
         assert_eq!(beat.phase, "simulation");
         assert!(beat.belongs, "and it is this session's");
         assert!(
-            rendered(&report).contains("heartbeat: phase simulation"),
+            rendered(&report).contains(&render::detail_line("heartbeat", "phase simulation, ")),
             "the phase reaches the line a user reads: {}",
             rendered(&report)
         );
@@ -1285,10 +1223,11 @@ mod tests {
         assert_eq!(session.stamp, ex.stamp);
         assert_eq!(session.leftover.as_deref(), Some("1700000000-999"));
         assert!(
-            rendered(&report).contains(
-                "heartbeat: none written this session, so nothing has armed it; \
+            rendered(&report).contains(&render::detail_line(
+                "heartbeat",
+                "none written this session, so nothing has armed it; \
                  the file there is 1700000000-999's, from before this session loaded"
-            ),
+            )),
             "{}",
             rendered(&report)
         );
