@@ -14,25 +14,36 @@ pub mod ledger;
 // Every row the instrument knows of, printed measured or not.
 pub mod report;
 
+// Round trips, the executor's own cost of each, and replies per frame.
+mod rtt;
+
 use std::io::Write;
 use std::path::PathBuf;
 
+use crate::register::DataDir;
 use crate::serve::{self, Host, Serve, host_of};
 use crate::tools;
+use ledger::{Entry, Session};
 
 /// The usage line, which is also the list of phases this verb answers to.
-pub const USAGE: &str = "usage: dcs-mcp live report\n       \
-     --saved-games <dir> --variant <name> [--host hook|export] [--data-dir <dir>]";
+pub const USAGE: &str = "usage: dcs-mcp live rtt | report\n       \
+     --saved-games <dir> --variant <name> [--host hook|export] [--data-dir <dir>]\n       \
+     [--wait-seconds <n>] [--count <n>] [--label <word>]";
+
+/// How many requests `rtt` times per state, each way, unless told otherwise.
+const DEFAULT_COUNT: usize = 200;
 
 /// Which phase a line asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
+    Rtt,
     Report,
 }
 
 /// The phase a word names, or nothing where it names none.
 fn phase_of(word: &str) -> Option<Phase> {
     match word {
+        "rtt" => Some(Phase::Rtt),
         "report" => Some(Phase::Report),
         _ => None,
     }
@@ -42,6 +53,10 @@ fn phase_of(word: &str) -> Option<Phase> {
 struct Parsed {
     phase: Phase,
     opts: serve::Options,
+    wait_seconds: Option<u64>,
+    count: usize,
+    /// The scene the maintainer says the game is in, recorded on each entry.
+    label: Option<String>,
 }
 
 /// Fill a slot that has not been filled, or name the flag that filled it.
@@ -55,6 +70,13 @@ fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
     Ok(())
 }
 
+/// A count, refused by name rather than defaulted where it will not parse.
+fn number(flag: &str, given: &str) -> Result<u64, String> {
+    given
+        .parse()
+        .map_err(|_| format!("{flag} wants a whole number, not {given}"))
+}
+
 /// Read a command line, `live` and the phase first.
 fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     let mut args = args.into_iter().peekable();
@@ -63,13 +85,16 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     }
     let word = args
         .next()
-        .ok_or_else(|| "live wants a phase: report".to_owned())?;
+        .ok_or_else(|| "live wants a phase: rtt or report".to_owned())?;
     let phase = phase_of(&word).ok_or_else(|| format!("live does not take {word}"))?;
 
     let mut saved_games = None;
     let mut variant = None;
     let mut host = None;
     let mut data_dir = None;
+    let mut wait_seconds = None;
+    let mut count = None;
+    let mut label = None;
     while let Some(arg) = args.next() {
         let mut value = |name: &str| {
             args.next()
@@ -93,6 +118,23 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
                 "--data-dir",
                 PathBuf::from(value("--data-dir")?),
             )?,
+            "--wait-seconds" if phase != Phase::Report => {
+                let given = value("--wait-seconds")?;
+                once(
+                    &mut wait_seconds,
+                    "--wait-seconds",
+                    number("--wait-seconds", &given)?,
+                )?
+            }
+            "--count" if phase == Phase::Rtt => {
+                let given = value("--count")?;
+                let n = number("--count", &given)?;
+                if n == 0 {
+                    return Err("--count wants at least 1".to_owned());
+                }
+                once(&mut count, "--count", n)?
+            }
+            "--label" if phase != Phase::Report => once(&mut label, "--label", value("--label")?)?,
             other => return Err(format!("live {word} does not take {other}")),
         }
     }
@@ -104,7 +146,25 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
             host: host.unwrap_or(Host::Hook),
             data_dir,
         },
+        wait_seconds,
+        count: count.map_or(DEFAULT_COUNT, |n| usize::try_from(n).unwrap_or(usize::MAX)),
+        label,
     })
+}
+
+/// Append each entry to the ledger and print it, stopping at the first that
+/// will not append: a figure printed and not kept is one the report will
+/// call unmeasured.
+fn recorded(entries: &[Entry], data: &DataDir, out: &mut dyn Write) -> Result<i32, String> {
+    for e in entries {
+        if let Err(why) = ledger::append(data, e) {
+            writeln!(out, "refused: {}: {why}", data.live_path().display())
+                .map_err(|why| why.to_string())?;
+            return Ok(1);
+        }
+        writeln!(out, "{}: {}", e.row, e.said).map_err(|why| why.to_string())?;
+    }
+    Ok(0)
 }
 
 /// Run one phase and print what it came to.
@@ -114,28 +174,41 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
 /// for a line that would not parse.
 pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Result<i32, String> {
     let parsed = parse(args)?;
-    let serve = Serve::new(parsed.opts);
+    let serve = Serve::new(parsed.opts.clone());
+    let refused = |out: &mut dyn Write, why: String| {
+        writeln!(out, "refused: {why}")
+            .map(|()| 1)
+            .map_err(|why| why.to_string())
+    };
     let data = match tools::data_dir(&serve) {
         Ok(data) => data,
-        Err(why) => {
-            writeln!(out, "refused: {why}").map_err(|why| why.to_string())?;
-            return Ok(1);
-        }
+        Err(why) => return refused(out, why.to_string()),
     };
-    match parsed.phase {
-        Phase::Report => {
-            let (entries, malformed) = match ledger::read(&data) {
-                Ok(read) => read,
-                Err(why) => {
-                    writeln!(out, "refused: {}: {why}", data.live_path().display())
-                        .map_err(|why| why.to_string())?;
-                    return Ok(1);
-                }
-            };
-            report::print(&entries, &malformed, out).map_err(|why| why.to_string())?;
-            Ok(i32::from(!malformed.is_empty()))
-        }
+    if parsed.phase == Phase::Report {
+        let (entries, malformed) = match ledger::read(&data) {
+            Ok(read) => read,
+            Err(why) => return refused(out, format!("{}: {why}", data.live_path().display())),
+        };
+        report::print(&entries, &malformed, out).map_err(|why| why.to_string())?;
+        return Ok(i32::from(!malformed.is_empty()));
     }
+    let client = match serve.client() {
+        Ok(client) => client,
+        Err(why) => return refused(out, format!("no session: {why}")),
+    };
+    let h = client.handshake();
+    let session = Session {
+        stamp: h.stamp.clone(),
+        host: h.host.clone(),
+        app_version: h.app_version.clone(),
+        scene: parsed.label.clone(),
+    };
+    let upto = tools::waiting(parsed.wait_seconds);
+    let entries = match parsed.phase {
+        Phase::Rtt => rtt::run(h, &session, parsed.count, upto),
+        Phase::Report => Vec::new(),
+    };
+    recorded(&entries, &data, out)
 }
 
 #[cfg(test)]

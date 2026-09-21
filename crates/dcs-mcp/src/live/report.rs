@@ -81,14 +81,17 @@ const NONE: &str = "nothing recorded";
 
 /// Every row, in the order the report prints them.
 pub fn rows() -> Vec<Row> {
-    let rtt = Absent::NotBuilt("no phase takes it yet");
+    let rtt = |host: &str| match host {
+        "export" => Absent::Run("rtt --host export"),
+        _ => Absent::Run("rtt"),
+    };
     let mut rows = Vec::new();
     for (host, state) in STATES {
         rows.push(row(
             format!("round_trip.{host}.{state}"),
             format!("round trip, {state} ({host} host)"),
             ROUND_TRIP,
-            rtt,
+            rtt(host),
         ));
     }
     for (host, state) in STATES {
@@ -96,7 +99,7 @@ pub fn rows() -> Vec<Row> {
             format!("cpu_ms.{host}.{state}"),
             format!("cpu_ms per reply, {state} ({host} host)"),
             NO_COST,
-            rtt,
+            rtt(host),
         ));
     }
     for (host, state) in STATES {
@@ -104,10 +107,15 @@ pub fn rows() -> Vec<Row> {
             format!("per_tick.{host}.{state}"),
             format!("replies per tick at W=8, {state} ({host} host)"),
             NO_PER_TICK,
-            rtt,
+            rtt(host),
         ));
     }
-    rows.push(row("generation", "seven-state generation", GENERATION, rtt));
+    rows.push(row(
+        "generation",
+        "seven-state generation",
+        GENERATION,
+        rtt("hook"),
+    ));
 
     let dormant = Absent::NotBuilt("no phase takes it yet");
     rows.push(row(
@@ -142,7 +150,7 @@ pub fn rows() -> Vec<Row> {
         "missionscripting.a_do_script",
         "missionscripting through a_do_script, a mission loaded",
         NONE,
-        rtt,
+        rtt("hook"),
     ));
     rows.push(row(
         "missionscripting.s17",

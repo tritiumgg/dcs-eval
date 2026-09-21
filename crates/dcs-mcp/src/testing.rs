@@ -96,6 +96,29 @@ pub(crate) fn ran(s: &mut Standin, line: Vec<String>) -> (i32, String) {
     (code, shown)
 }
 
+/// Anything that writes to a sink run to completion, with the stand-in
+/// ticked from this thread until it has answered: `ran` for a caller that is
+/// not the read-and-eval verbs.
+pub(crate) fn driven(s: &mut Standin, f: impl FnOnce(&mut Vec<u8>) -> i32 + Send) -> (i32, String) {
+    let (code, sink) = std::thread::scope(|scope| {
+        let running = scope.spawn(|| {
+            let mut sink: Vec<u8> = Vec::new();
+            let code = f(&mut sink);
+            (code, sink)
+        });
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !running.is_finished() && Instant::now() < deadline {
+            s.tick();
+            std::thread::sleep(Duration::from_millis(25));
+        }
+        running.join().expect("the phase does not panic")
+    });
+    let shown = String::from_utf8_lossy(&sink)
+        .trim_end_matches('\n')
+        .to_owned();
+    (code, shown)
+}
+
 /// The single reply file the stand-in published, read off the disk.
 pub(crate) fn published(s: &Standin) -> Vec<u8> {
     let mut found: Vec<PathBuf> = fs::read_dir(s.res())
