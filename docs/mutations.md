@@ -388,6 +388,24 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +         Some(b) if b.armed || !b.armed => {
 ```
 
+### e2e/stamp-change-not-superseded
+
+- task: T54
+- command: `mise exec -- cargo test -p dcs-eval e2e`
+- reddens: `a_request_to_a_session_that_restarted_is_read_as_superseded`
+- note: the round trip's `superseded` half, which T17's row defers and which
+  cannot be filed under a Stage 2 row; it is filed here because the verdict it
+  breaks is this row's `wait`. The shipped executor is loaded twice over one
+  box, as DCS relaunched, and the first session's process has exited. With the
+  re-read stamp ignored, the table falls through to the pid: the observed
+  panic was `superseded, not Dead { id: "0000000001-ping" }`, at once, while
+  the ping test stayed green.
+
+```sweep-edit crates/dcs-eval/src/wait.rs
+-     if handshake.stamp != s.stamp {
++     if false && handshake.stamp != s.stamp {
+```
+
 ### status/round-trip-issued
 
 - task: T32
@@ -1568,7 +1586,8 @@ an entry here like any other, and both figures move.
 - breakdown: T01–T06 one each, 6; T07 three refusals, 3; T08, T09, T10 two
   each, 6; T11 one, 1; T12 one, 1; T13 two, 2; T14, T15 one each, 2; T16 two
   (the comment byte uncounted), 2; T17 two, 2 — the `superseded` half its cell
-  defers is not counted, because no row has claimed it yet.
+  defers is swept under T54 as `e2e/stamp-change-not-superseded` and counted
+  there.
 
 ### out/stages-7-to-9
 
