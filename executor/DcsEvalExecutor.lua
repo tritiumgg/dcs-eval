@@ -564,6 +564,15 @@ local function ensure(lfs, path)
   return true
 end
 
+-- Whether a call into the host's `io` or `os` refused: no success, and a
+-- message. A bare nil is not a refusal, because DCS's library answers some
+-- successes with nothing at all; see `publish`, where the first live load
+-- found it. Where it matters whether a call that answered nothing did
+-- anything, the caller asks the disk.
+local function refused(ok, why)
+  return not ok and why ~= nil
+end
+
 -- The events log, rotated at load: `events.log` becomes `events.prev.log`
 -- and this session starts an empty one, so what a supervisor reads after
 -- a crash is this launch's and the launch before it, and the file has a
@@ -583,7 +592,7 @@ local function rotate(lfs, os, E)
   local prev = E.output .. SEP .. "events.prev.log"
   os.remove(prev)
   local ok, why = os.rename(E.events, prev)
-  if not ok then
+  if refused(ok, why) then
     E.events_left = E.events .. ": " .. tostring(why)
   end
 end
@@ -614,6 +623,7 @@ local function remove_tree(lfs, os, path, depth)
       ok, at, why = remove_tree(lfs, os, entry, depth + 1)
     else
       ok, why = os.remove(entry)
+      ok = not refused(ok, why)
       at = entry
     end
     if not ok then
@@ -792,27 +802,49 @@ end
 -- buffered write can fail only at the close.
 --
 -- `true`, or nil and what refused.
+--
+-- What the calls answer is read the way DCS's own `io` and `os` answer, not
+-- the way Lua 5.1's do: at the first live load a publish refused with no
+-- reason, which Lua 5.1's `io` never gives, so DCS answers a success in at
+-- least one of these calls with nothing at all. Both agree on a failure —
+-- nil and a message — so only that is a refusal. A call that answered true
+-- is taken at its word, as it always was; one that answered nothing has
+-- said nothing, and the disk settles it: the final name, stat'd, holding
+-- every byte written, and the `.tmp` gone, because a rename that did
+-- nothing leaves the old file under the final name, perhaps at the same
+-- size. A call that answered nothing and did nothing is caught there, and a
+-- host whose calls all answer pays no stat for it.
 local function publish(path, bytes)
-  local io, os = rawget(_G, "io"), rawget(_G, "os")
+  local io, os, lfs = rawget(_G, "io"), rawget(_G, "os"), rawget(_G, "lfs")
   local tmp = path .. ".tmp"
   local fh, why = io.open(tmp, "wb")
   if not fh then
     return nil, tmp .. ": " .. tostring(why)
   end
-  local ok
+  local ok, silent
   ok, why = fh:write(bytes)
-  if ok then
-    ok, why = fh:close()
-  else
+  if refused(ok, why) then
     fh:close()
+  else
+    silent = not ok
+    ok, why = fh:close()
   end
-  if ok then
+  if not refused(ok, why) then
+    silent = silent or not ok
     os.remove(path)
     ok, why = os.rename(tmp, path)
   end
-  if not ok then
+  if refused(ok, why) then
     os.remove(tmp)
     return nil, path .. ": " .. tostring(why)
+  end
+  local asked = silent or not ok
+  if asked and (lfs.attributes(path, "size") ~= #bytes or lfs.attributes(tmp, "mode") ~= nil) then
+    -- What is under the final name, if anything, is not what was written,
+    -- and a reader must not take it for the file.
+    os.remove(path)
+    os.remove(tmp)
+    return nil, path .. ": nothing refused, but the " .. #bytes .. " bytes written did not land"
   end
   return true
 end
@@ -881,7 +913,9 @@ end
 -- read would refuse instead, and the bytes would be withheld either way.
 -- A file read whole that cannot then be removed is `error`, and its bytes
 -- are withheld, because a chunk that runs now and again at the next
--- listing is the case the remove exists to prevent.
+-- listing is the case the remove exists to prevent. A remove that answers
+-- nothing, as DCS's `os` may, has said nothing, so the disk is asked
+-- whether the file is gone; `publish` says where that was found.
 --
 -- The bytes, or nil, a status and a message.
 local function take(path)
@@ -904,8 +938,9 @@ local function take(path)
   fh:close()
   local ok
   ok, why = os.remove(path)
-  if not ok then
-    return nil, "error", path .. " was read and could not be removed: " .. tostring(why)
+  if refused(ok, why) or (not ok and lfs.attributes(path, "mode") ~= nil) then
+    return nil, "error", path .. " was read and could not be removed: "
+      .. tostring(why or "it is still there")
   end
   return bytes
 end
@@ -1080,12 +1115,12 @@ record = function(line)
   if fh then
     local ok
     ok, why = fh:write(line .. "\n")
-    if ok then
-      ok, why = fh:close()
-    else
+    if refused(ok, why) then
       fh:close()
+    else
+      ok, why = fh:close()
     end
-    if ok then
+    if not refused(ok, why) then
       return true
     end
   end

@@ -1486,7 +1486,7 @@ not cover is printed by the sweep itself rather than left to be assumed.
   is the newest list line, the one holding the digest this binary carries.
 
 ```sweep-edit crates/dcs-mcp/src/embed.rs
--     "1c101edc81bef49c6160347395bcf1b3f67179e3db6798f18b1a91eedfef133f",
+-     "e8919849bd88232a4fe2ac6d3b3cfee6cce4e50d7544ecc478f6be1db54935eb",
 ```
 
 ### locate/ambiguity-picked

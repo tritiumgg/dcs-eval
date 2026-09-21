@@ -33,7 +33,7 @@ pub const EXECUTOR_FILE_NAME: &str = "DcsEvalExecutor.lua";
 
 /// The SHA-256 of `EXECUTOR`, written by hand so that it can be found wrong.
 pub const EXECUTOR_SHA256: &str =
-    "1c101edc81bef49c6160347395bcf1b3f67179e3db6798f18b1a91eedfef133f";
+    "e8919849bd88232a4fe2ac6d3b3cfee6cce4e50d7544ecc478f6be1db54935eb";
 
 /// Every set of bytes this project has ever embedded, newest last.
 ///
@@ -45,9 +45,11 @@ pub const SHIPPED: &[&str] = &[
     // The executor as first embedded: nothing removed a reply before the
     // session's directory went at the next load. Never tagged.
     "2a66399b06e4c14141179e3769d6180e9bf2e85ae27047a901c27d5f083ad871",
-    // Uncollected replies removed after 300 s, and what this binary
-    // carries today.
+    // Uncollected replies removed after 300 s.
     "1c101edc81bef49c6160347395bcf1b3f67179e3db6798f18b1a91eedfef133f",
+    // A success DCS's own io and os answer with nothing is not a refusal,
+    // and what this binary carries today.
+    "e8919849bd88232a4fe2ac6d3b3cfee6cce4e50d7544ecc478f6be1db54935eb",
 ];
 
 /// Whether a hook file with this hash is one this project put there.
