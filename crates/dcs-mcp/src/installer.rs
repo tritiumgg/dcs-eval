@@ -27,16 +27,21 @@ use crate::export_line::{self, Outcome};
 use crate::install::{self, Disposition, Executor, Placed};
 use crate::locate::{LocateError, SavedGames, Variant};
 use crate::register::DataDir;
+use crate::serve::{self, Host, host_of};
+use crate::uninstall::{self, LineOutcome, Removed};
+use crate::verify;
 
 /// The usage line, which is also the list of what this module answers to.
-pub const USAGE: &str = "usage: dcs-mcp install\n       \
-     [--saved-games <dir>] [--variant <name>] [--replace]\n       \
+pub const USAGE: &str = "usage: dcs-mcp install | verify | uninstall\n       \
+     [--saved-games <dir>] [--variant <name>] [--replace] [--host hook|export]\n       \
      [--data-dir <dir>]";
 
-/// What was asked for, and never a word `cli` owns.
+/// What was asked for. One of three, and never a word `cli` owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verb {
     Install,
+    Verify,
+    Uninstall,
 }
 
 impl Verb {
@@ -44,6 +49,8 @@ impl Verb {
     fn word(self) -> &'static str {
         match self {
             Verb::Install => "install",
+            Verb::Verify => "verify",
+            Verb::Uninstall => "uninstall",
         }
     }
 }
@@ -52,6 +59,8 @@ impl Verb {
 fn verb_of(word: &str) -> Option<Verb> {
     match word {
         "install" => Some(Verb::Install),
+        "verify" => Some(Verb::Verify),
+        "uninstall" => Some(Verb::Uninstall),
         _ => None,
     }
 }
@@ -69,6 +78,7 @@ struct Parsed {
     saved_games: Option<PathBuf>,
     variant: Option<String>,
     replace: bool,
+    host: Host,
     data_dir: Option<PathBuf>,
 }
 
@@ -84,7 +94,9 @@ fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
 /// Read a command line, the verb first.
 ///
 /// Each verb takes only the flags it acts on, and refuses the rest by name
-/// rather than accepting and ignoring them: `--replace` is `install`'s alone.
+/// rather than accepting and ignoring them: `--replace` is `install`'s alone,
+/// `--host` is `verify`'s, and `verify` reads no register, so it takes no
+/// `--data-dir`.
 fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     let mut args = args.into_iter();
     let word = args.next().ok_or_else(|| "a verb is wanted".to_owned())?;
@@ -92,6 +104,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
 
     let mut saved_games = None;
     let mut variant = None;
+    let mut host = None;
     let mut data_dir = None;
     let mut replace = false;
 
@@ -124,6 +137,15 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
                 }
                 replace = true;
             }
+            "--host" if verb == Verb::Verify => {
+                let given = value("--host")?;
+                let picked = host_of(&given)
+                    .ok_or_else(|| format!("--host is hook or export, not {given}"))?;
+                once(&mut host, "--host", picked)?
+            }
+            "--data-dir" if verb == Verb::Verify => {
+                return Err("verify does not take --data-dir: it reads no register".to_owned());
+            }
             "--data-dir" => once(
                 &mut data_dir,
                 "--data-dir",
@@ -138,6 +160,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
         saved_games,
         variant,
         replace,
+        host: host.unwrap_or(Host::Hook),
         data_dir,
     })
 }
@@ -250,6 +273,58 @@ fn installing(parsed: &Parsed, out: &mut dyn Write, exe: &Path) -> io::Result<i3
     Ok(0)
 }
 
+/// Report the installation and the session, and write nothing.
+///
+/// The report opens with the release line itself, so it is not printed here
+/// a second time; a variant that cannot be found prints it, and then why.
+fn verifying(parsed: &Parsed, out: &mut dyn Write) -> io::Result<i32> {
+    let (_, variant) = match located(parsed) {
+        Ok(found) => found,
+        Err(why) => {
+            writeln!(out, "{}", embed::release_line())?;
+            return stopped(out, "not verified", &why);
+        }
+    };
+    let report = verify::verify(
+        &variant.path,
+        &serve::output_in(variant.path.as_path(), parsed.host),
+    );
+    writeln!(out, "{report}")?;
+    Ok(i32::from(!report.verified()))
+}
+
+/// Take back what `install` put in, and put back what it moved aside.
+///
+/// A file at our name that we did not ship is left and named, and that is a
+/// report rather than a failure: the verb did everything it may do.
+fn uninstalling(parsed: &Parsed, out: &mut dyn Write) -> io::Result<i32> {
+    const HEAD: &str = "not uninstalled";
+    writeln!(out, "{}", embed::release_line())?;
+    let (_, variant) = match located(parsed) {
+        Ok(found) => found,
+        Err(why) => return stopped(out, HEAD, &why),
+    };
+    writeln!(out, "variant: {}", variant.path)?;
+    let data = match data_for(parsed, &variant) {
+        Ok(data) => data,
+        Err(why) => return stopped(out, HEAD, &why),
+    };
+    let removed = match uninstall::uninstall(
+        SystemTime::now(),
+        &variant.path,
+        &data,
+        &Executor::embedded(),
+    ) {
+        Ok(removed) => removed,
+        Err(why) => return stopped(out, HEAD, &why.to_string()),
+    };
+    for line in said_removed(&removed, &export_line::path(&variant.path)) {
+        writeln!(out, "{line}")?;
+    }
+    writeln!(out, "uninstalled")?;
+    Ok(0)
+}
+
 /// The parked directories, on one line.
 fn listed(dirs: &[PathBuf]) -> String {
     dirs.iter()
@@ -297,6 +372,38 @@ fn said_line(outcome: &Outcome, file: &Path) -> String {
             format!("Export.lua: {file}: the line was already there; nothing written")
         }
     }
+}
+
+/// What an uninstall took, what it left, and what it put back, a line each.
+fn said_removed(removed: &Removed, file: &Path) -> Vec<String> {
+    let mut said = Vec::new();
+    match &removed.hook {
+        Some(hook) => said.push(format!("hook: {}: removed", hook.display())),
+        None if removed.left.is_empty() => said.push("hook: not there".to_owned()),
+        None => {}
+    }
+    for left in &removed.left {
+        said.push(format!("left: {left}"));
+    }
+    let file = file.display();
+    said.push(match &removed.line {
+        LineOutcome::Removed { parked, emptied } => {
+            let mut line = format!(
+                "Export.lua: {file}: the line taken out, the file as found parked in {}",
+                parked.display()
+            );
+            if *emptied {
+                line.push_str("; nothing else was in it, so it is left empty");
+            }
+            line
+        }
+        LineOutcome::NotThere => format!("Export.lua: {file}: no line of ours in it"),
+        LineOutcome::NoFile => "Export.lua: not there".to_owned(),
+    });
+    for restored in &removed.restored {
+        said.push(format!("restored: {}", restored.display()));
+    }
+    said
 }
 
 /// The data directory the `serve` line names: the one this line named, and
@@ -347,6 +454,8 @@ pub fn run<I: IntoIterator<Item = String>>(
     let parsed = parse(args)?;
     let done = match parsed.verb {
         Verb::Install => installing(&parsed, out, exe),
+        Verb::Verify => verifying(&parsed, out),
+        Verb::Uninstall => uninstalling(&parsed, out),
     };
     done.map_err(|why| why.to_string())
 }
@@ -360,7 +469,7 @@ mod tests {
     use dcs_eval::paths;
     use dcs_eval::sha256::{digest, hex};
 
-    use crate::testing::{Sandbox, snapshot};
+    use crate::testing::{Sandbox, a_live_session, snapshot};
 
     /// The executable the snippet names. Never run; only printed.
     const EXE: &str = r"C:\tools\dcs-mcp.exe";
@@ -614,6 +723,77 @@ mod tests {
     }
 
     #[test]
+    fn verify_exits_one_when_anything_is_found() {
+        let b = one_variant();
+        let before = snapshot(&b.path);
+        let (code, shown) = ran(&b, "verify", &["--variant", "DCS.openbeta"]);
+        assert_eq!(code, 1, "{shown}");
+        assert!(last(&shown).starts_with("not verified"), "{shown}");
+        assert_eq!(
+            shown.lines().next(),
+            Some(embed::release_line().as_str()),
+            "{shown}"
+        );
+        assert_eq!(
+            shown.matches(&embed::release_line()).count(),
+            1,
+            "the release line is printed once: {shown}"
+        );
+        assert_eq!(snapshot(&b.path), before, "verify wrote something");
+    }
+
+    #[test]
+    fn verify_exits_nought_on_a_healthy_install_with_a_session() {
+        let b = one_variant();
+        let (code, shown) = ran(&b, "install", &["--variant", "DCS.openbeta"]);
+        assert_eq!(code, 0, "{shown}");
+        let variant = real(&b.join("saved/DCS.openbeta"));
+        let _ex = a_live_session(&serve::output_in(variant.as_path(), Host::Hook));
+        let (code, shown) = ran(&b, "verify", &["--variant", "DCS.openbeta"]);
+        assert_eq!(code, 0, "{shown}");
+        assert_eq!(last(&shown), "verified", "{shown}");
+    }
+
+    #[test]
+    fn verify_reads_the_session_of_the_host_it_is_given() {
+        let b = one_variant();
+        let (code, shown) = ran(&b, "install", &["--variant", "DCS.openbeta"]);
+        assert_eq!(code, 0, "{shown}");
+        let variant = real(&b.join("saved/DCS.openbeta"));
+        let _ex = a_live_session(&serve::output_in(variant.as_path(), Host::Export));
+        let (code, shown) = ran(
+            &b,
+            "verify",
+            &["--variant", "DCS.openbeta", "--host", "export"],
+        );
+        assert_eq!(code, 0, "{shown}");
+        assert_eq!(last(&shown), "verified", "{shown}");
+        let (code, shown) = ran(&b, "verify", &["--variant", "DCS.openbeta"]);
+        assert_eq!(code, 1, "the hook's session is not there: {shown}");
+    }
+
+    #[test]
+    fn uninstall_puts_the_scripts_tree_back() {
+        let b = one_variant();
+        put(
+            &scripts(&b, "DCS.openbeta").join("Export.lua"),
+            b"-- Tacview\n",
+        );
+        put(
+            &scripts(&b, "DCS.openbeta").join("Hooks/Other.lua"),
+            b"-- other\n",
+        );
+        let before = snapshot(&scripts(&b, "DCS.openbeta"));
+        let (code, shown) = ran(&b, "install", &["--variant", "DCS.openbeta"]);
+        assert_eq!(code, 0, "{shown}");
+        let (code, shown) = ran(&b, "uninstall", &["--variant", "DCS.openbeta"]);
+        assert_eq!(code, 0, "{shown}");
+        assert_eq!(last(&shown), "uninstalled", "{shown}");
+        assert!(shown.contains(": removed\n"), "{shown}");
+        assert_eq!(snapshot(&scripts(&b, "DCS.openbeta")), before);
+    }
+
+    #[test]
     fn flags_a_verb_does_not_take_are_refused_by_name() {
         for (line, named) in [
             (&["install", "--host", "hook"][..], "--host"),
@@ -623,9 +803,29 @@ mod tests {
             ),
             (&["install", "extra"][..], "extra"),
             (&["install", "--variant"][..], "--variant"),
+            (&["verify", "--replace"][..], "--replace"),
+            (&["uninstall", "--replace"][..], "--replace"),
+            (&["uninstall", "--host", "hook"][..], "--host"),
+            (&["verify", "--data-dir", "x"][..], "--data-dir"),
         ] {
             let why = refused(line);
             assert!(why.contains(named), "{line:?}: {why}");
         }
+    }
+
+    #[test]
+    fn uninstall_names_a_foreign_hook_and_leaves_it() {
+        let b = one_variant();
+        put(&hook(&b, "DCS.openbeta"), FOREIGN);
+        let (code, shown) = ran(&b, "uninstall", &["--variant", "DCS.openbeta"]);
+        assert_eq!(code, 0, "{shown}");
+        assert!(
+            shown.lines().any(|line| line.starts_with("left: ")),
+            "{shown}"
+        );
+        assert_eq!(
+            fs::read(hook(&b, "DCS.openbeta")).expect("still there"),
+            FOREIGN
+        );
     }
 }
