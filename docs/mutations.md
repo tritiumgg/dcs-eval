@@ -782,6 +782,29 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +   began = nil
 ```
 
+### uncollected/disarming-frame-skips-the-sweep
+
+- task: T64
+- command: `mise exec -- lua5.1 tools/harness.lua executor/uncollected`
+- reddens: `disarm: the frame that went back to sleep removed the reply 300 s old`
+- note: the sweep moved below the quiet window and run only by a frame still
+  armed after it, so every armed frame sweeps but the one that disarms. This
+  is the half of the transition the specification sweeps "once at disarm"
+  on; the executor has it because the frame sweeps before it looks at the
+  window, so moving the call is enough to lose it.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   expire(now, clock, start)
+```
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   -- The beat, last of the frame, so the `ticks`, the phase and the last
++   if E.armed then
++     expire(now, clock, start)
++   end
++   -- The beat, last of the frame, so the `ticks`, the phase and the last
+```
+
 ---
 
 ## Stage 6 — the client library
