@@ -1,7 +1,7 @@
 //! A path the client will compare: resolved against the filesystem first,
 //! then tested for containment at a segment boundary.
 //!
-//! Everything the client refuses to write to, or read from, is decided by
+//! Everything the client refuses to write to or install into is decided by
 //! asking whether a path lies under a root — the install, the write
 //! directory, the `Logs` tree inside it. A textual answer to that question is
 //! wrong on Windows in three ways at once, and each of them has let a path

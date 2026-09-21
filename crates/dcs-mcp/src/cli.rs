@@ -692,7 +692,7 @@ mod tests {
 
         // Every wait is zero: nothing ticks the stand-in here, and a verb
         // that waited would only wait.
-        let cases: [(&[&str], &str); 5] = [
+        let cases: [(&[&str], &str); 6] = [
             (&["status"], "status"),
             (&["ping", "--wait-seconds", "0"], "pending"),
             (&["game-state", "--wait-seconds", "0"], ""),
@@ -702,25 +702,30 @@ mod tests {
             ),
             (
                 &["eval", "hook", "--file", "", "--wait-seconds", "0"],
+                "pending",
+            ),
+            (
+                &["eval", "hook", "--file", "<dir>", "--wait-seconds", "0"],
                 "refused",
             ),
         ];
         for (words, head) in cases {
             let path = chunk.to_string_lossy().into_owned();
-            // The file case's empty placeholder is the chunk's real path.
+            let dir = box_.path.to_string_lossy().into_owned();
+            // The file cases' placeholders: an empty one is the chunk's real
+            // path, published and not waited on, and `<dir>` is a directory,
+            // which the stat refuses before anything opens it.
             let mut line: Vec<String> = words
                 .iter()
-                .map(|word| {
-                    if word.is_empty() {
-                        path.clone()
-                    } else {
-                        (*word).to_owned()
-                    }
+                .map(|word| match *word {
+                    "" => path.clone(),
+                    "<dir>" => dir.clone(),
+                    _ => (*word).to_owned(),
                 })
                 .collect();
-            // The refused case is given somewhere to write, so that "it kept
-            // nothing" is a claim about the refusal rather than about a flag
-            // nobody passed.
+            // The file cases are given somewhere to write, so that "it kept
+            // nothing" is a claim about a pending and a refusal rather than
+            // about a flag nobody passed.
             if line.iter().any(|word| word == "--file") {
                 line.push("--out".to_owned());
                 line.push(kept.to_string_lossy().into_owned());
@@ -739,7 +744,8 @@ mod tests {
         }
         assert!(
             !kept.exists(),
-            "a refused eval --file published nothing, so it kept nothing"
+            "neither a pending nor a refused eval --file published a reply, so \
+             neither kept anything"
         );
 
         let mut sink: Vec<u8> = Vec::new();

@@ -152,10 +152,8 @@ impl SavedGames {
         self.judged(found.remove(0), install)
     }
 
-    /// The wrong-tree rules, in the order the client's own file judgement
-    /// takes them: the install first, because a caller whose roots are wide
-    /// enough to cover it should be told which rule really refused, and
-    /// containment last.
+    /// The wrong-tree rules: the install first, so that a variant lying under
+    /// both is told which rule really refused it, and containment last.
     ///
     /// Both are decided on the resolved path, which is what makes a
     /// junction out of `Saved Games` refusable: textually it is under the

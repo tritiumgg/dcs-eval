@@ -25,7 +25,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use dcs_eval::file::{self, Roots};
+use dcs_eval::file;
 use dcs_eval::game;
 use dcs_eval::paths::{self, Real};
 use dcs_eval::pipeline::{Pipeline, Spec};
@@ -94,13 +94,12 @@ fn client_for(serve: &Serve, host: Option<&str>) -> Result<Client, CallToolResul
     session_for(serve, host).map(|(_, client)| client)
 }
 
-/// The write directories the containment rules fire on: the one variant this
-/// server was pointed at.
+/// The write directory this server was pointed at, resolved: the variant
+/// `status` reports on, and the tree the data directory may not lie under.
 ///
-/// Dropped where it will not resolve, rather than refused. A directory that
-/// is not on the disk contains nothing, and with no root allowed every path
-/// is refused anyway — so refusing the call outright would replace an answer
-/// about the path with an answer about the install.
+/// Dropped where it will not resolve, rather than refused: a directory that
+/// is not on the disk contains nothing, and each caller says what it does
+/// without one.
 pub(crate) fn writedirs(serve: &Serve) -> Vec<Real> {
     let opts = serve.options();
     paths::resolve(&opts.saved_games.join(&opts.variant))
@@ -274,8 +273,9 @@ pub struct EvalFile {
     pub host: Option<String>,
     /// Which Lua state the chunk runs in.
     pub state: String,
-    /// The file the chunk is read from. It is read by this server and not by
-    /// DCS, and the path is judged before anything opens it.
+    /// The file the chunk is read from, wherever it lies. It is read by this
+    /// server and not by DCS, and one too big for a single request is
+    /// refused before it is opened.
     pub path: String,
     /// The instruction budget the chunk is bounded by.
     pub max_instructions: Option<u64>,
@@ -447,13 +447,6 @@ pub(crate) fn eval_file(
         Ok(real) => real,
         Err(why) => return refused(why.to_string()),
     };
-    // No root is allowed, because nothing configures one yet, and an empty
-    // allowed list admits nothing rather than everything. Every path is
-    // refused here until a root can be named.
-    let roots = match Roots::new(&[], &writedirs(serve), None) {
-        Ok(roots) => roots,
-        Err(why) => return refused(why.to_string()),
-    };
     let chunkname = match source::chunkname(&real) {
         Ok(name) => name,
         Err(why) => return refused(why.to_string()),
@@ -472,7 +465,7 @@ pub(crate) fn eval_file(
     // The same header slice measures the file and frames the request, so the
     // ceiling the file was admitted under is the one the request is really
     // written against.
-    let admitted = match file::check(&roots, client.handshake(), &headers, &real) {
+    let admitted = match file::check(client.handshake(), &headers, &real) {
         Ok(admitted) => admitted,
         Err(why) => return refused(why.to_string()),
     };
@@ -564,9 +557,9 @@ impl Serve {
         .answer)
     }
 
-    /// The same, over a file this server reads. The path is judged before any
-    /// byte of it is opened, and the answer carries where the bytes came from
-    /// and what they hashed to.
+    /// The same, over any file this server can read. Its size is judged
+    /// against the request ceiling before any byte is opened, and the answer
+    /// carries where the bytes came from and what they hashed to.
     #[tool]
     async fn dcs_eval_file(
         &self,
@@ -757,8 +750,8 @@ mod tests {
                 .call_tool(CallToolRequestParams::new(name).with_arguments(arguments(args)))
                 .await
                 .unwrap_or_else(|why| panic!("{name} is routed and answers: {why}"));
-            // Not whether it refused. With no root allowed and no game
-            // running, a refusal is the correct answer to several of these;
+            // Not whether it refused. With no game running, a refusal or a
+            // `pending` is the correct answer to several of these;
             // what is asserted is that something came back to say so.
             assert!(
                 !answer.content.is_empty(),

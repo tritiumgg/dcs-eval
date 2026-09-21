@@ -421,7 +421,7 @@ fn ceil_char(s: &str, at: usize) -> usize {
 #[cfg(test)]
 mod file_source {
     use super::*;
-    use crate::file::{Roots, check};
+    use crate::file::check;
     use crate::protocol;
     use crate::readers::Handshake;
     use crate::standin::Standin;
@@ -621,9 +621,8 @@ end
 
     // ---- the bytes --------------------------------------------------------
 
-    /// A box with a project root that is allowed and a session that has
-    /// published, so the ceiling comes off a handshake rather than out of a
-    /// constant.
+    /// A box with a project directory and a session that has published, so
+    /// the ceiling comes off a handshake rather than out of a constant.
     struct Scene {
         b: Sandbox,
         project: Real,
@@ -654,13 +653,9 @@ end
             &self.b
         }
 
-        fn roots(&self) -> Roots {
-            Roots::new(std::slice::from_ref(&self.project), &[], None).expect("the roots resolve")
-        }
-
-        /// A file under the allowed root, written and put through `check`.
-        /// The headers are the ones a caller really sends, the name among
-        /// them, so the block the reader reuses is a realistic one.
+        /// A file under the project directory, written and put through
+        /// `check`. The headers are the ones a caller really sends, the name
+        /// among them, so the block the reader reuses is a realistic one.
         fn admit(&self, name: &str, bytes: &[u8]) -> crate::file::Admitted {
             let path = self.write(name, bytes);
             let real = real(&path);
@@ -669,7 +664,7 @@ end
                 .iter()
                 .map(|(n, v)| (n.as_str(), v.as_str()))
                 .collect();
-            check(&self.roots(), &self.h, &refs, &real).expect("the file is admitted")
+            check(&self.h, &refs, &real).expect("the file is admitted")
         }
 
         /// The same, with the headers spelt by the caller rather than by
@@ -682,7 +677,7 @@ end
             headers: &[(&str, &str)],
         ) -> crate::file::Admitted {
             let path = self.write(name, bytes);
-            check(&self.roots(), &self.h, headers, &real(&path)).expect("the file is admitted")
+            check(&self.h, headers, &real(&path)).expect("the file is admitted")
         }
 
         fn headers(&self, real: &Real) -> Vec<(String, String)> {
@@ -853,7 +848,7 @@ end
             .iter()
             .map(|(n, v)| (n.as_str(), v.as_str()))
             .collect();
-        let admitted = check(&s.roots(), &s.h, &refs, &real).expect("admitted");
+        let admitted = check(&s.h, &refs, &real).expect("admitted");
         let source = read(&admitted).expect("it reads");
         let envelope = protocol::parse(source.request()).expect("the request parses");
         let sent: Vec<(String, String)> = envelope
@@ -954,7 +949,7 @@ end
             .len() as u64;
         let size = s.h.max_request_bytes - block;
         fs::write(&real_guess, vec![b'-'; size as usize]).expect("the fixture is written");
-        let admitted = check(&s.roots(), &s.h, &refs, &real).expect("exactly at the ceiling");
+        let admitted = check(&s.h, &refs, &real).expect("exactly at the ceiling");
         assert_eq!(admitted.headroom(), 0, "nothing is left over");
         let source = read(&admitted).expect("and it is read whole");
         assert_eq!(source.body().len() as u64, size, "nothing is truncated");
@@ -1042,7 +1037,7 @@ end
             .len() as u64;
         let size = s.h.max_request_bytes - block;
         fs::write(&path, vec![b'-'; size as usize]).expect("the fixture is written");
-        let admitted = check(&s.roots(), &s.h, &refs, &real).expect("exactly at the ceiling");
+        let admitted = check(&s.h, &refs, &real).expect("exactly at the ceiling");
         assert_eq!(admitted.headroom(), 0, "nothing is left over");
 
         let mut grown = BOM.to_vec();
@@ -1133,7 +1128,7 @@ end
             .iter()
             .map(|(n, v)| (n.as_str(), v.as_str()))
             .collect();
-        let admitted = check(&s.roots(), &s.h, &refs, &real).expect("the fixture is admitted");
+        let admitted = check(&s.h, &refs, &real).expect("the fixture is admitted");
         (read(&admitted).expect("the fixture reads"), raw)
     }
 

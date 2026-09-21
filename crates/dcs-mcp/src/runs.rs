@@ -216,7 +216,7 @@ mod tests {
     use super::*;
     use crate::serve::{Options, Serve};
     use crate::testing::{Sandbox, published, ran, ticking};
-    use dcs_eval::file::{self, Roots};
+    use dcs_eval::file;
     use dcs_eval::paths;
     use dcs_eval::protocol;
     use dcs_eval::source;
@@ -335,12 +335,11 @@ mod tests {
     /// The provenance claim, and what the mutation for this row breaks: the
     /// digest on the line is the one the reader took over the bytes it read.
     ///
-    /// A file eval cannot be driven from the command line yet — no root can
-    /// be allowed, so every path is refused above the reader — so this walks
-    /// the same three calls `tools::eval_file` walks, in the same order, and
-    /// hands the result to the same `line`. The reply it is paired with
-    /// carries a body the file does not contain, so a digest recomputed from
-    /// what came back cannot coincide with the file's.
+    /// This walks the same three calls `tools::eval_file` walks, in the same
+    /// order, and hands the result to the same `line`, so the reply it is
+    /// paired with can be one built here: it carries a body the file does not
+    /// contain, so a digest recomputed from what came back cannot coincide
+    /// with the file's.
     #[test]
     fn a_file_eval_records_the_path_and_the_readers_own_hash() {
         let box_ = Sandbox::new();
@@ -353,12 +352,6 @@ mod tests {
         let serve = Serve::new(opts);
         let client = serve.client_at(Host::Hook).expect("the session is found");
         let real = paths::resolve(&probe).expect("the probe resolves");
-        let roots = Roots::new(
-            &[paths::resolve(&box_.path).expect("the box resolves")],
-            &[],
-            None,
-        )
-        .expect("the roots are built");
         let chunkname = source::chunkname(&real).expect("the name fits");
         let headers = vec![
             ("op", "eval"),
@@ -366,8 +359,8 @@ mod tests {
             ("state", "hook"),
             ("chunkname", chunkname.as_str()),
         ];
-        let admitted = file::check(&roots, client.handshake(), &headers, &real)
-            .expect("the probe is admitted");
+        let admitted =
+            file::check(client.handshake(), &headers, &real).expect("the probe is admitted");
         let source = source::read(&admitted).expect("the probe reads");
 
         // A reply whose body is deliberately not the file's, so the two
@@ -421,6 +414,9 @@ mod tests {
     /// The other half of the rule: a file eval refused before a byte of it
     /// was read leaves no line at all.
     ///
+    /// The refusal is the ceiling's, the one a file eval has left before it
+    /// reads: the probe is one byte over what the handshake published.
+    ///
     /// The absence is only worth something if the writer is wired in, so the
     /// same data directory is then used by an inline eval that does run —
     /// and the record appears. One test, because the two halves are the same
@@ -430,8 +426,14 @@ mod tests {
         let box_ = Sandbox::new();
         let mut s = Standin::open(&opts(&box_).output(), "hook").expect("the stand-in opens");
         ticking(&mut s);
+        let over = Serve::new(opts(&box_))
+            .client_at(Host::Hook)
+            .expect("the session is found")
+            .handshake()
+            .max_request_bytes
+            + 1;
         let probe = box_.join("probe.lua");
-        fs::write(&probe, b"return 1\n").expect("the probe is written");
+        fs::write(&probe, vec![b'-'; over as usize]).expect("the probe is written");
         let data = box_.join("data");
 
         let mut sink: Vec<u8> = Vec::new();
@@ -456,6 +458,10 @@ mod tests {
             shown.lines().next(),
             Some("refused"),
             "and the answer says so: {shown}"
+        );
+        assert!(
+            shown.contains("split the file"),
+            "the ceiling refused it: {shown}"
         );
         assert!(
             !data.exists(),

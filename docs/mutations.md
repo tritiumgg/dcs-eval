@@ -421,15 +421,19 @@ not cover is printed by the sweep itself rather than left to be assumed.
 - task: T34
 - command: `mise exec -- cargo test -p dcs-eval file_refusals`
 - reddens: `a_held_file_over_the_ceiling_is_refused_without_being_opened`
-- note: a file too big for one request is refused on the stat. A read placed
-  ahead of it would buffer the file for a request that cannot be sent, and
-  would turn the refusal into an open error. The fixture is held open
-  elsewhere, so a late refusal cannot pass for an early one.
+- note: where a path lies is no longer judged (ADR 0026), so the refusal a
+  read must not come ahead of is the ceiling's. A file too big for one
+  request is refused on the stat; a read placed first would buffer the file
+  for a request that cannot be sent, and would turn the refusal into an open
+  error. The fixture is held open elsewhere, so a late refusal cannot pass
+  for an early one.
 
-  Observed red is four tests: the held oversize file, which comes back as a
-  failed stat rather than `Oversize`; the two framer refusals, whose absent
-  file now fails on the read before the framer is asked; and the directory,
-  which a read cannot open.
+  Observed red is five tests, more than the sweep's four-line summary shows:
+  the held oversize file, which comes back as a failed stat rather than
+  `Oversize`; `no_refusal_carries_a_byte_of_the_file_or_an_open_error`, whose
+  held vault the read cannot open either; the two framer refusals, whose
+  absent file now fails on the read before the framer is asked; and
+  `refuses_a_directory`, which a read cannot open.
 
 ```sweep-edit crates/dcs-eval/src/file.rs
 -     let block = protocol::frame(headers, b"").map_err(|source| FileRefusal {
@@ -700,9 +704,10 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
   Observed red is two tests, both in the one command: the `pending` test,
   which is what this row is for, and `cli_every_read_verb_answers`, whose
-  refused `eval --file` case is given an `--out` of its own and so watches
-  the same rule from the refusal side. The two reply tests write the same
-  bytes either way, because a reply really did come back for them.
+  two `eval --file` cases, a `pending` and a refusal, are each given an
+  `--out` and so watch the same rule from a file's side. The two reply tests
+  write the same bytes either way, because a reply really did come back for
+  them.
 
 ```sweep-edit crates/dcs-mcp/src/cli.rs
 -     let published = written_bytes(&answered, parsed.out.is_some() || parsed.capture);
