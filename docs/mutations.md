@@ -23,9 +23,8 @@ are what the coverage figure below is summed over, and so what is owed an
 entry. An entry filed under any row in Stage 3 or later is accepted, because a
 task past Stage 6 that builds a control writes its entry in the same pull
 request like every other, and a gate calling that entry stray would make the
-rule impossible to follow. Stages 0–2 accept an entry too; while their hand
-count below still stands, the commit that files one takes the same number off
-it.
+rule impossible to follow. Stages 0–2 accept an entry too,
+and each of their mutations now has one.
 
 **`reddens:` is what was observed, not what was predicted.** Where the red a
 mutation produced is not the red its plan cell named, the entry says so in a
@@ -332,6 +331,119 @@ not cover is printed by the sweep itself rather than left to be assumed.
 -     { "started", os.date("%Y-%m-%d %H:%M:%S", E.started) },
 -     { "transport", E.session },
 +     { "started", os.date("%Y-%m-%d %H:%M:%S", E.started) },
+```
+
+---
+
+## Stage 2 — ping, and the wire proven
+
+### ping/status-dropped
+
+- task: T12
+- command: `mise exec -- lua5.1 tools/harness.lua executor/ping`
+- reddens: `ping: every header is present, and no other`
+- note: the line is in `reply`, so every reply loses its `status`.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     { "status", status },
+```
+
+### protocol/line-break-written
+
+- task: T13
+- command: `mise exec -- cargo test -p dcs-eval protocol`
+- reddens: `frame_refuses_an_lf_in_a_value_the_injection_guard`
+- note: the build warns that the line-break error is never constructed; the
+  warning is not the red.
+
+```sweep-edit crates/dcs-eval/src/protocol.rs
+-         if value.bytes().any(|b| b == b'\r' || b == b'\n') {
++         if false {
+```
+
+### protocol/body-decoded-lossily
+
+- task: T13
+- command: `mise exec -- cargo test -p dcs-eval protocol`
+- reddens: `parse_the_body_byte_for_byte_a_cp1251_body`
+
+```sweep-edit crates/dcs-eval/src/protocol.rs
+-                 body: bytes[nl + 1..].to_vec(),
++                 body: String::from_utf8_lossy(&bytes[nl + 1..]).into_owned().into_bytes(),
+```
+
+### publish/arm-file-removed-on-send
+
+- task: T14
+- command: `mise exec -- cargo test -p dcs-eval publish`
+- reddens: `send_never_removes_the_arm_file`
+
+```sweep-edit crates/dcs-eval/src/publish.rs
+-     arm(arm_path).map_err(SendError::Arm)?;
++     arm(arm_path).map_err(SendError::Arm)?;
++     let _ = fs::remove_file(arm_path);
+```
+
+### standin/encoder-is-the-clients
+
+- task: T15
+- command: `mise exec -- cargo test -p dcs-eval standin`
+- reddens: `encoder_is_not_the_clients`
+- note: the build warns that the stand-in's own encoder is unreachable; the
+  warning is not the red.
+
+```sweep-edit crates/dcs-eval/src/standin.rs
+- pub fn encode(headers: &[(&str, &str)], body: &[u8]) -> Result<Vec<u8>, String> {
++ pub fn encode(headers: &[(&str, &str)], body: &[u8]) -> Result<Vec<u8>, String> {
++     return crate::protocol::frame(headers, body).map_err(|e| e.to_string());
+```
+
+### interop/frame-blank-line-dropped
+
+- task: T16
+- command: `mise exec -- cargo test -p dcs-eval interop`
+- reddens: `the_shipped_executors_handshake_parses`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   return table.concat(lines) .. "\n" .. body
++   return table.concat(lines) .. body
+```
+
+### interop/blank-kept-before-an-empty-value
+
+- task: T16
+- command: `mise exec -- cargo test -p dcs-eval interop`
+- reddens: `the_ping_reply_parses_and_an_empty_value_arrives_empty`
+
+```sweep-edit crates/dcs-eval/src/protocol.rs
+-             .unwrap_or(rest.len());
++             .unwrap_or(0);
+```
+
+### e2e/frame-terminator-crlf
+
+- task: T17
+- command: `mise exec -- cargo test -p dcs-eval e2e`
+- reddens: `a_ping_the_client_sends_is_answered_by_the_shipped_executor`
+- note: a byte of the executor's `frame` that changes the wire; the test's
+  message says the Lua writes LF alone.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     lines[#lines + 1] = name .. ": " .. value .. "\n"
++     lines[#lines + 1] = name .. ": " .. value .. "\r\n"
+```
+
+### e2e/suite-stops-ticking
+
+- task: T17
+- command: `mise exec -- cargo test -p dcs-eval e2e`
+- reddens: `a_ping_the_client_sends_is_answered_by_the_shipped_executor`
+- note: the red comes at the Lua suite's own deadline, naming the tick with
+  the request still waiting, and not as a hang.
+
+```sweep-edit tools/harness/executor/e2e.lua
+-   frame()
++   -- frame()
 ```
 
 ---
@@ -1915,18 +2027,6 @@ not counted at all — and nothing would notice one of them going quiet, which
 is the same gap one level down that this whole file exists to close. A row
 that wants one of them re-run names it in `docs/PLAN.md` first; it then gets
 an entry here like any other, and both figures move.
-
-### out/stages-0-to-2
-
-- out-of-scope: Milestone A, closed before this runner existed, and several of
-  its mutations are not source edits at all — a second interpreter binary, a CI
-  step removed, a workspace member removed. No plan row asks for a sweep over
-  them, and one is owed.
-- controls: 9
-- breakdown: T12 one, 1; T13 two, 2; T14, T15 one each, 2; T16 two
-  (the comment byte uncounted), 2; T17 two, 2 — the `superseded` half its cell
-  defers is swept under T54 as `e2e/stamp-change-not-superseded` and counted
-  there.
 
 ### out/stages-7-to-9
 
