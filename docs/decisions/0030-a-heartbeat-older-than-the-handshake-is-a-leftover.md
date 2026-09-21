@@ -21,7 +21,7 @@ installed. §4.7 settles when the heartbeat is written, retrieved with
 >   bridge makes;
 > - at every arm and every disarm, carrying `armed: yes|no` and `since`, the
 >   wall-clock time of that transition;
-> - on every phase change, dormant or not
+> - on every phase change, dormant or not, as today (…)
 
 A load is none of those, and the executor writes nothing at load. The file
 lives at `<output>\heartbeat.txt`, one name per host that every session
@@ -88,7 +88,10 @@ new `leftover` field in its report.
 A second executor that loaded before this one and has not written since goes
 unreported until it next writes. Only its heartbeat could show it, and it has
 not written one. The next arm, disarm or phase change it makes is reported as
-before.
+before. A probe of the pid in the leftover's stamp could narrow this: a live
+pid that is not the handshake's would be a second process. That is not done.
+It would read the pid out of a stamp the client otherwise treats as opaque,
+and a reused pid would report a live stranger as a second executor.
 
 The rule depends on one filesystem's clock stamping both files. The
 executor's two writes and the client's reads all happen on one volume, so a
