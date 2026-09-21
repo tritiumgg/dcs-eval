@@ -33,7 +33,7 @@ pub const EXECUTOR_FILE_NAME: &str = "DcsEvalExecutor.lua";
 
 /// The SHA-256 of `EXECUTOR`, written by hand so that it can be found wrong.
 pub const EXECUTOR_SHA256: &str =
-    "2a66399b06e4c14141179e3769d6180e9bf2e85ae27047a901c27d5f083ad871";
+    "1c101edc81bef49c6160347395bcf1b3f67179e3db6798f18b1a91eedfef133f";
 
 /// Every set of bytes this project has ever embedded, newest last.
 ///
@@ -42,15 +42,20 @@ pub const EXECUTOR_SHA256: &str =
 /// file has to stay recognisable as ours however old it is, and an entry that
 /// left this list would turn one of our own releases into a stranger's file.
 pub const SHIPPED: &[&str] = &[
-    // The executor of the first release, and what this binary carries today.
+    // The executor as first embedded: nothing removed a reply before the
+    // session's directory went at the next load. Never tagged.
     "2a66399b06e4c14141179e3769d6180e9bf2e85ae27047a901c27d5f083ad871",
+    // Uncollected replies removed after 300 s, and what this binary
+    // carries today.
+    "1c101edc81bef49c6160347395bcf1b3f67179e3db6798f18b1a91eedfef133f",
 ];
 
 /// Whether a hook file with this hash is one this project put there.
 ///
 /// The installer does not call this: its shipped list is a parameter, so that
-/// an upgrade from genuinely different bytes is reachable in a test while the
-/// real list has one entry. This is the same question asked of the list this
+/// an upgrade from genuinely different bytes is reachable in a test: the real
+/// list names its older releases by hash, and their bytes are not in the tree
+/// to upgrade from. This is the same question asked of the list this
 /// binary actually carries, for the verbs that have no release handed to them.
 pub fn is_shipped(hash: &str) -> bool {
     SHIPPED.contains(&hash)

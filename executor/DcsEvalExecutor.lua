@@ -45,6 +45,18 @@ local HEARTBEAT_S = 2
 local MAX_REQUEST_BYTES = 262144
 local MAX_RESULT_BYTES = 65536
 
+-- How long a published reply is kept, in the seconds `os.time` counts. A
+-- reply this old is removed by the first armed frame to find it so, the
+-- frame that goes back to sleep included; one that ages past it while the
+-- executor sleeps waits for the next wake or the next load, because a
+-- sleeping frame does nothing at all. It is a backstop for a client that
+-- died before collecting, and it is the only thing that bounds `res` while a
+-- session lasts: a client removes nothing it did not write, so a reply it
+-- has read is still on the disk. It is not in the handshake, because no
+-- client decides anything by it. ADR 0027 holds why the replies are found
+-- by a ledger and not by listing the directory.
+local UNCOLLECTED_S = 300
+
 -- What an `eval` is compiled under when the request names nothing, and the
 -- most a request may name. The default is this project's own name and not
 -- the one the specification inherited from the project this one replaces,
@@ -189,6 +201,22 @@ local began
 -- a second reading of a clock that has moved since (ADR 0007). One
 -- request is handled at a time, so these are that request's.
 local answered, charged
+
+-- Every reply this session published and has not yet removed, oldest
+-- first: the id it went out under and the wall-clock second it was
+-- published at, in two lists indexed from `oldest` to `newest`. Two lists
+-- and not a table per reply, so a reply costs two slots and nothing more.
+-- The clock only moves forward between frames, so the oldest reply is
+-- always at the head, and the sweep reads the head and stops at the first
+-- one that is young enough. Nothing is added while dormant, because
+-- nothing is published while dormant.
+local published_id, published_at, oldest, newest = {}, {}, 1, 0
+
+-- The armed frame's own wall-clock reading, which a reply is stamped with.
+-- A reply never reads the clock itself: an armed frame reads it exactly
+-- once (ADR 0009). Seeded at load, so a reply framed outside any frame, by
+-- a driver off DCS, is stamped with the load's reading rather than nil.
+local frame_time
 
 -- The callback names seen this session, as a set beside the list the
 -- namespace publishes, so a rare callback firing again is one lookup.
@@ -808,7 +836,8 @@ end
 -- `0.000` and a request that blocks, on the disk or in a call into the
 -- host, is charged the time it blocked. The session's headers are read off
 -- the namespace as the reply is framed, so a figure the session learns to
--- keep later lands here without the caller changing.
+-- keep later lands here without the caller changing. A reply that reached
+-- the disk is entered in the ledger the uncollected-reply sweep reads.
 --
 -- `true`, or nil and what refused, in which case nothing was written.
 local function reply(id, status, headers, body)
@@ -832,7 +861,13 @@ local function reply(id, status, headers, body)
   if not bytes then
     return nil, why
   end
-  return publish(E.res .. SEP .. id .. ".res", bytes)
+  local published
+  published, why = publish(E.res .. SEP .. id .. ".res", bytes)
+  if published then
+    newest = newest + 1
+    published_id[newest], published_at[newest] = id, frame_time
+  end
+  return published, why
 end
 
 -- One request off the disk: its bytes, with the file gone before they are
@@ -1719,6 +1754,36 @@ end
 -- request.
 local held = {}
 
+-- The replies older than `UNCOLLECTED_S`, removed oldest first. It is
+-- called from the armed frame after the requests are answered and before
+-- the quiet window is looked at, so the frame that goes back to sleep has
+-- swept like every armed frame before it, and a sleeping frame never
+-- sweeps: it returns before it could. The removals are spent from the
+-- tick's budget as the requests are, the budget read before each removal
+-- after the first against the reading the frame took before its listing, so
+-- a backlog — the replies that aged past the limit while the executor slept
+-- — is cleared over as many frames as it takes; one removal is always made,
+-- so a backlog always shrinks. A removal that fails is not retried: the
+-- file is gone already, because a client or a person removed it, or it is
+-- held for a moment by a reader, and the session directory goes at the next
+-- load either way.
+local function expire(now, clock, start)
+  local os = rawget(_G, "os")
+  local first = true
+  while oldest <= newest and now - published_at[oldest] >= UNCOLLECTED_S do
+    if not first and (clock() - start) * 1000 >= TICK_BUDGET_MS then
+      return
+    end
+    first = false
+    os.remove(E.res .. SEP .. published_id[oldest] .. ".res")
+    published_id[oldest], published_at[oldest] = nil, nil
+    oldest = oldest + 1
+  end
+  if oldest > newest then
+    oldest, newest = 1, 0
+  end
+end
+
 -- The way back to sleep, in the order that makes the race unwinnable, which
 -- is the only reason the order is worth stating. A client publishes its
 -- request by rename and then, finding no arm file, creates one. So the arm
@@ -1737,10 +1802,13 @@ local held = {}
 -- the safe end of it and a client that finds the file gone creates it
 -- again.
 --
--- The sweep that belongs with a disarm is not built. The heartbeat is: it is
--- written off the frame's own clock reading, which is why `now` comes in
--- rather than being read here — this is only ever called from the foot of an
--- armed frame, which already holds one (ADR 0009).
+-- The sweep that belongs with a disarm is not here, because it has already
+-- run: the frame calls `expire` before it looks at the quiet window, so the
+-- frame that goes back to sleep has swept like every armed frame before it.
+-- The heartbeat is here, written off the frame's own clock reading, which
+-- is why `now` comes in rather than being read here — this is only ever
+-- called from the foot of an armed frame, which already holds one (ADR
+-- 0009).
 local function disarm(now)
   local os = rawget(_G, "os")
   os.remove(E.arm)
@@ -1826,12 +1894,14 @@ tick = function()
   end
   began = nil
   -- The one wall-clock reading an armed frame makes, and the only one. It
-  -- paces the heartbeat below and closes the quiet window at the foot of the
-  -- frame, so neither obligation costs a kernel entry the other did not
-  -- already pay. It is `os.time` and not the `os.clock` this frame also
-  -- reads, because that one is process CPU time and a liveness signal cannot
-  -- rest on it; ADR 0009 holds the argument and what it narrowed.
+  -- paces the heartbeat below, closes the quiet window at the foot of the
+  -- frame, and stamps and ages the replies, so no one of those obligations
+  -- costs a kernel entry the others did not already pay. It is `os.time` and
+  -- not the `os.clock` this frame also reads, because that one is process
+  -- CPU time and a liveness signal cannot rest on it; ADR 0009 holds the
+  -- argument and what it narrowed.
   local now = rawget(rawget(_G, "os"), "time")()
+  frame_time = now
   local clock = rawget(rawget(_G, "os"), "clock")
   local start = clock()
   local lfs = rawget(_G, "lfs")
@@ -1889,6 +1959,9 @@ tick = function()
     end
   end
   began = nil
+  -- The replies nobody collected, aged off this frame's reading and spent
+  -- from this frame's budget; `expire` says why here and nowhere else.
+  expire(now, clock, start)
   -- The quiet window, counted off the listing this frame already made and
   -- off the reading taken at the top of it. A listing that held anything is
   -- work, and work closes the window, so an executor with requests in front
@@ -2076,9 +2149,11 @@ local function main()
   -- is written at a transition, a phase change or an elapsed interval, and a
   -- load is none of those — but the armed path's arithmetic has to hold on a
   -- session whose first armed frame is also its first transition, and a
-  -- `since` has to name something before the first transition names it.
+  -- `since` has to name something before the first transition names it, as
+  -- a reply's stamp does before the first armed frame.
   E.since = rawget(_G, "os").time()
   E.beat_at = E.since
+  frame_time = E.since
   -- The handshake is how a client finds the session, so one that cannot be
   -- written stops the load the way an output directory that cannot be made
   -- does: an executor nothing can find is not running.

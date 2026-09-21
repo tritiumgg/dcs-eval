@@ -1005,10 +1005,11 @@ not cover is printed by the sweep itself rather than left to be assumed.
   of its own rather than as a reference to the constant: written that way there
   would be no list line to delete and the check could never be watched failing.
   The anchor is the indented, comma-terminated list line; the same digest on
-  the constant's own line is a different line and is left alone.
+  the constant's own line is a different line and is left alone. The anchor
+  is the newest list line, the one holding the digest this binary carries.
 
 ```sweep-edit crates/dcs-mcp/src/embed.rs
--     "2a66399b06e4c14141179e3769d6180e9bf2e85ae27047a901c27d5f083ad871",
+-     "1c101edc81bef49c6160347395bcf1b3f67179e3db6798f18b1a91eedfef133f",
 ```
 
 ### locate/ambiguity-picked
