@@ -1328,6 +1328,17 @@ swept like any other.
 +                     Some(at) => on |= group(READS[at].tier),
 ```
 
+### cli/reads-flag-dropped
+
+- task: T62
+- command: `mise exec -- cargo test -p dcs-mcp opt_in`
+- reddens: `cli_opt_in_reads_flag_reaches_the_gather`
+
+```sweep-edit crates/dcs-mcp/src/cli.rs
+-         Verb::GameState => tools::game_state(&serve, None, &parsed.reads, upto),
++         Verb::GameState => tools::game_state(&serve, None, &[], upto),
+```
+
 ### tools/reads-argument-dropped
 
 - task: T62

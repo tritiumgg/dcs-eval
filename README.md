@@ -121,10 +121,16 @@ routinely takes longer than the wait.
 `unknown` is a value, not a guess: an axis nothing measured says so and says
 why.
 
-`dcs_game_state` sends a fixed list of reads and nothing else; three calls
-suspected in a DCS crash are never sent at all. A second tier of four reads,
-the ones with no precedent for the state they would run in, is built and off,
-and there is no way to ask for it yet — *not built*.
+`dcs_game_state` sends five reads every time — the five ED's own hook script
+makes — and seven more only when you ask. Four, `extra`, have no precedent in
+the state they would run in; three, `suspect`, were in a batch of reads that
+crashed DCS, one of them named as the likely cause. None of the seven is
+measured safe yet. Ask with `reads` on the tool or `--reads` on the
+`game-state` verb: a group, or one read by its name — `multiplayer`, `server`,
+`track`, `player_id`, `mission_loaded`, `player_unit_type`, `mission_theatre`
+— several separated by commas on the command line. A read you did not ask for
+says so, `unknown (tier 2 off)` or `unknown (suspect reads off)`, and every
+read no summary is made of is printed on a line of its own.
 
 `dcs_eval_file` reads only what lies under a directory you allow it, and
 refuses the `Config\` of every DCS write directory it is told about, and the
@@ -148,6 +154,7 @@ headers and body, a refusal that says why, a `pending` that names its id.
 dcs-mcp status --saved-games "%USERPROFILE%\Saved Games" --variant DCS.openbeta
 dcs-mcp ping --saved-games ... --variant DCS.openbeta
 dcs-mcp game-state --saved-games ... --variant DCS.openbeta
+dcs-mcp game-state --reads mission_loaded --saved-games ... --variant DCS.openbeta
 dcs-mcp eval hook "return #coalition.getGroups(2)" --saved-games ... --variant DCS.openbeta
 dcs-mcp eval missionscripting --file .\probe.lua --saved-games ... --variant DCS.openbeta
 ```
@@ -156,7 +163,7 @@ dcs-mcp eval missionscripting --file .\probe.lua --saved-games ... --variant DCS
 `serve`, and `--host hook|export` picks which of the executor's two hosts to
 talk to. `--wait-seconds`, `--max-instructions` and `--chunkname` are the
 call's own, and a verb waits 15 seconds by default — a wait and never a
-limit, exactly as for the tools.
+limit, exactly as for the tools. `--reads` belongs to `game-state` alone.
 
 `--out <path>` writes the reply to a file, and `--capture` keeps a copy under
 this build's own data directory. Both write the bytes the executor published,
