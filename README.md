@@ -261,12 +261,15 @@ for about a quarter of a second, five times; run it at the menu or paused.
 and nothing else; `--count` changes how many, and `--host export` times the
 export host's own state; `dormant` and `read` are the hook's and refuse
 `--host`. `read all` sends the seven opt-in reads one after another, each
-alone, skipping any that already has a result, and stops at the first that
-comes back as anything but an answer. If one stops it, restart DCS, send that
-one alone with `read <key>` to confirm it was the cause, then restart and run
-`read all` again for the rest. `report` shows a read's latest result; if the
-retest answers where the sequence stopped, `live.jsonl` still holds both. `read <key>` sends the one read you name. Both refuse a
-DCS session that has already had a read. Every read is written down as sent
+alone, skipping any that already has a result in the scene `--label` names,
+and stops at the first that comes back as anything but an answer. Run it once
+per scene — `--label menu`, then `--label mission` — because a read that is
+safe in a mission may not be at the menu. If one stops it, restart DCS, send
+that one alone with `read <key>` under the same label to confirm it was the
+cause, then restart and run `read all` again for the rest. `report` shows each
+read's latest result in every scene; if the retest answers where the sequence
+stopped, `live.jsonl` still holds both. `read <key>` sends the one read you
+name. Both refuse a DCS session that has already had a read. Every read is written down as sent
 before it is sent, so a run you stop mid-wait still counts. A read that takes
 the game down is recorded as the session gone, with the id to look for in the
 executor's events log. `--label <word>` records the scene you

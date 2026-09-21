@@ -26,7 +26,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **`live read all`** — the seven opt-in reads in turn in one DCS session, each alone, skipping any with a result and stopping at the first that does not answer, which is then retested alone (ADR 0028); swept as `live/all-sends-past-a-read-that-did-not-answer`.
+- **`live read all`** — the seven opt-in reads in turn in one DCS session, each alone, skipping any with a result in the labelled scene and stopping at the first that does not answer, which is then retested alone (ADR 0028); swept as `live/all-sends-past-a-read-that-did-not-answer`.
 - **The owed sweeps** — Stages 0 to 2 swept, all 25 entered and seen red, T02's through the build gate's roll call now printing `FAIL  `; `sweep-cover.sh` owes entries for Stages 0–8; T53's shape echo and T64's disarming-frame sweep named and entered.
 - **T64, the uncollected-reply sweep** — a reply is removed 300 s after it lands by any armed frame, the disarming one included, off a ledger of what the session published and never while dormant (ADR 0027); `SHIPPED` gains the executor's second hash, and `dcs_collect` says a reply may have been removed.
 
@@ -36,7 +36,7 @@ broken. Empty this when the task closes.*
 
 **Stage 9**, the live proofs; **only the maintainer can verify any of it**, at a running
 install. The instrument is `dcs-mcp live` (README, "Measuring a live install"), proved off DCS only: whether it measures DCS correctly is the first session's to see.
-At the menu: `live dormant`, `live rtt`; in a mission: `live rtt` again (`missionscripting`, `export`) and `live rtt --host export`. The opt-in reads: `live read all` in a fresh launch; one that stops it is retested alone with `live read <key>` in another, then `live read all` again (ADR 0028). `live report` prints all 47 rows.
+At the menu: `live dormant`, `live rtt`; in a mission: `live rtt` again (`missionscripting`, `export`) and `live rtt --host export`. The opt-in reads: `live read all --label menu` and `--label mission`, each in a fresh launch; one that stops it is retested alone with `live read <key>` in another, then `live read all` again (ADR 0028). `live report` prints all 47 rows.
 Not built, rows printing `unmeasured: not built`: `live scene` (T50's `sim_mode` per scene, editor-vs-menu, `mission_name` at the menu, callbacks), a follow-up branch; and the s17 fixture (T49).
 T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
 
@@ -87,6 +87,8 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A `Minter` has no owner.** The window mints from whatever it was handed; who
   holds one across tool calls, so two do not restart at seq 1, is Stage 7's.
   `Minter::seeded_at` resumes a counter.
+- **`dcs-mcp live` is temporary.** Once Stage 9's figures are in a decision record,
+  it leaves the binary with its tests and `live/` entries: the maintainer's call, 2026-09-21.
 - **`install` over a copy of ours, then `uninstall`, leaves one in place.** Same
   release or older: `install` parks ours, `uninstall` restores it (T45's); after an
   upgrade it takes two runs. Maintainer's: restore a park we shipped? A row of its own.

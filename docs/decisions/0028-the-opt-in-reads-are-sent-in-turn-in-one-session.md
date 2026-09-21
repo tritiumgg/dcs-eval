@@ -51,6 +51,12 @@ in a fresh session, which is §3.3's rule applied to the one read the sequence
 cannot clear by itself. Its latest entry is its row. `live read all` in the
 session after that skips every read with an outcome and carries on.
 
+The skip is scene by scene. A read that answers in a settled mission says
+nothing of the menu, where the objects it reads may not exist, and the crash
+behind the old ban is not recorded with the scene it happened in. So a read
+with a result under one `--label` is sent again under another, and the report
+prints each read's latest result in every scene it was taken in.
+
 `live read <key>` is unchanged: one read, alone, in a session that has had
 none. Both ways in are refused in a session that already had a read.
 
