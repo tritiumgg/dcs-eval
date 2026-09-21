@@ -333,13 +333,12 @@ sh tools/sweep.sh --only paths/    # one control, or one group by its slash
 ```
 
 It is deliberately not part of `mise run check`: it is slow and it edits files
-in the working tree. A run over the Stage 3–6 controls takes about three and a
-half minutes on a warm `target/`; a cold checkout pays a full workspace build
-first. It restores from its own copies and never from git, so an uncommitted
-edit of your own survives a run — and a run that fails leaves the tree exactly
-as it found it. It exits 0 when every control reddened as recorded, 1 when one
-did not, and 2 when the tree cannot be vouched for, which is the code to stop
-and look at.
+in the working tree. A full run takes about fourteen minutes on a warm
+`target/`; a cold checkout pays a full workspace build first. It restores from
+its own copies and never from git, so an uncommitted edit of your own survives
+a run — and a run that fails leaves the tree exactly as it found it. It exits 0
+when every control reddened as recorded, 1 when one did not, and 2 when the
+tree cannot be vouched for, which is the code to stop and look at.
 
 It runs weekly against `main` — `.github/workflows/sweep.yml`, which also takes
 a manual run from the Actions tab — and it is green before a milestone closes.

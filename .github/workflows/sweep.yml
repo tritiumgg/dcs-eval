@@ -22,9 +22,9 @@ concurrency:
 jobs:
   sweep:
     runs-on: windows-latest
-    # Warm, the Stage 3 to 6 controls take about three and a half minutes; a
-    # cold checkout pays a full workspace build first, once per control's
-    # first command.
+    # Warm, a full run takes about fourteen minutes, the build gate's own
+    # control run twice among them; a cold checkout pays a full workspace
+    # build first, once per control's first command.
     timeout-minutes: 60
     defaults:
       run:
