@@ -164,10 +164,10 @@ fn verdict(report: &Report) -> String {
     let headline = match report.session.problems.as_slice() {
         _ if install_missing => format!("dcs-eval is not installed in {variant}"),
         [status::Problem::NotInstalled { .. }] if installed => {
-            format!("installed in {variant}, and DCS has not loaded it yet")
+            format!("DCS has not yet loaded the executor installed in {variant}")
         }
         [status::Problem::ProcessGone { .. }] if installed => {
-            format!("installed in {variant}, and DCS is not running")
+            format!("DCS is not running, and the executor is installed in {variant}")
         }
         _ if found == 1 => format!("1 problem in {variant}"),
         _ => format!("{found} problems in {variant}"),
@@ -772,7 +772,7 @@ mod tests {
         assert!(!report.verified());
         let want = [
             format!(
-                "not verified: installed in {}, and DCS has not loaded it yet",
+                "not verified: DCS has not yet loaded the executor installed in {}",
                 variant.as_path().display()
             ),
             String::new(),
@@ -801,7 +801,7 @@ mod tests {
 
         assert!(
             summary.starts_with(&format!(
-                "not verified: installed in {}, and DCS is not running\n",
+                "not verified: DCS is not running, and the executor is installed in {}\n",
                 variant.as_path().display()
             )),
             "{summary}"
