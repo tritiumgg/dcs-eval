@@ -20,6 +20,9 @@ mod dormant;
 // Round trips, the executor's own cost of each, and replies per frame.
 mod rtt;
 
+// One opt-in read, alone, once per DCS session.
+mod read;
+
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -29,7 +32,7 @@ use crate::tools;
 use ledger::{Entry, Session};
 
 /// The usage line, which is also the list of phases this verb answers to.
-pub const USAGE: &str = "usage: dcs-mcp live dormant | rtt | report\n       \
+pub const USAGE: &str = "usage: dcs-mcp live dormant | rtt | read <key> | report\n       \
      --saved-games <dir> --variant <name> [--host hook|export] [--data-dir <dir>]\n       \
      [--wait-seconds <n>] [--count <n>] [--label <word>]";
 
@@ -41,6 +44,7 @@ const DEFAULT_COUNT: usize = 200;
 enum Phase {
     Dormant,
     Rtt,
+    Read,
     Report,
 }
 
@@ -49,6 +53,7 @@ fn phase_of(word: &str) -> Option<Phase> {
     match word {
         "dormant" => Some(Phase::Dormant),
         "rtt" => Some(Phase::Rtt),
+        "read" => Some(Phase::Read),
         "report" => Some(Phase::Report),
         _ => None,
     }
@@ -62,6 +67,8 @@ struct Parsed {
     count: usize,
     /// The scene the maintainer says the game is in, recorded on each entry.
     label: Option<String>,
+    /// The opt-in read `read` sends. Empty for the other phases.
+    key: String,
 }
 
 /// Fill a slot that has not been filled, or name the flag that filled it.
@@ -90,7 +97,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     }
     let word = args
         .next()
-        .ok_or_else(|| "live wants a phase: dormant, rtt or report".to_owned())?;
+        .ok_or_else(|| "live wants a phase: dormant, rtt, read or report".to_owned())?;
     let phase = phase_of(&word).ok_or_else(|| format!("live does not take {word}"))?;
 
     let mut saved_games = None;
@@ -100,6 +107,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     let mut wait_seconds = None;
     let mut count = None;
     let mut label = None;
+    let mut key = None;
     while let Some(arg) = args.next() {
         let mut value = |name: &str| {
             args.next()
@@ -112,6 +120,16 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
                 PathBuf::from(value("--saved-games")?),
             )?,
             "--variant" => once(&mut variant, "--variant", value("--variant")?)?,
+            // The dormant rows are the hook's frame, and the opt-in reads are
+            // the hook state's: sent to the export host, a read comes back
+            // unsupported and a dormant figure would overwrite the hook's
+            // row under a label that still names the hook.
+            "--host" if matches!(phase, Phase::Dormant | Phase::Read) => {
+                return Err(format!(
+                    "live {word} measures the hook host only and takes no --host; \
+                     --host is for rtt"
+                ));
+            }
             "--host" => {
                 let given = value("--host")?;
                 let picked = host_of(&given)
@@ -140,6 +158,9 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
                 once(&mut count, "--count", n)?
             }
             "--label" if phase != Phase::Report => once(&mut label, "--label", value("--label")?)?,
+            given if phase == Phase::Read && !given.starts_with("--") => {
+                once(&mut key, "the read's key", given.to_owned())?
+            }
             other => return Err(format!("live {word} does not take {other}")),
         }
     }
@@ -154,6 +175,10 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
         wait_seconds,
         count: count.map_or(DEFAULT_COUNT, |n| usize::try_from(n).unwrap_or(usize::MAX)),
         label,
+        key: match (phase, key) {
+            (Phase::Read, None) => return Err("live read wants the key of one opt-in read".into()),
+            (_, key) => key.unwrap_or_default(),
+        },
     })
 }
 
@@ -212,6 +237,36 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
     let entries = match parsed.phase {
         Phase::Dormant => dormant::run(h, &session, upto),
         Phase::Rtt => rtt::run(h, &session, parsed.count, upto),
+        Phase::Read => {
+            // Every line of the ledger, or no read: a line that will not
+            // parse may be the read this session already had.
+            let rows = match ledger::read(&data) {
+                Ok((rows, malformed)) if malformed.is_empty() => rows,
+                Ok(_) => {
+                    return refused(
+                        out,
+                        format!(
+                            "{} holds a line that is not an entry, so it cannot prove this \
+                             session has had no opt-in read",
+                            data.live_path().display()
+                        ),
+                    );
+                }
+                Err(why) => {
+                    return refused(
+                        out,
+                        format!(
+                            "{}: {why}, so it cannot prove this session has had no opt-in read",
+                            data.live_path().display()
+                        ),
+                    );
+                }
+            };
+            match read::run(h, &session, &parsed.key, rows, &data, upto) {
+                Ok(entries) => entries,
+                Err(why) => return refused(out, why),
+            }
+        }
         Phase::Report => Vec::new(),
     };
     recorded(&entries, &data, out)
@@ -253,6 +308,18 @@ mod tests {
         words.push("DCS".to_owned());
         let err = run(words, &mut Vec::new()).expect_err("a repeat will not parse");
         assert_eq!(err, "--variant is given twice");
+    }
+
+    #[test]
+    fn dormant_and_read_refuse_another_host() {
+        let b = Sandbox::new();
+        for words in [
+            &["live", "dormant", "--host", "export"][..],
+            &["live", "read", "server", "--host", "export"][..],
+        ] {
+            let err = run(line(&b, words), &mut Vec::new()).expect_err("--host will not parse");
+            assert!(err.contains("measures the hook host only"), "{err}");
+        }
     }
 
     #[test]

@@ -159,21 +159,21 @@ pub fn rows() -> Vec<Row> {
         Absent::NotBuilt("the s17 fixture mission is not ported"),
     ));
 
-    let read = Absent::NotBuilt("no phase takes it yet");
-    for key in [
-        "multiplayer",
-        "server",
-        "track",
-        "player_id",
-        "mission_loaded",
-        "player_unit_type",
-        "mission_theatre",
+    // One DCS launch each: the phase refuses a second in one session.
+    for (key, phase) in [
+        ("multiplayer", "read multiplayer"),
+        ("server", "read server"),
+        ("track", "read track"),
+        ("player_id", "read player_id"),
+        ("mission_loaded", "read mission_loaded"),
+        ("player_unit_type", "read player_unit_type"),
+        ("mission_theatre", "read mission_theatre"),
     ] {
         rows.push(row(
             format!("read.{key}"),
             format!("opt-in read {key}, sent alone"),
             "none: never sent from a hook",
-            read,
+            Absent::Run(phase),
         ));
     }
 
