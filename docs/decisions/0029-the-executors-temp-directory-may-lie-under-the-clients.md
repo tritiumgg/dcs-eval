@@ -62,10 +62,11 @@ tree, which is the silent failure §8 names.
 
 The one measured value is one machine's, one build's. Another build or another
 launcher handing DCS a temp directory outside the user's — a portable install,
-a `TMP` override for the game alone — fails `verify` again, and that is the
-report working: the line names both directories. Where that turns out to be a
+a `TMP` override for the game alone — fails `verify` again, and so does an MCP
+host that sets `TEMP` for `dcs-mcp` alone. That is the report working: the line
+names both directories. Where that turns out to be a
 healthy install, this decision reopens.
 
 The harness and the stand-in still model `lfs.tempdir()` by hand; the fixtures
-that want a healthy session name the client's own temp directory, and one names
-a folder under it, as DCS does.
+that want a healthy session name the client's own temp directory, and the two
+within tests name a folder under it, as DCS does.
