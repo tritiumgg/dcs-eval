@@ -1406,6 +1406,23 @@ installer verbs T52 starts from. Their controls are swept like any other.
 +     Ok(0)
 ```
 
+### installer/verbs-not-dispatched
+
+- task: T63
+- command: `mise exec -- cargo test -p dcs-mcp --test installer`
+- reddens: `installer_the_binary_installs_verifies_and_uninstalls`
+- note: with `takes` answering nothing, `main` falls through to `dcs-mcp does
+  not take install` and exit 2. Every unit test stays green, because they
+  call `run` directly and never go through `takes`; only the real binary can
+  see this. `installer_the_binary_refuses_an_ambiguity_with_exit_one` reddens
+  beside it, expecting 1 and given 2. The mutant compiles clean: `word` is
+  still read, and `verb_of` is still called by `parse`.
+
+```sweep-edit crates/dcs-mcp/src/installer.rs
+-     verb_of(word).is_some()
++     word.is_empty()
+```
+
 ---
 
 ## Out of scope

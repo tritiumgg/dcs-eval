@@ -19,8 +19,9 @@
 //! reply that carried nothing, and a caller reading one back would take a
 //! request still in flight for a measured empty answer.
 //!
-//! The install verbs are not here. They are their own stage, and a word this
-//! module does not know is refused by name rather than half-answered.
+//! The install verbs are not here: they are `installer`'s, which finds
+//! `Saved Games` rather than being given it, and a word neither module knows
+//! is refused by name rather than half-answered.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -37,7 +38,7 @@ pub const USAGE: &str = "usage: dcs-mcp status | ping | game-state \
      [--wait-seconds <n>] [--max-instructions <n>] [--chunkname <name>]\n       \
      [--reads <word,...>] [--out <path>] [--capture] [--data-dir <dir>]";
 
-/// What was asked for. One of four, and never a word the install stage owns.
+/// What was asked for. One of four, and never a word the installer owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verb {
     Status,

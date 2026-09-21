@@ -42,9 +42,10 @@ impl Host {
 
 /// What the server was pointed at.
 ///
-/// `Saved Games` is given rather than discovered: finding it from the shell's
-/// known folders is not built, so the flags are required and a missing one is
-/// a usage line rather than a guess.
+/// `Saved Games` is given rather than discovered. The installer finds it and
+/// prints a `serve` line naming what it found; a client configuration names
+/// one install rather than rediscovering it on every call, so here the flags
+/// are required and a missing one is a usage line rather than a guess.
 #[derive(Debug, Clone)]
 pub struct Options {
     pub saved_games: PathBuf,
@@ -69,10 +70,10 @@ impl Options {
     /// `--saved-games <dir> --variant <name> [--host hook|export]
     /// [--data-dir <dir>]`, and nothing else.
     ///
-    /// Hand-rolled and deliberately small. The full verb set and the flags
-    /// that go with the install are settled elsewhere; until then an
-    /// unrecognised flag is refused by name rather than accepted and ignored,
-    /// so a user who passes one that does not work yet is told so.
+    /// Hand-rolled and deliberately small. The install's flags are the
+    /// installer's, not these. An unrecognised flag is refused by name rather
+    /// than accepted and ignored, so a user who passes one this verb does not
+    /// take is told so.
     ///
     /// A flag given twice is refused for the same reason. Last-wins is the
     /// usual answer, but nothing here takes a list, so a repeat is a client

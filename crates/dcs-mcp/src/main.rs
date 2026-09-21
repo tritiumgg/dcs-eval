@@ -9,15 +9,16 @@
 //! This file is a shell. The work lives in the crate's own library half, where
 //! a test can reach it; here there is only the order things happen in.
 
-use dcs_mcp::{cli, serve};
+use dcs_mcp::{cli, installer, serve};
 
-/// Every word this binary answers to today. The installer is not built, so
-/// anything else is a usage line rather than a silence.
+/// Every word this binary answers to. Anything else is a usage line rather
+/// than a silence.
 fn usage() -> String {
     format!(
         "usage: dcs-mcp serve --saved-games <dir> --variant <name> \
-         [--host hook|export]\n       [--data-dir <dir>]\n{}",
-        cli::USAGE
+         [--host hook|export]\n       [--data-dir <dir>]\n{}\n{}",
+        cli::USAGE,
+        installer::USAGE
     )
 }
 
@@ -33,10 +34,17 @@ fn main() {
             .and_then(|opts| serve::run(opts).map_err(|why| why.to_string()))
             .map(|()| 0),
         // The verbs print to stdout and answer with an exit code of their
-        // own, so this branch is the only one that leaves with anything but
-        // nought or the usage code.
+        // own, so these two branches are the only ones that leave with
+        // anything but nought or the usage code.
         Some(word) if cli::takes(word) => {
             cli::run(args, &mut std::io::stdout()).map_err(|why| format!("{why}\n{}", usage()))
+        }
+        Some(word) if installer::takes(word) => {
+            // The snippet `install` prints names the executable that ran it,
+            // so a client configured from it starts this same file.
+            let exe = std::env::current_exe().unwrap_or_else(|_| "dcs-mcp.exe".into());
+            installer::run(args, &mut std::io::stdout(), &exe)
+                .map_err(|why| format!("{why}\n{}", usage()))
         }
         Some(other) => Err(format!("dcs-mcp does not take {other}\n{}", usage())),
         None => Err(usage()),
