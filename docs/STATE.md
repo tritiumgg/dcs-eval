@@ -26,10 +26,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **`verify` failed a session `ping` answered**: DCS gives `lfs.tempdir()` as `%TEMP%\DCS`, under the client's, and `status` read that as a disagreement; now `Within` and no problem, one outside still one (ADR 0029). The round trip always read the handshake's transport; three controls under T32.
 - **The first live load refused its handshake** as `executor.txt: nil`: DCS's own `io`/`os` answers a success with nothing, so only nil and a message is a refusal now, and a silence is settled by a stat of the final name (`publish`) or the request (`take`); modelled in `executor/framer`, eleven controls under T08, T09 and T26; `SHIPPED` gains the third hash.
 - **`live read all`** — the seven opt-in reads in turn in one DCS session, each alone, skipping any with a result in the labelled scene and stopping at the first that does not answer, which is then retested alone (ADR 0028); swept as `live/all-sends-past-a-read-that-did-not-answer`.
-- **The owed sweeps** — Stages 0 to 2 swept, all 25 entered and seen red, T02's through the build gate's roll call now printing `FAIL  `; `sweep-cover.sh` owes entries for Stages 0–8; T53's shape echo and T64's disarming-frame sweep named and entered.
-
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
@@ -73,8 +72,8 @@ entries at most: an eleventh means something here is finished, or belongs in
   measured shift and `...`, not T49's. Unmeasured too: DCS's `os.clock` and
   `os.time` against the harness's, a count hook raising inside either carrier or
   already held by a state (`none`, ADR 0005), what `dcs.log` renders around a
-  crossing's markers, which the reader ignores (ADR 0007), and what
-  `lfs.tempdir()` really gives, which every fixture supplies by hand. Which of
+  crossing's markers, which the reader ignores (ADR 0007). `lfs.tempdir()` is
+  measured: `%TEMP%\DCS` on one machine, 2.9.29 (ADR 0029). Which of
   `write`, `close`, `rename`, `remove` answers a success with nothing is unmeasured
   (the empty output dir fits a write, a close, or a rename that did nothing); under that,
   the waking frame's heartbeat pays a stat.
