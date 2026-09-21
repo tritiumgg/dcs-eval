@@ -452,6 +452,8 @@ fn place(phase: &str) -> String {
         "load" => "loading a mission".to_owned(),
         "sim" => "in a mission".to_owned(),
         "paused" => "in a paused mission".to_owned(),
+        "loaded" => "with a mission loaded".to_owned(),
+        "stopped" => "after the mission stopped".to_owned(),
         other => format!("in phase {other}"),
     }
 }
@@ -813,6 +815,21 @@ mod tests {
             )),
             "{summary}"
         );
+    }
+
+    #[test]
+    fn every_phase_either_host_writes_has_words() {
+        for (phase, words) in [
+            ("menu", "outside a mission"),
+            ("load", "loading a mission"),
+            ("sim", "in a mission"),
+            ("paused", "in a paused mission"),
+            ("loaded", "with a mission loaded"),
+            ("stopped", "after the mission stopped"),
+            ("mission", "in phase mission"),
+        ] {
+            assert_eq!(place(phase), words, "{phase}");
+        }
     }
 
     #[test]
