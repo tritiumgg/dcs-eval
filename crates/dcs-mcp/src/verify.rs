@@ -1259,7 +1259,10 @@ mod tests {
 
     /// The first live load: DCS handed its process a folder of its own
     /// inside the user's temp directory (ADR 0029). The install verifies,
-    /// and the round trip the handshake addresses answers.
+    /// and the round trip the handshake addresses answers. The ping reads
+    /// neither temp directory and answered before the fix too; it is here so
+    /// that one fixture holds what the live session showed, verify and ping
+    /// agreeing, and not as a guard on the comparison.
     #[test]
     fn a_dcs_temp_folder_under_this_clients_verifies_and_answers_a_ping() {
         let (b, variant, output) = fixture();

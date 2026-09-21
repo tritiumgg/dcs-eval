@@ -627,9 +627,10 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
     problems.extend(unresolved("install_guard", &handshake.install_guard));
     let tempdir = tempdir_of(&handshake.lfs_tempdir);
     // Only a disagreement between two paths that both resolved is worth
-    // reporting, and one under this client's is none. Absent is the executor saying its own read did not
-    // answer, and undecided is a path one side or the other could not
-    // resolve — which is somebody's finding, but not this one.
+    // reporting, and one under this client's is none. Absent is the
+    // executor saying its own read did not answer, and undecided is a path
+    // one side or the other could not resolve — which is somebody's
+    // finding, but not this one.
     if let Agreement::Differ { executor, client } = &tempdir {
         problems.push(Problem::TempdirDisagrees {
             executor: executor.clone(),
@@ -722,8 +723,9 @@ mod tests {
     /// The stand-in names a temp directory of its own under the output,
     /// which no real executor would: `lfs.tempdir()` inside DCS gives the
     /// host's, or a folder under it (ADR 0029). The fixture says the
-    /// host's, so a report of a healthy session carries nothing a test did not ask for and a disagreement
-    /// has to be published on purpose to appear.
+    /// host's, so a report of a healthy session carries nothing a test did
+    /// not ask for and a disagreement has to be published on purpose to
+    /// appear.
     fn published(b: &Sandbox, pid: u32) -> Standin {
         let mut s = Standin::open(&b.join("out"), "hook").expect("the session opens");
         s.pid = pid;
@@ -1128,7 +1130,18 @@ mod tests {
         let b = Sandbox::new();
         let s = live(&b);
         let client = paths::resolve(&std::env::temp_dir()).expect("this host has a temp directory");
-        let sibling = format!("{client}DCS");
+        // Beside the client's directory rather than after its spelling, so
+        // a temp directory at a drive root cannot make the sibling a child.
+        let name = client
+            .as_path()
+            .file_name()
+            .expect("this host's temp directory is not a drive root")
+            .to_string_lossy();
+        let sibling = client
+            .as_path()
+            .with_file_name(format!("{name}DCS"))
+            .display()
+            .to_string();
         respell(&s.output().join("executor.txt"), "lfs_tempdir", &sibling);
         let report = status(s.output());
         assert!(
