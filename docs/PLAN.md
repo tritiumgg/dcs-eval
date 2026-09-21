@@ -73,7 +73,8 @@ names a count, a diff, or a test that reddens under a stated mutation.
    §2 (§2.3).
 5. **Every task is marked `developer-only` or `DCS + human` and sequenced on it.** The DCS tasks are
    Stage 9, last, because they are wall-clock-bound and cannot be parallelised by adding effort —
-   with one developer-only row, T62, filed there because it is T50's switch.
+   with two developer-only rows, T62 and T63, filed there because they are T50's switch and
+   T52's verbs.
 
 **Decision records** (this plan makes two; each carries a revisit condition):
 
@@ -125,9 +126,11 @@ supervisor, one per session, and the result recorded). Neither blocks Milestones
   sweep shows every §10/§7 control reddening. Covers Stages 3–6.
 - **Milestone C — Installable and serving.** Someone can install the executor from one binary under
   park-and-restore, verify it, and an MCP agent can list and call six tools. *Acceptance:*
-  `dcs-mcp install --saved-games <fixture>` then `dcs-mcp verify` prints `verified`; an in-memory
-  MCP session lists six tools and calls each; `git status` on the fixture tree after `verify` is
-  clean (verify wrote nothing). Covers Stages 7–8.
+  `dcs-mcp install --saved-games <fixture>` then `dcs-mcp verify` over the same fixture prints
+  `verified` once a session is published there, which could be run only from T63 on, because the
+  binary had no installer verb when this milestone closed; an in-memory MCP session lists six
+  tools and calls each; `git status` on the fixture tree after `verify` is clean (verify wrote
+  nothing). Covers Stages 7–8.
 - **Milestone D — Proven live in DCS.** Someone can do the whole thing for real: install, evaluate
   in every reachable state including `missionscripting` through `a_do_script`, read game state, and leave the executor
   installed through play and a DCS update. *Acceptance:* the Stage 9 script prints every measured
@@ -137,7 +140,7 @@ supervisor, one per session, and the result recorded). Neither blocks Milestones
 The critical path runs through Stage 9: its six DCS + human tasks need DCS running with a person to
 set the scene, are wall-clock-bound, and cannot be shortened by parallel effort — so every off-DCS
 control that *can* be built and harness-proven earlier is, and Stage 9 inherits only what genuinely
-needs a real frame, and T62, the switch T50 turns.
+needs a real frame, and T62 and T63, the switch T50 turns and the verbs T52 runs.
 
 ---
 
@@ -342,7 +345,8 @@ rather than rows.
 
 **Stage command:** `cargo test -p dcs-mcp embed locate register install export_line uninstall
 verify`.  **Milestone C acceptance:** Stages 7–8 commands green; `dcs-mcp install --saved-games
-<fixture> && dcs-mcp verify` prints `verified`; the fixture tree is `git`-clean after verify.
+<fixture> && dcs-mcp verify --saved-games <fixture>` prints `verified` against a published session
+(the verbs are T63's, in Stage 9); the fixture tree is `git`-clean after verify.
 
 ---
 
@@ -350,20 +354,20 @@ verify`.  **Milestone C acceptance:** Stages 7–8 commands green; `dcs-mcp inst
 
 The wall-clock-bound tasks that need DCS running and a person to set the scene. Each fills a blank
 the documents left on purpose or confirms a number the harness cannot produce. This is the critical
-path; nothing here is parallelisable by adding developer effort. T62 is the exception: it is T50's
-developer-only half, the switch T50 turns, and it is here rather than in Stage 7 so that Milestone C
-stays as it closed.
+path; nothing here is parallelisable by adding developer effort. T62 and T63 are the exceptions,
+developer-only both: T62 is the switch T50 turns, and T63 the installer verbs T52 starts from. They
+are here rather than in Stages 7 and 8 so that Milestone C stays as it closed.
 
 | id | task | done when | needs | runs on |
 |---|---|---|---|---|
 | T63 | The installer's three verbs on the binary: `dcs-mcp install`, `verify` and `uninstall` over what T43–T46, T60 and T61 built — `Saved Games` from the known folder unless `--saved-games`, two variants or more refused with every name and `--variant` in the refusal, never picked and never prompted for (ADR 0024), `--replace` the one yes, and `install` printing what happens next, the `verify` line and the MCP registration snippet | `cargo test -p dcs-mcp installer` shows three variants refused with each named and nothing written, a named one installed with its siblings byte-identical, a foreign hook refused without `--replace`, `verify` exiting 1 on a problem and 0 on `verified`, and the real binary installing into a fixture, printing `verified` against a stand-in session and uninstalling back to the bytes it started from; mutations: an unnamed variant defaulting to `DCS` reddens the three-variant check; `--replace` assumed rather than read reddens the foreign-hook check; `verify` exiting 0 whatever it found reddens the exit check; the verbs left out of the binary's dispatch reddens the real-binary check | T43,T44,T45,T46,T60,T61 | developer-only |
-| T52 | The cutover from `dcs-api-bridge`, by hand and unassisted: its hook deleted and its `Export.lua` line removed before this executor installs (ADR 0022) | on a real machine: `DcsApiEval.lua` gone from `Scripts\Hooks\` and its `dofile` line gone from `Export.lua`, then `dcs-mcp install` and `dcs-mcp verify` green; no code checks any of it, and the refusal that once did is removed; mutation: pointing `verify`'s one stray prefix at `dcsapi` instead of `dcseval` must redden — a report that stops naming a second copy of our own executor and starts naming the project this one replaces has undone the narrowing in both directions at once | Milestone C | DCS + human |
+| T52 | The cutover from `dcs-api-bridge`, by hand and unassisted: its hook deleted and its `Export.lua` line removed before this executor installs (ADR 0022) | on a real machine: `DcsApiEval.lua` gone from `Scripts\Hooks\` and its `dofile` line gone from `Export.lua`, then `dcs-mcp install` and `dcs-mcp verify` green, each given `--variant` where `Saved Games` holds more than one; no code checks any of it, and the refusal that once did is removed; mutation: pointing `verify`'s one stray prefix at `dcsapi` instead of `dcseval` must redden — a report that stops naming a second copy of our own executor and starts naming the project this one replaces has undone the narrowing in both directions at once | T63, Milestone C | DCS + human |
 | T47 | The first live run: round-trip p50/p95 with the event-driven wait, `cpu_ms`/reply, replies/tick at W=8, seven-state generation wall time | the run script prints all four rows per state against the recorded baselines (30 ms p50, 465 s/generation); a run that prints none has not measured the change | Milestone C | DCS + human |
 | T48 | The dormant frame-time three-way comparison in DCS (hook absent / installed-dormant / armed-idle) | the script prints the three frame-time figures; the dormant figure is at or below the 0.098 ms baseline, which is the incumbent measured on one machine, DCS 2.9.28.26385, one session, so a figure that disagrees on other hardware is a new measurement rather than a regression; a higher figure here reopens `bridge.md` §2 and is reported as such | Milestone C | DCS + human |
 | T49 | `missionscripting` through `a_do_script` live with a mission loaded, and the s17 flag-agreement fixture | `dcs-mcp eval missionscripting …` returns through `a_do_script` with a mission loaded, and the ported s17 fixture shows a 16-bit flag crossing agreeing with a `DO SCRIPT` action; a disagreement is reported, not read as an empty walk | Milestone C | DCS + human |
 | T62 | The opt-in reads' switch: the four tier-2 reads and the three from the crashing batch (ADR 0023), off by default and asked for by group (`extra`, `suspect`) or one read at a time by key, through `game-state --reads` and `dcs_game_state`'s `reads`, and every read no axis is made of printed a line each | `cargo test --workspace opt_in` shows a default gather publishing none of the seven, each key alone publishing its read and no other opt-in one, an unasked read answering `unknown (tier 2 off)` or `unknown (suspect reads off)`, and the flag and the argument each reaching the gather; mutations: a suspect read sent by default reddens the default-gather check; a key that turns on its whole group reddens the one-read check; the flag dropped between the command line and the gather reddens the flag check; the argument dropped between the tool and the gather reddens the argument check | T35,T36,T38,T40 | developer-only |
 | T50 | The seven opt-in reads — the four tier-2 and the three from the crashing batch (ADR 0023) — each sent alone with T62's switch under the supervisor, one per session; editor-vs-menu detection, `mission_name` at the menu, the callback vocabulary | the script prints a row per opt-in read (sent alone, with its result or the crash that named it), records `getSimulatorMode` raw per state, and notes which offered callbacks were seen; an unmeasured axis stays `unknown`/`menu-or-editor` and says so | T62, Milestone C | DCS + human |
-| T51 | Permanent-installation acceptance: install, fly with the executor dormant, survive a DCS update, `verify` still green | on a real machine: `dcs-mcp install`; a play session with the executor dormant and no noticeable frame impact; a DCS update leaving `Saved Games` untouched; `dcs-mcp eval` in every reachable state; `dcs-mcp game-state` reporting the state; `dcs-mcp verify` green afterward — the project's done-condition | T52,T47,T48,T49,T50 | DCS + human |
+| T51 | Permanent-installation acceptance: install, fly with the executor dormant, survive a DCS update, `verify` still green | on a real machine: `dcs-mcp install`, given `--variant` where `Saved Games` holds more than one; a play session with the executor dormant and no noticeable frame impact; a DCS update leaving `Saved Games` untouched; `dcs-mcp eval` in every reachable state; `dcs-mcp game-state` reporting the state; `dcs-mcp verify` green afterward — the project's done-condition | T52,T47,T48,T49,T50 | DCS + human |
 
 **Stage command:** the live-run script printing every DCS + human row above.  **Milestone D acceptance:** T51
 passes and the dormant frame-time (T48) is at or below baseline.

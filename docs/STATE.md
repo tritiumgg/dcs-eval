@@ -28,9 +28,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T63** — `dcs-mcp install`, `verify` and `uninstall` are verbs of the binary: `Saved Games` from the known folder or `--saved-games`, several variants refused and named until `--variant` says which, never picked or prompted for (ADR 0024). Proved on fixtures; the real `Saved Games` is T52's.
 - **T62** — the seven opt-in reads, tier 2's four and the three from the crashing batch, off by default and asked for by group or by key through `game-state --reads` and `dcs_game_state`'s `reads`; nothing is refused by name any more (ADR 0023).
 - **T52's code half** — the installer's incumbent refusal and `verify`'s `dcsapi` stray prefix are gone (ADR 0022): `install` reads one leaf name in `Scripts\Hooks\` and `verify` reports only a second copy of our own executor. What remains of T52 is live and manual.
-- **T40, T45, T46** — the read-and-eval CLI verbs with `--out`/`--capture` worded by the one renderer; `uninstall` removing its own `dofile` line by whole-line equality and restoring what it parked; `verify` reading everything and writing nothing. **Stage 8 is closed.**
 
 *The last three at most, one line each. Git log holds the rest.*
 
@@ -40,9 +40,11 @@ broken. Empty this when the task closes.*
 parallel effort, and **only the maintainer can verify any of it**, at a running
 install. Everything provable off DCS is now proved.
 T50 can now send each of the seven opt-in reads alone, one per session, with T62's switch.
+T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
 
 The MCP registration still points at `dcs-api-bridge`; the swap was parked on
-Milestone C, which has now closed. That is the maintainer's call to make.
+Milestone C, which has now closed, and strands a session mid-task. That is the
+maintainer's call to make (ADR 0001); `install` now prints the snippet.
 
 ## After that
 
@@ -65,9 +67,6 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **Cutover — by hand, and nothing checks it.** `DcsApiEval.lua` and its `Export.lua`
   line go before this installs. ADR 0022 removed the refusal, so installing beside it
   now succeeds and both poll. Maintainer's; the README is the only warning.
-- **Maintainer decision — when the MCP registration is swapped.** Claude Code still
-  points at `dcs-api-bridge`; the swap strands a session mid-task, so it happens at
-  Milestone C. ADR 0001.
 - **What only Stage 9 sees.** The load sentinel covers two: the hook guard's
   swallow path, which has no seam until a raising stub sits on the frame path, and
   whether the export state survives between missions. The wrapper is proved under
@@ -96,3 +95,6 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A `Minter` has no owner.** The window mints from whatever it was handed; who
   holds one across tool calls, so two do not restart at seq 1, is Stage 7's.
   `Minter::seeded_at` resumes a counter.
+- **`install` over a copy of ours, then `uninstall`, leaves one in place.** Same
+  release or older: `install` parks ours, `uninstall` restores it (T45's); after an
+  upgrade it takes two runs. Maintainer's: restore a park we shipped? A row of its own.
