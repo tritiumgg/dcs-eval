@@ -419,6 +419,7 @@ mod tests {
     use super::*;
     use crate::serve::Options;
     use crate::testing::{Sandbox, published, ran, ticking};
+    use dcs_eval::paths;
     use dcs_eval::protocol;
     use dcs_eval::standin::Standin;
     use std::fs;
@@ -756,6 +757,50 @@ mod tests {
         let flag = run(args(&box_, &["status", "--loud"]), &mut sink)
             .expect_err("a flag nothing takes is refused");
         assert!(flag.contains("--loud"), "it names the flag: {flag}");
+    }
+
+    /// A file read from inside the write directory's own `Config`, the place
+    /// a location rule would most plainly have refused, runs and answers,
+    /// and the answer names the file and what its bytes hashed to.
+    #[test]
+    fn cli_eval_file_reads_a_file_from_wherever_it_lies() {
+        let box_ = Sandbox::new();
+        let mut s = Standin::open(&opts(&box_).output(), "hook").expect("the stand-in opens");
+        ticking(&mut s);
+        let probe = box_.join("DCS.openbeta").join("Config").join("probe.lua");
+        fs::create_dir_all(probe.parent().expect("a parent")).expect("Config is made");
+        fs::write(&probe, b"return marker\n").expect("the probe is written");
+        s.script("marker", "ok", "string", b"42");
+
+        let (code, shown) = ran(
+            &mut s,
+            args(
+                &box_,
+                [
+                    "eval",
+                    "hook",
+                    "--file",
+                    &probe.to_string_lossy(),
+                    "--wait-seconds",
+                    "10",
+                ],
+            ),
+        );
+        assert_eq!(code, 0, "an answered eval is not an error: {shown}");
+        assert_eq!(shown.lines().next(), Some("reply"), "{shown}");
+        let real = paths::resolve(&probe).expect("the probe resolves");
+        assert!(
+            shown.contains(&format!("source: {real}")),
+            "the answer names the file it read: {shown}"
+        );
+        // Computed outside the build, with `sha256sum`, over `return marker`
+        // and a newline, so it is independent of the reader.
+        assert!(
+            shown.contains(
+                "sha256: 7d72111abefa97d806630e7151bbfc34c1d60b0dacabaf49eb83bc906701fb0f"
+            ),
+            "and what its bytes hashed to: {shown}"
+        );
     }
 
     /// A flag that keeps a reply, on a verb that has no reply to keep. It is

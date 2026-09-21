@@ -727,7 +727,12 @@ not cover is printed by the sweep itself rather than left to be assumed.
   line is holding the reply's bytes already, and headers and a body are
   "obviously" what a reader wants — and it is deliberately narrow, since a
   `pending` has no reply behind it and goes on through the renderer. So the
-  red is exclusive and the capture entry above stays green under it.
+  capture entry above stays green under it.
+
+  `cli_eval_file_reads_a_file_from_wherever_it_lies` reddens beside the
+  byte-identity test: a second formatter prints the published bytes alone,
+  and the `source:` and `sha256:` lines a file eval's answer ends with are
+  the tool's wording, which that formatter never reaches.
 
   Observed red is the empty-diff assertion, which prints both texts: the
   published bytes carry the executor's blank separator line where
