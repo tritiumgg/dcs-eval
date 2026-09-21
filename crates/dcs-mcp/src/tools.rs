@@ -577,7 +577,8 @@ impl Serve {
     }
 
     /// Pick up a reply a `pending` answer left behind. One look, no waiting,
-    /// and the request is not sent again.
+    /// and the request is not sent again. A reply is kept for about five
+    /// minutes after it lands and removed after that.
     #[tool]
     async fn dcs_collect(
         &self,
@@ -603,12 +604,17 @@ impl Serve {
             // the phase is the one the wait carries when the disk says
             // nothing either — named rather than left out, because a caller
             // deciding whether to look again needs the same two facts here
-            // as in the `pending` that sent it.
+            // as in the `pending` that sent it. A reply left uncollected for
+            // five minutes is removed by the executor, and a look after that
+            // finds nothing too; the executor keeps no record to tell the two
+            // apart by.
             Ok(Collected::Nothing) => pending(
                 &args.id,
                 wait::PHASE_UNKNOWN,
                 None,
-                Some("nothing has landed under that id yet"),
+                Some(
+                    "nothing has landed under that id yet, or it landed and went uncollected long enough to be removed",
+                ),
             ),
             Err(why) => refuse("refused", vec![why.to_string()]),
         })
@@ -819,6 +825,10 @@ mod tests {
         assert!(
             rendered.contains("phase: "),
             "it names a phase rather than leaving one out: {rendered}"
+        );
+        assert!(
+            rendered.contains("long enough to be removed"),
+            "it says the reply may have been removed: {rendered}"
         );
 
         client.cancel().await.expect("the client hangs up");

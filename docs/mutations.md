@@ -380,6 +380,20 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +     if (clock() - start) * 1000 >= TICK_BUDGET_MS then
 ```
 
+### uncollected/collect-names-one-reason
+
+- task: T64
+- command: `mise exec -- cargo test -p dcs-mcp tools_listed_wording`
+- reddens: `tools_listed_wording_of_an_uncollected_id_names_a_phase`
+- note: `dcs_collect`'s answer for an id with nothing under it, put back to the
+  wording from before the sweep, which names only a reply not yet landed. It
+  fails at `it says the reply may have been removed`.
+
+```sweep-edit crates/dcs-mcp/src/tools.rs
+-                     "nothing has landed under that id yet, or it landed and went uncollected long enough to be removed",
++                     "nothing has landed under that id yet",
+```
+
 ### uncollected/expired-while-dormant
 
 - task: T64

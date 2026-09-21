@@ -158,7 +158,11 @@ picked up afterwards.
 A call that names no `wait_seconds` waits 15 seconds. That is a wait and never
 a limit: when it runs out the request is still published, the answer names an
 id, and `dcs_collect` picks the reply up afterwards. A mission load on its own
-routinely takes longer than the wait.
+routinely takes longer than the wait. A reply is kept for five minutes from the
+frame that answered it, so one whose request ran long is kept that much less.
+Past that, the executor removes it the next time it is awake — never
+while it is asleep — and `dcs_collect` then finds nothing under the id, and
+says it may have been removed.
 
 `unknown` is a value, not a guess: an axis nothing measured says so and says
 why.
