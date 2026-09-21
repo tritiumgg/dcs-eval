@@ -1475,11 +1475,14 @@ not cover is printed by the sweep itself rather than left to be assumed.
   and the `source:` and `sha256:` lines a file eval's answer ends with are
   the tool's wording, which that formatter never reaches.
 
-  Observed red is the empty-diff assertion, which prints both texts: the
-  published bytes carry the executor's blank separator line where
-  `wording::text` renders the headers and the body joined by one newline, so
-  the diff is several lines wide — `- first / + (blank) / - second / + first`
-  and on. The `--out` half of that same test stays green under this edit,
+  Observed red is the empty-diff assertion, `the terminal printed what the
+  tool renders`, and it is a line per header wide: `- status: ok` against
+  `+ status: ok\r`, down to the blank separator, `- ` against `+ \r`. Since
+  `wording::text` sets the body off with a blank line as the wire does, the
+  `\r` ending each published line is the whole difference, and the test's
+  `diff` splits on `\n` alone so that it shows; split with `str::lines`,
+  which drops the `\r`, it found no line that moved and this control stayed
+  green. The `--out` half of that same test stays green under this edit,
   which is what says its two halves watch different things.
 
 ```sweep-edit crates/dcs-mcp/src/cli.rs

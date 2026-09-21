@@ -57,13 +57,19 @@ pub fn text(answer: &CallToolResult) -> String {
         .join("\n")
 }
 
-/// A reply's headers, a line each, then its body.
+/// A reply's headers, a line each, a blank line, then its body.
+///
+/// The blank line is the wire's own framing, and it is always there, an
+/// empty body included: without it the last header and a body that is one
+/// line of `name: value` would read alike, and with it the first blank line
+/// ends the headers however the body begins.
 fn reply_lines(envelope: &Envelope) -> Vec<String> {
     let mut lines: Vec<String> = envelope
         .headers
         .iter()
         .map(|(name, value)| format!("{name}: {value}"))
         .collect();
+    lines.push(String::new());
     lines.push(String::from_utf8_lossy(&envelope.body).into_owned());
     lines
 }
@@ -329,6 +335,29 @@ mod tests {
             rendered.ends_with('7'),
             "the body is the last line: {rendered}"
         );
+    }
+
+    /// The body is set off from the headers by one blank line, as it is on
+    /// the wire, so the last header is never read as the first line of the
+    /// body.
+    #[test]
+    fn an_ok_reply_has_a_blank_line_between_its_headers_and_its_body() {
+        let answer = reply(&envelope(
+            &[("status", "ok"), ("result_type", "string")],
+            "7",
+        ));
+
+        assert_eq!(text(&answer), "reply\nstatus: ok\nresult_type: string\n\n7");
+    }
+
+    /// An empty body still gets the blank line, and the text ends on it: a
+    /// reply that returned nothing is the headers and then nothing, not the
+    /// headers alone.
+    #[test]
+    fn an_empty_body_ends_in_the_blank_line() {
+        let answer = reply(&envelope(&[("status", "ok"), ("result_type", "nil")], ""));
+
+        assert_eq!(text(&answer), "reply\nstatus: ok\nresult_type: nil\n\n");
     }
 
     /// A `pending` names what a caller needs to pick the reply up, and is not

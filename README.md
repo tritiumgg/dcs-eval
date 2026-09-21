@@ -147,8 +147,9 @@ registers, lists and answers all six tools below; each takes an optional
 | `dcs_collect` | pick up a reply that was still pending, by id |
 
 An answer comes back as one word on the first line and a line each after it. A
-reply the executor answered is headed `reply` and carries its headers and then
-its body. A reply that refused — `no-mission`, `stale-session`, `oversize` and
+reply the executor answered is headed `reply` and carries its headers, a blank
+line, then its body, so the first blank line ends the headers as it does on the
+wire. A reply that refused — `no-mission`, `stale-session`, `oversize` and
 `budget` among them — is headed by the word that refused it, says in one line
 why, and is marked an error, so a refusal never reads as a call that succeeded
 and came back empty. A `pending` names the id to collect under and the phase
