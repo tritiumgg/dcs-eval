@@ -972,6 +972,21 @@ mod file_refusals {
     const SECRET: &[u8] = b"local password = 'hunter2'\n";
 
     #[test]
+    fn a_held_file_over_the_ceiling_is_refused_without_being_opened() {
+        // A file too big for one request is refused on the stat. A read
+        // placed ahead of it would buffer the file for a request that cannot
+        // be sent, and here would fail on the hold instead.
+        let s = scene();
+        let h = handshake(&with(&handshake_bytes(&s.b), "max_request_bytes", "1024"));
+        let path = s.project.as_path().join("secret.lua");
+        let real = file(&path, &SECRET.repeat(64));
+        let hold = held(&path);
+        let err = check(&s.roots(), &h, HEADERS, &real).expect_err("refused");
+        drop(hold);
+        assert!(matches!(err.kind, Refusal::Oversize { .. }), "{err}");
+    }
+
+    #[test]
     fn a_held_file_outside_every_root_is_refused_without_being_opened() {
         let s = scene();
         let h = handshake(&handshake_bytes(&s.b));

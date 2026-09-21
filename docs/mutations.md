@@ -416,25 +416,29 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +         let head = match self.flight.back() {
 ```
 
-### file_refusals/file-opened-before-containment
+### file_refusals/file-opened-before-the-ceiling
 
 - task: T34
 - command: `mise exec -- cargo test -p dcs-eval file_refusals`
-- reddens: `a_held_file_outside_every_root_is_refused_without_being_opened`
-- note: the plan cell says the fixture is a path the process could not read
-  anyway, and that is the whole of it: the file is held open elsewhere, so a
-  read placed before the judgement turns three containment refusals into open
-  errors.
+- reddens: `a_held_file_over_the_ceiling_is_refused_without_being_opened`
+- note: a file too big for one request is refused on the stat. A read placed
+  ahead of it would buffer the file for a request that cannot be sent, and
+  would turn the refusal into an open error. The fixture is held open
+  elsewhere, so a late refusal cannot pass for an early one.
+
+  Observed red is four tests: the held oversize file, which comes back as a
+  failed stat rather than `Oversize`; the two framer refusals, whose absent
+  file now fails on the read before the framer is asked; and the directory,
+  which a read cannot open.
 
 ```sweep-edit crates/dcs-eval/src/file.rs
--     roots.judge(real)?;
+-     let block = protocol::frame(headers, b"").map_err(|source| FileRefusal {
 +     let _peek = fs::read(real.as_path()).map_err(|source| FileRefusal {
 +         path: real.clone(),
 +         kind: Refusal::Stat(source),
 +     })?;
-+     roots.judge(real)?;
++     let block = protocol::frame(headers, b"").map_err(|source| FileRefusal {
 ```
-
 
 ### file_refusals/ceiling-dropped
 
