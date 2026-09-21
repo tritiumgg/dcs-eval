@@ -1299,6 +1299,9 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 T62 and T63 are the developer-only rows here: the switch T50 turns, and the
 installer verbs T52 starts from. Their controls are swept like any other.
+T47, T48 and T50 need a running game for their figures, but the instrument
+that takes them, `dcs-mcp live`, runs off DCS, so its five controls are
+entries here too.
 
 ### reads/opt-in-sent-while-off
 
@@ -1454,6 +1457,68 @@ installer verbs T52 starts from. Their controls are swept like any other.
 +     Some(data.path())
 ```
 
+### live/row-without-a-figure-dropped
+
+- task: T47
+- command: `mise exec -- cargo test -p dcs-mcp live::report`
+- reddens: `every_row_prints_over_an_empty_ledger`
+
+```sweep-edit crates/dcs-mcp/src/live/report.rs
+-             None => writeln!(out, "{}", unmeasured(row))?,
++             None => continue,
+```
+
+### live/dormant-stat-on-the-armed-arm-file
+
+- task: T48
+- command: `mise exec -- lua5.1 tools/harness.lua live/dormant-probe`
+- reddens: `the dormant stat is of a path that does not exist`
+
+```sweep-edit crates/dcs-mcp/src/live/dormant.lua
+- local absent = E.arm .. ".absent"
++ local absent = E.arm
+```
+
+### live/second-read-in-one-session
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-mcp live::read`
+- reddens: `a_second_opt_in_read_in_one_session_is_refused`
+- note: the hunk deletes the line. The function it called is left unused,
+  which warns and does not stop `cargo test`; the assertion is the red.
+
+```sweep-edit crates/dcs-mcp/src/live/read.rs
+-     refuse_a_second(&rows, stamp)?;
+```
+
+### live/read-recorded-only-after-its-answer
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-mcp live::read`
+- reddens: `the_read_is_on_the_ledger_before_it_is_on_the_disk`
+- note: the hunk skips the entry that says the read was sent, which is the
+  ledger as it was when the outcome was the only write. The other four
+  `live::read` tests that count entries go red beside it.
+
+```sweep-edit crates/dcs-mcp/src/live/read.rs
+-     ledger::append(data, &Entry::new("read", &row, session, SENT)).map_err(|why| {
++     let _ = SENT; Ok::<(), std::io::Error>(()).map_err(|why| {
+```
+
+### live/read-sent-beside-a-ping
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_reads`
+- reddens: `alone_publishes_the_one_read_and_nothing_beside_it`
+- note: `alone_answers_the_reads_value` goes red beside it, because the first
+  item the window yields is then the ping's reply, which is not the read's
+  grammar.
+
+```sweep-edit crates/dcs-eval/src/reads.rs
+-     let specs = vec![spec];
++     let specs = vec![Spec::new(&[("op", "ping"), ("for", h.stamp.as_str())], b""), spec];
+```
+
 ---
 
 ## Out of scope
@@ -1502,7 +1567,8 @@ an entry here like any other, and both figures move.
   mutations are entries above. In Stage 9, T52's one mutation is
   `verify/stray-prefix-aimed-at-the-wrong-project`, and T62 and T63, Stage
   9's two developer-only rows, have entries of their own; all are counted in
-  scope.
+  scope. T47, T48 and T50 name mutations of the live instrument, which runs
+  off DCS, and their five controls are entries above, counted in scope.
   Stage 9's other rows need a running game, name no mutation and are owed
   none.
 
