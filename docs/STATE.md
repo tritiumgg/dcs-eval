@@ -27,9 +27,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **`verify` failed straight after every relaunch**: the executor writes no heartbeat at load, so the last session's file read as two problems; one written before the handshake is now a leftover and no problem, one since still one (ADR 0030). Client-only, no reinstall; four controls under T32 and T46.
 - **`verify` failed a session `ping` answered**: DCS gives `lfs.tempdir()` as `%TEMP%\DCS`, under the client's, and `status` read that as a disagreement; now `Within` and no problem, one outside still one (ADR 0029). The round trip always read the handshake's transport; three controls under T32.
 - **The first live load refused its handshake** as `executor.txt: nil`: DCS's own `io`/`os` answers a success with nothing, so only nil and a message is a refusal now, and a silence is settled by a stat of the final name (`publish`) or the request (`take`); modelled in `executor/framer`, eleven controls under T08, T09 and T26; `SHIPPED` gains the third hash.
-- **`live read all`** — the seven opt-in reads in turn in one DCS session, each alone, skipping any with a result in the labelled scene and stopping at the first that does not answer, which is then retested alone (ADR 0028); swept as `live/all-sends-past-a-read-that-did-not-answer`.
 
 *The last three at most, one line each. Git log holds the rest.*
 
