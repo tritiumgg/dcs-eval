@@ -248,6 +248,7 @@ measured says `unmeasured` and why; none is left out.
 dcs-mcp live dormant             --saved-games ... --variant DCS.openbeta
 dcs-mcp live rtt                 --saved-games ... --variant DCS.openbeta
 dcs-mcp live rtt --host export   --saved-games ... --variant DCS.openbeta
+dcs-mcp live read all            --saved-games ... --variant DCS.openbeta
 dcs-mcp live read multiplayer    --saved-games ... --variant DCS.openbeta
 dcs-mcp live report              --saved-games ... --variant DCS.openbeta
 ```
@@ -259,11 +260,16 @@ for about a quarter of a second, five times; run it at the menu or paused.
 `rtt` sends a few hundred `return 1` chunks to each state the session serves,
 and nothing else; `--count` changes how many, and `--host export` times the
 export host's own state; `dormant` and `read` are the hook's and refuse
-`--host`. `read` sends the one opt-in read you name, alone, and refuses a
-second in the same DCS session: restart DCS between them. It writes the read
-down as sent before sending it, so a run you stop mid-wait still counts. A
-read that takes the game down is recorded as the session gone, with the id to
-look for in the executor's events log. `--label <word>` records the scene you
+`--host`. `read all` sends the seven opt-in reads one after another, each
+alone, skipping any that already has a result, and stops at the first that
+comes back as anything but an answer. If one stops it, restart DCS, send that
+one alone with `read <key>` to confirm it was the cause, then restart and run
+`read all` again for the rest. `report` shows a read's latest result; if the
+retest answers where the sequence stopped, `live.jsonl` still holds both. `read <key>` sends the one read you name. Both refuse a
+DCS session that has already had a read. Every read is written down as sent
+before it is sent, so a run you stop mid-wait still counts. A read that takes
+the game down is recorded as the session gone, with the id to look for in the
+executor's events log. `--label <word>` records the scene you
 say the game is in beside each figure. The scene phase — `sim_mode` per
 scene, `mission_name` at the menu, the callbacks seen — is *not built*, and
 its rows say so.
