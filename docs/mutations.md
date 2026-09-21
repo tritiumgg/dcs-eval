@@ -1119,9 +1119,10 @@ not cover is printed by the sweep itself rather than left to be assumed.
 - command: `mise exec -- cargo test -p dcs-eval status`
 - reddens: `a_heartbeat_another_session_wrote_after_this_one_loaded_is_still_a_problem`
 - note: the time dropped, so any other stamp is a leftover and a second
-  executor writing since this session loaded goes unreported. The two older
-  foreign-stamp checks redden beside it, and outside the filter so does
-  `game`'s agreement that status flags a foreign heartbeat.
+  executor writing since this session loaded goes unreported. Every foreign
+  fixture reddens beside it — the instant check, the flagged-foreign check,
+  and `game`'s agreement that status flags a foreign heartbeat, which the
+  filter reaches by name.
 
 ```sweep-edit crates/dcs-eval/src/status.rs
 -     beat.stamp != h.stamp && published.is_some_and(|at| beat.modified < at)
