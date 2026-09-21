@@ -117,7 +117,7 @@ pub fn rows() -> Vec<Row> {
         rtt("hook"),
     ));
 
-    let dormant = Absent::NotBuilt("no phase takes it yet");
+    let dormant = Absent::Run("dormant");
     rows.push(row(
         "dormant.absent",
         "dormant cost, hook absent",

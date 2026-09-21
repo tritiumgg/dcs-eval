@@ -14,6 +14,9 @@ pub mod ledger;
 // Every row the instrument knows of, printed measured or not.
 pub mod report;
 
+// What a frame costs while nobody is asking, timed inside DCS.
+mod dormant;
+
 // Round trips, the executor's own cost of each, and replies per frame.
 mod rtt;
 
@@ -26,7 +29,7 @@ use crate::tools;
 use ledger::{Entry, Session};
 
 /// The usage line, which is also the list of phases this verb answers to.
-pub const USAGE: &str = "usage: dcs-mcp live rtt | report\n       \
+pub const USAGE: &str = "usage: dcs-mcp live dormant | rtt | report\n       \
      --saved-games <dir> --variant <name> [--host hook|export] [--data-dir <dir>]\n       \
      [--wait-seconds <n>] [--count <n>] [--label <word>]";
 
@@ -36,6 +39,7 @@ const DEFAULT_COUNT: usize = 200;
 /// Which phase a line asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Phase {
+    Dormant,
     Rtt,
     Report,
 }
@@ -43,6 +47,7 @@ enum Phase {
 /// The phase a word names, or nothing where it names none.
 fn phase_of(word: &str) -> Option<Phase> {
     match word {
+        "dormant" => Some(Phase::Dormant),
         "rtt" => Some(Phase::Rtt),
         "report" => Some(Phase::Report),
         _ => None,
@@ -85,7 +90,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     }
     let word = args
         .next()
-        .ok_or_else(|| "live wants a phase: rtt or report".to_owned())?;
+        .ok_or_else(|| "live wants a phase: dormant, rtt or report".to_owned())?;
     let phase = phase_of(&word).ok_or_else(|| format!("live does not take {word}"))?;
 
     let mut saved_games = None;
@@ -205,6 +210,7 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
     };
     let upto = tools::waiting(parsed.wait_seconds);
     let entries = match parsed.phase {
+        Phase::Dormant => dormant::run(h, &session, upto),
         Phase::Rtt => rtt::run(h, &session, parsed.count, upto),
         Phase::Report => Vec::new(),
     };
