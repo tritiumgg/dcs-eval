@@ -228,11 +228,57 @@ An `--out` path is not yet judged against the containment rule the install
 paths are judged by — *not built*; `--capture` is, because it goes through the
 same data directory.
 
+`dcs-mcp live` is a fifth word with no tool behind it; see *Measuring a live
+install*.
+
+## Measuring a live install
+
+`dcs-mcp live` takes the figures only a running game can give — round trips,
+what a dormant frame costs, what each opt-in read does — one phase at a time,
+because each wants a scene you set up in DCS first. Every phase appends to
+`live.jsonl` under the data directory, and `live report` prints every row,
+measured or not, against the figure it is compared with. A row nothing has
+measured says `unmeasured` and why; none is left out.
+
+```
+dcs-mcp live dormant             --saved-games ... --variant DCS.openbeta
+dcs-mcp live rtt                 --saved-games ... --variant DCS.openbeta
+dcs-mcp live rtt --host export   --saved-games ... --variant DCS.openbeta
+dcs-mcp live read multiplayer    --saved-games ... --variant DCS.openbeta
+dcs-mcp live report              --saved-games ... --variant DCS.openbeta
+```
+
+The executor has to be in place first: `dcs-mcp install`, then start DCS.
+
+`dormant` times the executor's own file checks inside DCS and holds the game
+for about a quarter of a second, five times; run it at the menu or paused.
+`rtt` sends a few hundred `return 1` chunks to each state the session serves,
+and nothing else; `--count` changes how many, and `--host export` times the
+export host's own state; `dormant` and `read` are the hook's and refuse
+`--host`. `read` sends the one opt-in read you name, alone, and refuses a
+second in the same DCS session: restart DCS between them. It writes the read
+down as sent before sending it, so a run you stop mid-wait still counts. A
+read that takes the game down is recorded as the session gone, with the id to
+look for in the executor's events log. `--label <word>` records the scene you
+say the game is in beside each figure. The scene phase — `sim_mode` per
+scene, `mission_name` at the menu, the callbacks seen — is *not built*, and
+its rows say so.
+
+`live.jsonl` is only ever appended to. A line in it that is not an entry —
+torn by a crash, or edited by hand — makes `read` refuse and `report` print
+the line and exit 1, until you fix or delete that line yourself.
+
+No phase sends a read you did not name. These are this machine's figures, not
+a promise, and whether the instrument measures DCS correctly is itself unproven
+until its first live run.
+
 ## What ran, written down
 
 Every evaluation — from a tool call or from the terminal — appends one line of
 JSON to `runs.jsonl` under the data directory (`%LOCALAPPDATA%\dcs-mcp` unless
-`--data-dir` says otherwise), before the answer is rendered. A line carries
+`--data-dir` says otherwise), before the answer is rendered. `dcs-mcp live` is
+the exception: its requests are measurements, and they go to its own
+`live.jsonl` instead. A line carries
 when it ran, the id the reply came back under, the executor session, the host
 and the Lua state, whether the chunk came from a file or off the line, and what
 the reply said: its status, the stage that failed if one did, the CPU
