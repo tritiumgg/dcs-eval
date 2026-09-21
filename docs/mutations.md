@@ -1319,6 +1319,9 @@ swept like any other.
 - task: T62
 - command: `mise exec -- cargo test -p dcs-eval opt_in`
 - reddens: `opt_in_a_single_key_publishes_that_read_and_no_other`
+- note: two `game_state` `opt_in` tests go red beside it — the lone-`server`
+  session check and the per-read lines check — because `server` then turns
+  on `multiplayer` too, and `mission_loaded` the other two suspects.
 
 ```sweep-edit crates/dcs-eval/src/reads.rs
 -                     Some(at) => on |= 1 << at,

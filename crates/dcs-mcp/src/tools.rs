@@ -355,7 +355,11 @@ pub(crate) fn game_state(serve: &Serve, host: Option<&str>, upto: Duration) -> A
     };
     Answered::plain(
         match game::game_state(client.output().as_path(), Tiers::default(), upto) {
-            Ok(state) => say("game-state", vec![state.to_string()]),
+            Ok(state) => {
+                let mut lines = vec![state.to_string()];
+                lines.extend(state.recorded_lines());
+                say("game-state", lines)
+            }
             Err(why) => refuse("refused", vec![why.to_string()]),
         },
     )

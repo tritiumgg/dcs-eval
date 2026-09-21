@@ -1339,8 +1339,9 @@ pub struct GameState {
     /// headline names it where the process is gone, so a reader can tell
     /// which session ended.
     pub stamp: Option<String>,
-    /// The reads no axis is made of, kept verbatim. Nothing reads this
-    /// field; it is here so a reader does not lose what was gathered.
+    /// The reads no axis is made of, kept verbatim, so a reader does not
+    /// lose what was gathered. [`GameState::recorded_lines`] renders them
+    /// a line each.
     pub recorded: Vec<(&'static crate::reads::Read, crate::reads::Answer)>,
 }
 
@@ -1401,6 +1402,43 @@ impl fmt::Display for GameState {
         parts.push(format!("the executor is {}", self.bridge));
         parts.push(version);
         f.write_str(&parts.join(", "))
+    }
+}
+
+impl GameState {
+    /// One line per read no axis is made of, in table order:
+    /// `<key>: <lua type> <value>` where it answered, and otherwise the
+    /// reason an axis would print — `unknown (tier 2 off)` for a read
+    /// nobody asked for, which is also what says it can be asked for.
+    ///
+    /// It walks what was gathered and invents nothing: where no window was
+    /// opened, because there was no handshake to open one against, there
+    /// are no lines at all.
+    #[must_use]
+    pub fn recorded_lines(&self) -> Vec<String> {
+        self.recorded
+            .iter()
+            .map(|(read, answer)| match why_of(answer) {
+                Ok((lua_type, Some(value))) => format!("{}: {lua_type} {value}", read.key()),
+                Ok((lua_type, None)) => format!("{}: a {lua_type}", read.key()),
+                Err(why) => format!("{}: {why}", read.key()),
+            })
+            .collect()
+    }
+}
+
+/// A read's answer as a value, or as the reason an axis made of it would
+/// be unknown. No type is wanted of it, so any value will do.
+fn why_of(answer: &crate::reads::Answer) -> Result<(String, Option<String>), Why> {
+    use crate::reads::Answer;
+    match answer {
+        Answer::Value { lua_type, value } => Ok((lua_type.clone(), value.clone())),
+        Answer::Raised { message } => Err(Why::Errored {
+            message: message.clone(),
+        }),
+        Answer::Malformed { body } => Err(Why::Malformed { body: body.clone() }),
+        Answer::Unanswered { why } => Err(Why::Unanswered { why: why.clone() }),
+        Answer::NotSent { why } => Err(Why::NotSent { why: *why }),
     }
 }
 
@@ -3615,6 +3653,125 @@ mod game_state {
         assert_ne!(load, tier);
         assert_ne!(load.to_string(), tier.to_string());
         assert!(!load.to_string().contains("tier 2"), "{load}");
+    }
+
+    #[test]
+    fn opt_in_a_suspect_read_off_renders_unknown_suspect_reads_off() {
+        let suspect = Why::NotSent {
+            why: reads::NotSent::SuspectOff,
+        };
+        assert_eq!(suspect.to_string(), "unknown (suspect reads off)");
+        for other in [reads::NotSent::TierTwoOff, reads::NotSent::Loading] {
+            let other = Why::NotSent { why: other };
+            assert_ne!(suspect.to_string(), other.to_string());
+        }
+    }
+
+    #[test]
+    fn opt_in_the_unmapped_reads_render_a_line_each() {
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "sim");
+        s.script("DCS.getMissionLoaded", "ok", "string", b"boolean\tfalse");
+        let tiers = reads::Tiers::from_words(["mission_loaded"]).expect("a key");
+        let state = derived(&mut s, tiers, 8);
+        let lines = state.recorded_lines();
+        let keys: Vec<&str> = lines
+            .iter()
+            .map(|line| line.split(':').next().unwrap_or_default())
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "mission_file",
+                "model_time",
+                "sim_mode",
+                "player_id",
+                "mission_loaded",
+                "player_unit_type",
+                "mission_theatre",
+            ],
+            "{lines:#?}"
+        );
+        for want in [
+            "mission_loaded: boolean false",
+            "player_unit_type: unknown (suspect reads off)",
+            "player_id: unknown (tier 2 off)",
+        ] {
+            assert!(
+                lines.iter().any(|line| line == want),
+                "no line reads `{want}`: {lines:#?}"
+            );
+        }
+        // Nothing gathered, nothing printed: no invented lines where no
+        // window was opened.
+        assert!(derive(&Evidence::nothing()).recorded_lines().is_empty());
+    }
+
+    #[test]
+    fn opt_in_a_suspect_read_that_raises_or_answers_no_text_renders_so() {
+        // A raise is what a live run reads off a suspect read whose name
+        // the installed build lacks, so its line is held exactly, beside a
+        // value with no text and a reply that is not the grammar.
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "sim");
+        s.script("DCS.getMissionLoaded", "ok", "number", b"x");
+        s.script(
+            "DCS.getPlayerUnitType",
+            "ok",
+            "string",
+            b"error\tattempt to call a nil value",
+        );
+        s.script("DCS.getMissionTheatre", "ok", "string", b"table\t");
+        let tiers = reads::Tiers::from_words(["suspect"]).expect("a group");
+        let lines = derived(&mut s, tiers, 10).recorded_lines();
+        for want in [
+            "mission_loaded: unknown: the reply is not the read grammar, 1 bytes of it",
+            "player_unit_type: unknown: attempt to call a nil value",
+            "mission_theatre: a table",
+        ] {
+            assert!(
+                lines.iter().any(|line| line == want),
+                "no line reads `{want}`: {lines:#?}"
+            );
+        }
+    }
+
+    #[test]
+    fn opt_in_server_alone_leaves_the_session_single_or_host() {
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&reads::Probe::Reachable),
+            reads::Tiers::from_words(["server"]).expect("a key"),
+            Some(&reads::Answer::NotSent {
+                why: reads::NotSent::TierTwoOff,
+            }),
+            Some(&told(true)),
+        );
+        assert_eq!(got, SessionAxis::SingleOrHost);
+    }
+
+    #[test]
+    fn opt_in_multiplayer_alone_true_leaves_the_session_unknown_tier_2_off() {
+        let (_, activity) = in_mission("sim");
+        let got = session_of(
+            &activity,
+            Some(&reads::Probe::Reachable),
+            reads::Tiers::from_words(["multiplayer"]).expect("a key"),
+            Some(&told(true)),
+            Some(&reads::Answer::NotSent {
+                why: reads::NotSent::TierTwoOff,
+            }),
+        );
+        assert_eq!(
+            got,
+            SessionAxis::Unknown {
+                why: Why::NotSent {
+                    why: reads::NotSent::TierTwoOff
+                }
+            }
+        );
+        assert_eq!(got.to_string(), "unknown (tier 2 off)");
     }
 
     #[test]
