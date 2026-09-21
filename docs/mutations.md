@@ -2300,6 +2300,57 @@ here too, and so are the ones for what T50's figures decided.
 +         callee: "DCS.getMissionLoaded",
 ```
 
+### reads/editor-map-read-in-the-hook
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_reads`
+- reddens: `the_editor_map_is_read_in_the_gui_state`
+- note: every read then goes to `hook`, where `MapWindow` is not, so the
+  state-count tests go red beside it.
+
+```sweep-edit crates/dcs-eval/src/reads.rs
+-             ("state", read.state()),
++             ("state", "hook"),
+```
+
+### reads/gui-table-unguarded
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_reads`
+- reddens: `a_gui_read_whose_table_is_nil_answers_a_raise_naming_it`
+- note: without the guard the index of a nil `MapWindow` raises outside the
+  pcall, so the reference interpreter stops and the chunk does not run to
+  the end.
+
+```sweep-edit crates/dcs-eval/src/reads.rs
+-     if read.state() != "hook" {
++     if read.state() == "never" {
+```
+
+### game/editor-map-read-backwards
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_state`
+- reddens: `the_editor_map_tells_the_editor_from_the_menu`
+
+```sweep-edit crates/dcs-eval/src/game.rs
+-         Ok(true) => Activity::Editor,
++         Ok(true) => Activity::Menu,
+```
+
+### game/refused-editor-read-picked
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_state`
+- reddens: `a_refused_editor_read_leaves_menu_or_editor_standing`
+- note: the `gui` state out of reach is then read as the menu, which is a
+  pick the evidence does not make.
+
+```sweep-edit crates/dcs-eval/src/game.rs
+-         return Activity::MenuOrEditor;
++         return Activity::Menu;
+```
+
 ---
 
 ## Out of scope

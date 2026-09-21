@@ -167,15 +167,19 @@ says it may have been removed.
 `unknown` is a value, not a guess: an axis nothing measured says so and says
 why.
 
-`dcs_game_state` sends eleven reads every time: the five ED's own hook script
-makes, and six more — `multiplayer`, `server`, `track`, `player_id`,
+`dcs_game_state` sends twelve reads every time: the five ED's own hook script
+makes, six more — `multiplayer`, `server`, `track`, `player_id`,
 `player_unit_type`, `mission_theatre` — that a live run sent alone from the
-hook, at the menu and in a mission, and that answered. `DCS.getMissionLoaded`
-crashed DCS in a mission, twice, and is never sent; `dcs_eval` can still call
-it, at your own risk. The session is `single player` where `multiplayer` says
-false — DCS answers `server` true in single player too — and `hosting` where
-both say true. Every read no summary is made of is printed on a line of its
-own.
+hook, at the menu and in a mission, and that answered, and one in the `gui`
+state, the mission editor's map. `DCS.getMissionLoaded` crashed DCS in a
+mission, twice, and is never sent; `dcs_eval` can still call it, at your own
+risk. The session is `single player` where `multiplayer` says false — DCS
+answers `server` true in single player too — and `hosting` where both say
+true. Outside a mission and a load, the editor's map says where the game is,
+`at the main menu (read)` or `in the mission editor (read)`; where the
+`gui` state refuses the read, as on a client joined to a server, the answer
+stays at the main menu or in the mission editor and says why. Every read no
+summary is made of is printed on a line of its own.
 
 `dcs_eval_file` reads any file this server can read, wherever it lies — much
 as a chunk could open it with `io.open` in the `hook` state — and

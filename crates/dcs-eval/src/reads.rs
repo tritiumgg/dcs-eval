@@ -5,10 +5,12 @@
 //! executor evaluates what it is given and keeps no catalogue of calls,
 //! so whether a read is safe to make is this crate's concern. The first
 //! five are the ones ED's own hook script calls from the hook state; the
-//! next six were sent alone from a hook in a live session and answered
-//! (ADR 0031). The answer to everything else is a constant table: a call
-//! that is not in it is not a game-state read at all, and an agent that
-//! wants one evaluates it under its own name where a crash names it.
+//! next six were sent alone from a hook in a live session and answered;
+//! the last is the mission editor's map, read in the `gui` state, which is
+//! what tells the editor from the menu (ADR 0031). The answer to everything
+//! else is a constant table: a call that is not in it is not a game-state
+//! read at all, and an agent that wants one evaluates it under its own name
+//! where a crash names it.
 //!
 //! Every read is sent by every game-state. None is refused by name; the
 //! one refusal is the table itself, and `DCS.getMissionLoaded` is not in
@@ -50,7 +52,7 @@ impl Read {
     }
 
     /// The Lua expression the chunk hands to `pcall`. It is a whole
-    /// expression and not a bare function name, because one of them is
+    /// expression and not a bare function name, because two of them are
     /// not under `DCS` at all.
     #[must_use]
     pub fn callee(&self) -> &'static str {
@@ -67,8 +69,9 @@ impl Read {
 /// Every read this client may send, in the order it sends them.
 ///
 /// The first five come in the frozen document's own order, which is the
-/// order ED's hook script makes them in, and the six measured live follow.
-const READS: [Read; 11] = [
+/// order ED's hook script makes them in; the six measured live follow; the
+/// one `gui` read, the mission editor's map, is last.
+const READS: [Read; 12] = [
     Read {
         key: "pause",
         callee: "DCS.getPause",
@@ -123,6 +126,11 @@ const READS: [Read; 11] = [
         key: "mission_theatre",
         callee: "DCS.getMissionTheatre",
         state: "hook",
+    },
+    Read {
+        key: "map_visible",
+        callee: "MapWindow.getVisible",
+        state: "gui",
     },
 ];
 
@@ -669,8 +677,28 @@ fn spec_of(h: &Handshake, read: &Read) -> Spec {
             ("state", read.state()),
             ("chunkname", name.as_str()),
         ],
-        &chunk(read.callee()),
+        &body_of(read),
     )
+}
+
+/// The body a read is published as: [`chunk`] for a hook read, and for a
+/// read in any other state the same chunk behind a line that answers as a
+/// raise when the table the callee sits under is nil.
+///
+/// The hook's tables are DCS's own, and a nil one is a host that is not
+/// DCS, which is the request's error by design. `MapWindow` is a module the
+/// mission editor loads into `gui`, and whether it is there is a fact about
+/// the game, so its absence comes back as a read that threw, naming it.
+fn body_of(read: &Read) -> Vec<u8> {
+    let mut body = Vec::new();
+    if read.state() != "hook" {
+        let table = read.callee().split('.').next().unwrap_or_default();
+        body.extend_from_slice(
+            format!("if {table} == nil then return 'error\\t{table} is nil' end\n").as_bytes(),
+        );
+    }
+    body.extend(chunk(read.callee()));
+    body
 }
 
 /// One read, published as the only request in its window: no ping, no
@@ -784,12 +812,18 @@ mod game_reads {
     /// end-to-end check would say nothing and say it in green.
     #[cfg(windows)]
     fn over_a_stub(def: &str, callee: &str) -> String {
+        over_a_body(def, &text(callee))
+    }
+
+    /// The same, for a whole body rather than one callee's chunk.
+    #[cfg(windows)]
+    fn over_a_body(def: &str, body: &str) -> String {
         use std::process::Command;
         let b = crate::testing::Sandbox::new();
         let driver = b.join("driver.lua");
         let mut script = def.to_owned();
         script.push_str("\nlocal f = assert(loadstring([==[\n");
-        script.push_str(&text(callee));
+        script.push_str(body);
         script.push_str("]==]))\nio.write(f())\n");
         std::fs::write(&driver, script).expect("the driver is written");
         let out = match Command::new("lua5.1.exe").arg(&driver).output() {
@@ -1270,7 +1304,7 @@ mod game_reads {
     fn each_read_is_its_own_request() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", 13);
+        gathered(&mut s, &h, "menu", 14);
         for callee in callees() {
             assert_eq!(
                 carrying(&s, &chunkname(callee)),
@@ -1279,50 +1313,50 @@ mod game_reads {
             );
         }
         // The window's size is this test's subject, so it counts a total:
-        // eleven reads, the ping and the probe.
+        // twelve reads, the ping and the probe.
         assert_eq!(
             carrying(&s, "=dcs-eval read "),
-            11,
-            "the ledger holds {} eval requests naming a read and should hold 11, one per read",
+            12,
+            "the ledger holds {} eval requests naming a read and should hold 12, one per read",
             carrying(&s, "=dcs-eval read ")
         );
         assert_eq!(
             s.seen().len(),
-            13,
-            "the ledger holds {} requests and should hold 13: eleven reads, a ping and a probe",
+            14,
+            "the ledger holds {} requests and should hold 14: twelve reads, a ping and a probe",
             s.seen().len()
         );
     }
 
     #[test]
     fn the_reads_share_one_tick() {
-        // The window's whole purpose here: eleven reads, one wake. The
+        // The window's whole purpose here: twelve reads, one wake. The
         // ticker waits for all of them to be on the disk before it answers
         // anything, so a client that published them one at a time would
         // never let it past the wait.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", 13);
+        gathered(&mut s, &h, "menu", 14);
         assert_eq!(s.tick, 1, "the session answered over {} ticks", s.tick);
     }
 
     #[test]
-    fn every_read_is_sent_to_the_hook_state() {
+    fn every_read_goes_to_the_state_it_names() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", 13);
+        gathered(&mut s, &h, "menu", 14);
         assert_eq!(carrying(&s, "state: hook"), 11);
-        assert_eq!(carrying(&s, "=dcs-eval read "), 11);
-        // The probe is the one eval that goes elsewhere, and the ping
-        // names no state at all.
-        assert_eq!(carrying(&s, "state: gui"), 1);
+        assert_eq!(carrying(&s, "=dcs-eval read "), 12);
+        // The probe and the editor's map are the evals that go to gui,
+        // and the ping names no state at all.
+        assert_eq!(carrying(&s, "state: gui"), 2);
     }
 
     #[test]
     fn every_published_body_holds_exactly_one_pcall() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", 13);
+        gathered(&mut s, &h, "menu", 14);
         let mut reads = 0;
         for (n, seen) in s.seen().iter().enumerate() {
             let text = String::from_utf8_lossy(&seen.bytes);
@@ -1338,14 +1372,14 @@ mod game_reads {
                 n + 1
             );
         }
-        assert_eq!(reads, 11, "the control: {reads} read bodies were looked at");
+        assert_eq!(reads, 12, "the control: {reads} read bodies were looked at");
     }
 
     #[test]
     fn the_readings_come_back_in_the_list_order() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", 13);
+        let readings = gathered(&mut s, &h, "menu", 14);
         let keys: Vec<&str> = readings.entries().iter().map(|(r, _)| r.key()).collect();
         assert_eq!(
             keys,
@@ -1360,7 +1394,8 @@ mod game_reads {
                 "track",
                 "player_id",
                 "player_unit_type",
-                "mission_theatre"
+                "mission_theatre",
+                "map_visible"
             ]
         );
     }
@@ -1395,7 +1430,7 @@ mod game_reads {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
         s.script("DCS.getPause", "ok", "string", b"boolean\ttrue");
-        let readings = gathered(&mut s, &h, "menu", 13);
+        let readings = gathered(&mut s, &h, "menu", 14);
         assert_eq!(
             readings.of("pause"),
             Some(&Answer::Value {
@@ -1421,7 +1456,7 @@ mod game_reads {
     fn the_read_that_crashed_dcs_is_never_published() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", 13);
+        gathered(&mut s, &h, "menu", 14);
         for callee in callees() {
             assert_eq!(
                 carrying(&s, &chunkname(callee)),
@@ -1443,8 +1478,8 @@ mod game_reads {
     fn every_read_has_exactly_one_answer() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", 13);
-        assert_eq!(readings.entries().len(), 11);
+        let readings = gathered(&mut s, &h, "menu", 14);
+        assert_eq!(readings.entries().len(), 12);
         for r in listed() {
             assert_eq!(
                 readings
@@ -1512,10 +1547,10 @@ mod game_reads {
     fn the_ping_and_the_probe_share_the_reads_tick() {
         // A window is one wake whatever is in it, so the ping and the
         // probe cost nothing beyond the reads. The ticker waits for all
-        // thirteen before it answers anything.
+        // fourteen before it answers anything.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", 13);
+        let readings = gathered(&mut s, &h, "menu", 14);
         assert_eq!(s.tick, 1, "the session answered over {} ticks", s.tick);
         let ping = readings
             .ping()
@@ -1534,7 +1569,7 @@ mod game_reads {
         let b = Sandbox::new();
         let (mut s, mut h) = ticking(&b);
         h.stamp.push_str("-not-this-session");
-        let readings = gathered(&mut s, &h, "menu", 13);
+        let readings = gathered(&mut s, &h, "menu", 14);
         let Some(Err(why)) = readings.ping() else {
             panic!("wanted a ping that says why, got {:?}", readings.ping());
         };
@@ -1557,7 +1592,7 @@ mod game_reads {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
         s.script("return 'ok'", "ok", "string", b"ok");
-        let readings = gathered(&mut s, &h, "menu", 13);
+        let readings = gathered(&mut s, &h, "menu", 14);
         assert_eq!(readings.probe(), Some(&Probe::Reachable));
     }
 
@@ -1569,7 +1604,7 @@ mod game_reads {
         // apart by it and by nothing else.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", 13);
+        let readings = gathered(&mut s, &h, "menu", 14);
         let Some(Probe::Unanswered {
             why: Unanswered::NotOk { status, .. },
         }) = readings.probe()
@@ -1622,11 +1657,11 @@ mod game_reads {
     }
 
     #[test]
-    fn the_probe_is_the_one_request_that_does_not_go_to_hook() {
+    fn the_probe_and_the_editor_map_are_the_requests_that_go_to_gui() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", 13);
-        assert_eq!(carrying(&s, "state: gui"), 1);
+        gathered(&mut s, &h, "menu", 14);
+        assert_eq!(carrying(&s, "state: gui"), 2);
         assert_eq!(carrying(&s, "state: hook"), 11);
         assert_eq!(carrying(&s, "op: ping"), 1);
     }
@@ -1638,7 +1673,7 @@ mod game_reads {
         // about the game.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", 13);
+        gathered(&mut s, &h, "menu", 14);
         let probe = s
             .seen()
             .iter()
@@ -1668,7 +1703,7 @@ mod game_reads {
     }
 
     #[test]
-    fn the_list_is_the_five_ed_calls_from_a_hook_then_the_six_measured_live() {
+    fn the_list_is_the_five_ed_calls_the_six_measured_live_and_the_editor_map() {
         assert_eq!(
             callees(),
             vec![
@@ -1683,12 +1718,13 @@ mod game_reads {
                 "net.get_my_player_id",
                 "DCS.getPlayerUnitType",
                 "DCS.getMissionTheatre",
+                "MapWindow.getVisible",
             ]
         );
     }
 
     #[test]
-    fn the_one_callee_that_is_not_a_dcs_name_is_the_net_one() {
+    fn the_callees_not_under_dcs_are_the_net_one_and_the_editor_map() {
         // The chunk builder must never prepend `DCS.`, and this is the
         // entry that says why.
         let odd: Vec<&str> = listed()
@@ -1696,7 +1732,54 @@ mod game_reads {
             .map(|r| r.callee())
             .filter(|c| !c.starts_with("DCS."))
             .collect();
-        assert_eq!(odd, vec!["net.get_my_player_id"]);
+        assert_eq!(odd, vec!["net.get_my_player_id", "MapWindow.getVisible"]);
+    }
+
+    #[test]
+    fn the_editor_map_is_read_in_the_gui_state() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", 14);
+        let request = s
+            .seen()
+            .iter()
+            .map(|seen| String::from_utf8_lossy(&seen.bytes).into_owned())
+            .find(|text| text.contains(&chunkname("MapWindow.getVisible")))
+            .expect("the editor's map was read");
+        assert!(request.contains("state: gui"), "{request}");
+        assert!(!request.contains("state: hook"), "{request}");
+    }
+
+    /// The editor read's body, as it is published.
+    #[cfg(windows)]
+    fn editor_body() -> String {
+        let read = READS
+            .iter()
+            .find(|r| r.key() == "map_visible")
+            .expect("the editor read is listed");
+        String::from_utf8(body_of(read)).expect("the body is ASCII")
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn a_gui_read_whose_table_is_nil_answers_a_raise_naming_it() {
+        // Run by the reference interpreter with no `MapWindow` at all: the
+        // guard answers in the read grammar rather than letting the index
+        // raise outside the pcall.
+        assert_eq!(over_a_body("", &editor_body()), "error\tMapWindow is nil");
+        assert_eq!(
+            over_a_body(
+                "MapWindow = { getVisible = function() return true end }",
+                &editor_body()
+            ),
+            "boolean\ttrue"
+        );
+    }
+
+    #[test]
+    fn a_hook_read_is_the_bare_chunk() {
+        let read = READS.first().expect("the table is not empty");
+        assert_eq!(body_of(read), chunk(read.callee()));
     }
 
     #[test]

@@ -408,16 +408,33 @@ fn unusable(beat: Option<&Beat>) -> Option<Why> {
 
 /// What the session is doing.
 ///
-/// `MenuOrEditor` is one value and not two, and it is not `unknown`: the
-/// axis knows the game is at one of the two, and nothing measured on this
-/// build tells them apart. The value's name holds the indeterminacy rather
-/// than picking.
+/// `Menu` and `Editor` are told apart by the editor's map, read in the `gui`
+/// state (ADR 0031). `MenuOrEditor` is the phase alone, before that read,
+/// and what is left where the `gui` state refused it: the axis knows the
+/// game is at one of the two, and the value's name holds the indeterminacy
+/// rather than picking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Activity {
     Loading,
     Mission { name: String },
+    Menu,
+    Editor,
     MenuOrEditor,
     Unknown { why: Why },
+}
+
+impl Activity {
+    /// The value's word, for a fact that quotes it.
+    fn word(&self) -> &'static str {
+        match self {
+            Self::Loading => "loading",
+            Self::Mission { .. } => "mission",
+            Self::Menu => "menu",
+            Self::Editor => "editor",
+            Self::MenuOrEditor => "menu-or-editor",
+            Self::Unknown { .. } => "unknown",
+        }
+    }
 }
 
 impl fmt::Display for Activity {
@@ -425,11 +442,42 @@ impl fmt::Display for Activity {
         match self {
             Self::Loading => f.write_str("loading"),
             Self::Mission { name } => write!(f, "in a mission, {name}"),
+            Self::Menu => f.write_str("at the main menu (read)"),
+            Self::Editor => f.write_str("in the mission editor (read)"),
             Self::MenuOrEditor => f.write_str(
-                "at the main menu or in the mission editor (not distinguished on this build)",
+                "at the main menu or in the mission editor (the gui state refused the read \
+                 that tells them apart)",
             ),
             Self::Unknown { why } => write!(f, "{why}"),
         }
+    }
+}
+
+/// Which of the two a `menu-or-editor` activity is, from the editor's map
+/// read in the `gui` state: visible is the editor, hidden is the menu.
+///
+/// Every other activity passes through untouched, because the read is
+/// evidence about the menu phase and nothing else. A `refused` reply is
+/// the `gui` state out of reach, as on a client joined to a server, and
+/// leaves `menu-or-editor` standing; any other failure is `unknown` naming
+/// itself, never a pick.
+#[must_use]
+pub fn editor_of(activity: Activity, map_visible: Option<&crate::reads::Answer>) -> Activity {
+    use crate::reads::{Answer, Unanswered};
+    if !matches!(activity, Activity::MenuOrEditor) {
+        return activity;
+    }
+    if let Some(Answer::Unanswered {
+        why: Unanswered::NotOk { status, .. },
+    }) = map_visible
+        && status == "refused"
+    {
+        return Activity::MenuOrEditor;
+    }
+    match bool_of(map_visible) {
+        Ok(true) => Activity::Editor,
+        Ok(false) => Activity::Menu,
+        Err(why) => Activity::Unknown { why },
     }
 }
 
@@ -441,10 +489,9 @@ impl fmt::Display for Activity {
 /// already on the disk, and nothing answers during one anyway.
 ///
 /// At the menu the answer is `menu-or-editor` **whatever `mission_name`
-/// says**. What `DCS.getMissionName()` gives at the menu — nothing, or
-/// still the last mission flown — has never been measured, so a name there
-/// is not evidence about anything and certainly not evidence against a
-/// phase that is measured.
+/// says**, and [`editor_of`] tells the two apart from a read of their own.
+/// `DCS.getMissionName()` was measured empty at the menu and in the editor
+/// (ADR 0031), but a name there would still be no evidence against a phase.
 ///
 /// On the export host no read is possible at all, for every phase word it
 /// writes and `sim` included: the two hosts' vocabularies overlap on that
@@ -624,7 +671,9 @@ pub fn pause_of(
         note: None,
     };
     match activity {
-        Activity::Loading | Activity::MenuOrEditor => return settled(Pause::NotApplicable),
+        Activity::Loading | Activity::Menu | Activity::Editor | Activity::MenuOrEditor => {
+            return settled(Pause::NotApplicable);
+        }
         Activity::Unknown { .. } => {
             return settled(Pause::Unknown {
                 why: Why::GateUnknown { gate: "activity" },
@@ -809,9 +858,9 @@ fn refusal_word(probe: &crate::reads::Probe) -> Option<&str> {
 ///
 /// A `refused` probe at the menu is the second of the vocabulary's two
 /// disagreement examples, and **it lands here and leaves `activity:
-/// menu-or-editor` definite**. The probe is this axis's evidence; using it
-/// to unknown `activity` would be exactly the borrowing decision record
-/// 0018 forbids, however strong the instinct to unknown both.
+/// menu`, `editor` or `menu-or-editor` definite**. The probe is this axis's
+/// evidence; using it to unknown `activity` would be exactly the borrowing
+/// decision record 0018 forbids, however strong the instinct to unknown both.
 #[must_use]
 pub fn session_of(
     activity: &Activity,
@@ -822,11 +871,11 @@ pub fn session_of(
     use crate::reads::Probe;
     let refused = probe.and_then(refusal_word) == Some("refused");
     match activity {
-        Activity::MenuOrEditor if refused => {
+        Activity::Menu | Activity::Editor | Activity::MenuOrEditor if refused => {
             return SessionAxis::Unknown {
                 why: Why::Disagrees {
                     facts: vec![
-                        Fact::new("activity", "menu-or-editor"),
+                        Fact::new("activity", activity.word()),
                         Fact::new("the gui probe", "refused, where the menu answers"),
                     ],
                 },
@@ -854,11 +903,11 @@ pub fn session_of(
                 },
             };
         }
-        Activity::MenuOrEditor => {
+        Activity::Menu | Activity::Editor | Activity::MenuOrEditor => {
             return SessionAxis::Unknown {
                 why: Why::OutsideMission {
                     gate: "activity",
-                    said: "menu-or-editor".to_owned(),
+                    said: activity.word().to_owned(),
                 },
             };
         }
@@ -1371,7 +1420,11 @@ impl fmt::Display for GameState {
             Activity::Loading => parts.push(
                 "loading — nothing answers until the load ends; collect the id later".to_owned(),
             ),
-            Activity::Mission { .. } | Activity::MenuOrEditor | Activity::Unknown { .. } => {
+            Activity::Mission { .. }
+            | Activity::Menu
+            | Activity::Editor
+            | Activity::MenuOrEditor
+            | Activity::Unknown { .. } => {
                 parts.push(self.activity.to_string());
             }
         }
@@ -1432,7 +1485,10 @@ fn why_of(answer: &crate::reads::Answer) -> Result<(String, Option<String>), Why
 /// vocabulary names, and by nothing else.
 #[must_use]
 pub fn derive(e: &Evidence) -> GameState {
-    let activity = activity_of(e.beat.as_ref(), e.of("mission_name"));
+    let activity = editor_of(
+        activity_of(e.beat.as_ref(), e.of("mission_name")),
+        e.of("map_visible"),
+    );
     let pause = pause_of(&activity, e.beat.as_ref(), e.of("pause"));
     let session = session_of(
         &activity,
@@ -2204,6 +2260,63 @@ mod game_state {
         );
     }
 
+    /// A read's reply that came back refused with `status`.
+    fn read_refused(status: &str) -> reads::Answer {
+        reads::Answer::Unanswered {
+            why: reads::Unanswered::NotOk {
+                status: status.to_owned(),
+                stage: Some("dostring_in".to_owned()),
+                detail: "no".to_owned(),
+            },
+        }
+    }
+
+    #[test]
+    fn the_editor_map_tells_the_editor_from_the_menu() {
+        let menu = || activity_of(Some(&ours(Host::Hook, "menu", true)), None);
+        assert_eq!(menu(), Activity::MenuOrEditor, "the phase alone");
+        assert_eq!(editor_of(menu(), Some(&told(true))), Activity::Editor);
+        assert_eq!(editor_of(menu(), Some(&told(false))), Activity::Menu);
+    }
+
+    #[test]
+    fn a_refused_editor_read_leaves_menu_or_editor_standing() {
+        let menu = activity_of(Some(&ours(Host::Hook, "menu", true)), None);
+        let got = editor_of(menu, Some(&read_refused("refused")));
+        assert_eq!(got, Activity::MenuOrEditor);
+        assert!(got.to_string().contains("refused"), "{got}");
+    }
+
+    #[test]
+    fn a_failed_editor_read_is_unknown_naming_it_and_never_a_pick() {
+        let menu = || activity_of(Some(&ours(Host::Hook, "menu", true)), None);
+        assert_eq!(
+            editor_of(menu(), Some(&raised())),
+            Activity::Unknown {
+                why: Why::Errored {
+                    message: "attempt to call a nil value".to_owned()
+                }
+            }
+        );
+        let other = editor_of(menu(), Some(&read_refused("invalid-state")));
+        assert!(matches!(other, Activity::Unknown { .. }), "{other:?}");
+        assert!(other.to_string().contains("invalid-state"), "{other}");
+        let wrong = editor_of(menu(), Some(&said("yes")));
+        assert!(matches!(wrong, Activity::Unknown { .. }), "{wrong:?}");
+    }
+
+    #[test]
+    fn the_editor_map_moves_no_activity_but_the_menu_phase() {
+        // In a mission the map is hidden, and during a load nothing is
+        // read: the read is evidence about the menu phase alone.
+        let (_, mission) = in_mission("sim");
+        assert_eq!(editor_of(mission.clone(), Some(&told(true))), mission);
+        assert_eq!(
+            editor_of(Activity::Loading, Some(&told(true))),
+            Activity::Loading
+        );
+    }
+
     #[test]
     fn session_is_unknown_naming_the_gate_where_activity_is_unknown() {
         // The gate has to be *actually* unknown for this sentence to be
@@ -2808,7 +2921,7 @@ mod game_state {
         let mut s = Standin::open(&b.join("dcs"), "hook").expect("the stand-in opens");
         s.pid = std::process::id();
         s.handshake().expect("the handshake publishes");
-        let state = derived(&mut s, 13);
+        let state = derived(&mut s, 14);
         assert_eq!(
             state.activity,
             Activity::Unknown {
@@ -2846,7 +2959,7 @@ mod game_state {
             "",
             b"net.dostring_in returned nil",
         );
-        let state = derived(&mut s, 13);
+        let state = derived(&mut s, 14);
         assert_eq!(
             state.activity,
             Activity::Mission {
@@ -2869,7 +2982,7 @@ mod game_state {
         s.script("DCS.isTrackPlaying", "ok", "string", b"boolean\tfalse");
         s.script("DCS.isMultiplayer", "ok", "string", b"boolean\tfalse");
         s.script("return 'ok'", "ok", "string", b"ok");
-        let state = derived(&mut s, 13);
+        let state = derived(&mut s, 14);
         assert_eq!(state.track, Track::Live);
         assert_eq!(state.session, SessionAxis::Single);
     }
@@ -2885,7 +2998,7 @@ mod game_state {
             b"string\tCaucasus TvT",
         );
         s.script("DCS.getPause", "ok", "string", b"boolean\ttrue");
-        let state = derived(&mut s, 13);
+        let state = derived(&mut s, 14);
         assert_eq!(state.pause.value, Pause::Paused, "the read did not win");
         assert_eq!(state.pause.phase_callback, Some(Phase::Sim));
         assert!(
@@ -2915,7 +3028,7 @@ mod game_state {
         );
         s.script("return 'ok'", "ok", "string", b"ok");
         s.script("DCS.isMultiplayer", "ok", "string", b"boolean\tfalse");
-        let state = derived(&mut s, 13);
+        let state = derived(&mut s, 14);
         assert_eq!(
             state.pause.value,
             Pause::Unknown {
@@ -2947,7 +3060,7 @@ mod game_state {
             b"string\tCaucasus TvT",
         );
         s.script("DCS.getSimulatorMode", "ok", "string", b"number\t2");
-        let state = derived(&mut s, 13);
+        let state = derived(&mut s, 14);
         let recorded = state
             .recorded
             .iter()
@@ -2973,7 +3086,7 @@ mod game_state {
             b"string\tCaucasus TvT",
         );
         s2.script("DCS.getSimulatorMode", "ok", "string", b"number\t7");
-        let other = derived(&mut s2, 13);
+        let other = derived(&mut s2, 14);
         assert_eq!(
             axes(&state),
             axes(&other),
@@ -3024,6 +3137,7 @@ mod game_state {
                 ("server", told(false)),
                 ("track", told(false)),
                 ("sim_mode", said("2")),
+                ("map_visible", told(false)),
             ]),
         }
     }
@@ -3434,16 +3548,31 @@ mod game_state {
     }
 
     #[test]
-    fn the_headline_for_the_menu_says_the_editor_is_not_distinguished() {
+    fn the_headline_at_the_menu_says_which_of_the_two_the_editor_map_read() {
         let b = Sandbox::new();
         let s = handshaken(&b);
-        let line = headline(&s, |e| {
-            e.beat = Some(ours(Host::Hook, "menu", true));
-        });
-        assert!(
-            line.contains("not distinguished on this build"),
-            "the value's own name holds the indeterminacy: {line}"
-        );
+        let refused = reads::Answer::Unanswered {
+            why: reads::Unanswered::NotOk {
+                status: "refused".to_owned(),
+                stage: Some("dostring_in".to_owned()),
+                detail: "net.dostring_in returned nil".to_owned(),
+            },
+        };
+        for (answer, want) in [
+            (told(false), "at the main menu (read)"),
+            (told(true), "in the mission editor (read)"),
+            (refused, "the gui state refused the read"),
+        ] {
+            let line = headline(&s, |e| {
+                e.beat = Some(ours(Host::Hook, "menu", true));
+                for (read, given) in &mut e.answers {
+                    if read.key() == "map_visible" {
+                        *given = answer.clone();
+                    }
+                }
+            });
+            assert!(line.contains(want), "{want} is missing from {line}");
+        }
     }
 
     #[test]
@@ -3562,7 +3691,7 @@ mod game_state {
             b"string\tF-4E-45MC",
         );
         s.script("net.get_my_player_id", "ok", "string", b"number\t0");
-        let state = derived(&mut s, 13);
+        let state = derived(&mut s, 14);
         let lines = state.recorded_lines();
         let keys: Vec<&str> = lines
             .iter()
@@ -3606,7 +3735,7 @@ mod game_state {
             b"error\tattempt to call a nil value",
         );
         s.script("DCS.getMissionTheatre", "ok", "string", b"table\t");
-        let lines = derived(&mut s, 13).recorded_lines();
+        let lines = derived(&mut s, 14).recorded_lines();
         for want in [
             "sim_mode: unknown: the reply is not the read grammar, 1 bytes of it",
             "player_unit_type: unknown: attempt to call a nil value",
