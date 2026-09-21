@@ -102,6 +102,88 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ---
 
+## Stage 0 — toolchain and harness floor
+
+### interpreter/wrong-version-admitted
+
+- task: T01
+- command: `sh tools/check-lua-test.sh`
+- reddens: `5.4 refused, by version`
+- note: the plan's mutation is an input — pointing the guard at a 5.4 binary —
+  and the test feeds that input, a fake banner, on every run. What the sweep
+  breaks is the guard, so that the banner it is fed is admitted.
+
+```sweep-edit tools/check-lua.sh
+-     "$want "*"PUC-Rio"*)
++     "Lua "*)
+```
+
+### workspace/library-dropped-from-members
+
+- task: T02
+- command: `mise exec -- sh tools/buildcheck.sh`
+- reddens: `crates/dcs-eval is not in Cargo.toml's members`
+- note: cargo pulls a path dependency into the workspace by itself, so fmt,
+  clippy, build and test all stay green and the roll call at the foot of the
+  build gate is the red, which is why the roll call exists; it leads with
+  `FAIL  ` so that this red is not read as a build that broke. The resolution
+  does not change, so `Cargo.lock` does not move. Dropping `dcs-mcp` instead,
+  which nothing depends on, would rewrite `Cargo.lock`, a file the runner
+  takes no copy of, so that variant is not entered. The command is the whole
+  build gate, run twice.
+
+```sweep-edit Cargo.toml
+- members = ["crates/dcs-eval", "crates/dcs-mcp"]
++ members = ["crates/dcs-mcp"]
+```
+
+### harness/empty-suite-passes
+
+- task: T03
+- command: `mise exec -- sh tools/harness-test.sh`
+- reddens: `no checks is nothing ran`
+- note: the plan's mutation is an input, a suite with no assertions, which the
+  test feeds the runner on every run. What the sweep breaks is the runner's
+  refusal of it.
+
+```sweep-edit tools/harness.lua
+-   if empty > 0 or total == 0 then
++   if false then
+```
+
+### stubs/dostring_in-evaluates
+
+- task: T04
+- command: `mise exec -- lua5.1 tools/harness.lua stubs`
+- reddens: `a chunk that would return a value answers empty`
+
+```sweep-edit tools/harness/states.lua
+- local function dostring_in(state, _)
+-   if DOSTRING_STATES[state] then
+-     return ""
++ local function dostring_in(state, chunk)
++   if DOSTRING_STATES[state] then
++     return tostring((loadstring(chunk) or function() end)())
+```
+
+### interop/interpreter-absent-reddens
+
+- task: T05
+- command: `mise exec -- cargo test -p dcs-eval interop`
+- reddens: `the_shipped_executors_handshake_parses`
+- note: the plan's mutation removes CI's interpreter step, which only a CI run
+  can see. What that removal does to the test is performed here instead: the
+  spawn meets no interpreter, and the module panics rather than skipping, so a
+  change that turned that into a skip would leave this green. Every test that
+  spawns the interpreter goes red with it.
+
+```sweep-edit crates/dcs-eval/src/interop.rs
+-     let out = Command::new("lua5.1.exe")
++     let out = Command::new("lua5.1-absent.exe")
+```
+
+---
+
 ## Stage 3 — eval and line-truth
 
 
@@ -1688,8 +1770,8 @@ an entry here like any other, and both figures move.
   its mutations are not source edits at all — a second interpreter binary, a CI
   step removed, a workspace member removed. No plan row asks for a sweep over
   them, and one is owed.
-- controls: 25
-- breakdown: T01–T06 one each, 6; T07 three refusals, 3; T08, T09, T10 two
+- controls: 20
+- breakdown: T06 one, 1; T07 three refusals, 3; T08, T09, T10 two
   each, 6; T11 one, 1; T12 one, 1; T13 two, 2; T14, T15 one each, 2; T16 two
   (the comment byte uncounted), 2; T17 two, 2 — the `superseded` half its cell
   defers is swept under T54 as `e2e/stamp-change-not-superseded` and counted
