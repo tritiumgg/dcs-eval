@@ -7,11 +7,11 @@ startup; it sleeps until something asks it for anything, and answers in the
 state you name. **`dcs-mcp`** is a single Windows binary that installs the
 executor, speaks its file-based protocol, and serves six MCP tools.
 
-> **Nothing here is built yet.** This repository holds two frozen
-> specifications, a plan, and the toolchain they stand on. Every section below
-> describes what the finished thing does and is marked `not built` until the
-> task that delivers it lands. `docs/STATE.md` says where the work actually
-> stands.
+> **Built, and proved off DCS; not yet proved in it.** The executor, the
+> client, the MCP server and its six tools, the command line and the installer
+> are built and held by tests that need no game. What remains is the live
+> proof at a running DCS install, and where a section below describes
+> something not built it says so. `docs/STATE.md` says where the work stands.
 
 ## What it is for
 
@@ -35,24 +35,7 @@ and at every arm, disarm and phase change; while it is asleep it writes none,
 which is the point — a tool asking how things are reads that file and the
 process id and costs the game nothing.
 
-## Install — *not built*
-
-Download `dcs-mcp.exe` and run:
-
-```
-dcs-mcp install
-dcs-mcp verify
-```
-
-`install` finds your `Saved Games\DCS*` folder, places the executor in
-`Scripts\Hooks\`, and appends one line to `Export.lua`. It never writes to the
-DCS install itself, and nothing already in `Saved Games` is deleted or
-overwritten — a file in the way is registered and moved aside, and `uninstall`
-puts it back. The register and the copies live in `%LOCALAPPDATA%\dcs-mcp\`,
-outside both DCS folders so that removing either leaves them standing, and
-nothing under there is ever deleted.
-
-`verify` re-checks the installation and writes nothing.
+## Install
 
 > **Uninstall `dcs-api-bridge` first, by hand.** This replaces it, and the two
 > use the same directory and the same transport root. Running both is not a
@@ -64,6 +47,65 @@ nothing under there is ever deleted.
 > `Scripts\Hooks\` — its own — and `verify` reports only what this project put
 > there. What else you load is yours. ADR 0001, ADR 0022.
 
+Download `dcs-mcp.exe` and run it from a terminal:
+
+```
+dcs-mcp install
+```
+
+`install` finds your `Saved Games` folder the way Windows does — through the
+shell's known folder, so one you have moved is found where it really is — and
+the `DCS*` folders in it, one per DCS variant. With one, that is where it
+installs. With more than one it installs into none of them, names them all,
+and asks you to say which:
+
+```
+dcs-mcp install --variant DCS
+```
+
+It never picks one for you and never stops at a prompt: the refusal is the
+question, and the flag is the answer. `--saved-games <dir>` points it at a
+folder of your choosing instead.
+
+It places the executor in `Scripts\Hooks\` and appends one line to
+`Scripts\Export.lua`, creating the file if there is none. It never writes to
+the DCS install itself, and nothing already in `Saved Games` is deleted or
+overwritten — a file in the way is registered and moved aside, and `uninstall`
+puts it back. A file already at the executor's name that this project did not
+ship is refused and named; `--replace` moves it aside and installs anyway.
+Nothing else in `Scripts\Hooks\` is looked at. The register and the copies
+live in `%LOCALAPPDATA%\dcs-mcp\` (or `--data-dir <dir>`), outside both DCS
+folders so that removing either leaves them standing, and nothing under there
+is ever deleted.
+
+When it is done it says what it did, that DCS picks the executor up the next
+time it starts, the `verify` line to run after that, and a snippet to register
+the server with your MCP client, naming the folder and variant it installed
+into.
+
+```
+dcs-mcp verify --variant DCS
+dcs-mcp uninstall --variant DCS
+```
+
+`verify` reads the installation and the executor's session and writes
+nothing. It ends `verified`, or `not verified` with a line per problem, and
+until DCS has started once with the executor in place there is no session to
+read, which it reports as one. `--host export` reports the `Export.lua`
+host's session instead of the hook's. `uninstall` takes the executor out —
+only a file whose hash this project shipped — and our one line out of
+`Export.lua`, and puts back every file `install` moved aside. A file at our
+name that we did not ship is left where it is and named. If `install` created
+`Export.lua`, `uninstall` leaves it empty rather than deleting a file nothing
+recorded it creating. Give `uninstall` the same `--data-dir` you gave
+`install`, if you gave one: the register it restores from lives there. After
+`install` has run over a copy of ours, whether the same release or an older
+one, `uninstall` puts that copy back; run `uninstall` again to take it out.
+
+All three take `--saved-games` and `--variant`, and exit 0 when done (for
+`verify`: when `verified`), 1 when refused or not verified, and 2 for a
+command line that would not parse.
+
 ## Run it as an MCP server
 
 Point your MCP client at the binary and the `serve` verb:
@@ -74,8 +116,8 @@ dcs-mcp serve --saved-games "C:\Users\you\Saved Games" --variant DCS.openbeta
 
 Give the folder its real path. `Saved Games` can be relocated, so a path built
 out of `%USERPROFILE%` is not reliably the folder DCS writes into; if you are
-not sure where yours is, `install` reports the one it found — *not built*, so
-until it is, read the path off the DCS folder in your own `Saved Games`.
+not sure where yours is, `install` prints a registration naming the one it
+found.
 
 Add `--host export` to talk to the Export.lua half instead of the hook.
 
@@ -88,10 +130,10 @@ its directory appears the first time DCS loads it, so you can point a client at
 the server before you install and before the game is running, and nothing has
 to be restarted afterwards.
 
-`--saved-games` and `--variant` must both be given; finding your `Saved Games`
-folder and its `DCS*` variants for you is *not built*. The server registers,
-lists and answers all six tools below; each takes an optional `host`, which is
-`hook` or `export` and falls back to `--host`.
+`--saved-games` and `--variant` must both be given to `serve`; only the
+installer finds them for you, and the line it prints names both. The server
+registers, lists and answers all six tools below; each takes an optional
+`host`, which is `hook` or `export` and falls back to `--host`.
 
 ## The six tools
 
@@ -182,9 +224,9 @@ A verb exits 0 for an answer or a `pending`, 1 where the answer is a refusal
 or a file you asked for could not be written, and 2 for a command line that
 would not parse.
 
-`install`, `verify` and `uninstall` are *not built*. An `--out` path is not
-yet judged against the containment rule the install paths are judged by —
-*not built*; `--capture` is, because it goes through the same data directory.
+An `--out` path is not yet judged against the containment rule the install
+paths are judged by — *not built*; `--capture` is, because it goes through the
+same data directory.
 
 ## What ran, written down
 
