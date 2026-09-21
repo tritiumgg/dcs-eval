@@ -17,8 +17,9 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. The last full sweep, on `build/owed-sweeps` before it landed: **108 entries reddened,
-109 of 109 in scope**, 2 out of scope, 0 unperformed, tree identical afterward.
+**Stage 9 live run, paused 2026-09-21 at step 8 of 10** — DCS 2.9.29.27468, variant `DCS`. Done: install and verify (after PR #80 and ADR 0029); `live dormant --label menu` 0.0011 ms/frame against 0.098, an upper bound (the empty-loop floor capped before the clock); `live rtt` at the menu and in a mission, hook and export: p50 13.8–14.0 ms against 30, ~300–410 replies/s; `missionscripting` answered through `a_do_script` (T49's first half).
+`live read all --label mission`: multiplayer false, server true, track false, player_id 0; **`mission_loaded` crashed DCS** — ACCESS_VIOLATION in lua.dll `luaS_newlstr` ← `lua_next` ← edCore `ED_lua_copyindex`, the events log ending on its open marker.
+Resume: `live read mission_loaded --label mission` alone in a fresh mission (ADR 0028's retest); `live read all --label mission` for player_unit_type and mission_theatre; a fresh launch at the menu, `live read all --label menu`; `live report`. Results are in `%LOCALAPPDATA%\dcs-mcp\live.jsonl`. Then the figures into a decision record, and `live` leaves the binary.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
