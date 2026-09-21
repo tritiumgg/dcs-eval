@@ -1057,6 +1057,47 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +     let (arm_file, undecided) = arm_of(arm, std::fs::write(arm, b"").and_then(|()| std::fs::metadata(arm)).map(|_| ()));
 ```
 
+### status/tempdir-under-the-clients-read-as-a-disagreement
+
+- task: T32
+- command: `mise exec -- cargo test -p dcs-eval status`
+- reddens: `lfs_tempdir_under_this_clients_temp_directory_is_within_and_no_problem`
+- note: the first live load's `%TEMP%\DCS` (ADR 0029). With the within branch
+  gone it falls through to a disagreement, and `verify` says `not verified`
+  on a session `ping` answers.
+
+```sweep-edit crates/dcs-eval/src/status.rs
+-     } else if client.contains(&executor) {
++     } else if false {
+```
+
+### status/tempdir-anywhere-read-as-within
+
+- task: T32
+- command: `mise exec -- cargo test -p dcs-eval status`
+- reddens: `lfs_tempdir_disagreeing_with_this_clients_temp_directory_is_a_problem`
+- note: every resolved temp directory admitted as within, so one outside the
+  client's tree stops being reported. The shared-bytes sibling check reddens
+  beside it.
+
+```sweep-edit crates/dcs-eval/src/status.rs
+-     } else if client.contains(&executor) {
++     } else if true {
+```
+
+### status/tempdir-within-by-byte-prefix
+
+- task: T32
+- command: `mise exec -- cargo test -p dcs-eval status`
+- reddens: `lfs_tempdir_sharing_only_this_clients_bytes_is_a_problem`
+- note: containment taken as a folded prefix of the spelling rather than at a
+  segment boundary, which admits `...\TempDCS` as inside `...\Temp`.
+
+```sweep-edit crates/dcs-eval/src/status.rs
+-     } else if client.contains(&executor) {
++     } else if executor.to_string().to_lowercase().starts_with(&client.to_string().to_lowercase()) {
+```
+
 ### pipeline/yielded-in-arrival-order
 
 - task: T33
