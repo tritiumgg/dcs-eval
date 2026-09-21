@@ -2292,8 +2292,10 @@ here too, and so are the ones for what T50's figures decided.
 - reddens: `the_read_that_crashed_dcs_is_never_published`
 - note: the read that crashed DCS in a mission put back in the table, in the
   slot of the one beside it, which is the smallest edit that sends it again.
-  The list test goes red beside it, since the table no longer holds the
-  callees it names.
+  Three more go red beside it: the list test, since the table no longer
+  holds the callees it names; the unlisted test, since the vet now admits
+  the read; and the alone test, which sends `mission_theatre` by its key and
+  finds another callee on the disk.
 
 ```sweep-edit crates/dcs-eval/src/reads.rs
 -         callee: "DCS.getMissionTheatre",
@@ -2332,6 +2334,8 @@ here too, and so are the ones for what T50's figures decided.
 - task: T50
 - command: `mise exec -- cargo test -p dcs-eval game_state`
 - reddens: `the_editor_map_tells_the_editor_from_the_menu`
+- note: the headline test at the menu goes red beside it, since it reads the
+  same answer through the whole derivation.
 
 ```sweep-edit crates/dcs-eval/src/game.rs
 -         Ok(true) => Activity::Editor,
@@ -2344,7 +2348,8 @@ here too, and so are the ones for what T50's figures decided.
 - command: `mise exec -- cargo test -p dcs-eval game_state`
 - reddens: `a_refused_editor_read_leaves_menu_or_editor_standing`
 - note: the `gui` state out of reach is then read as the menu, which is a
-  pick the evidence does not make.
+  pick the evidence does not make. The headline test at the menu goes red
+  beside it for the same reason.
 
 ```sweep-edit crates/dcs-eval/src/game.rs
 -         return Activity::MenuOrEditor;
