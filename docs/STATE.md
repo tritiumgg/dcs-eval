@@ -28,7 +28,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **The round trip's `superseded` half** — the shipped executor relaunched over one box, the client's real `wait` on the first session answers `superseded` (`cargo test -p dcs-eval e2e`); swept as `e2e/stamp-change-not-superseded`, filed under T54's row because Stages 0–2 hold no entry.
+- **The round trip's `superseded` half** — the shipped executor relaunched over one box, the client's real `wait` on the first session answers `superseded`, under a new pid or the old one back (`cargo test -p dcs-eval e2e`); swept as `e2e/stamp-change-not-superseded` and `e2e/pid-change-not-superseded`, filed under T54's row because Stages 0–2 hold no entry.
 - **Any path for a file eval** — `dcs_eval_file` and `eval --file` lost the roots, the `Config\` refusal and the install refusal (ADR 0026, superseding ADR 0014); the ceiling, judged on the stat before a byte is read, is the one refusal left.
 - **T47, T48 and T50's reads: the live instrument** — `dcs-mcp live`: `dormant`, `rtt` and `read` append to `live.jsonl`, and `live report` prints all 47 Stage 9 rows, an unmeasured one with its reason (ADR 0025 for the dormant method; `reads::alone` sends a read with nothing beside it). Proved off DCS only.
 

@@ -406,6 +406,23 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +     if false && handshake.stamp != s.stamp {
 ```
 
+### e2e/pid-change-not-superseded
+
+- task: T54
+- command: `mise exec -- cargo test -p dcs-eval e2e`
+- reddens: `a_relaunch_handed_the_old_pid_back_is_read_as_superseded`
+- note: the same verdict read off the wrong half of the stamp. Both loads run
+  under this test's own pid, live throughout, so the stamps differ in their
+  time alone, as a relaunch handed the old pid back would. Comparing pids sees
+  nothing changed: the observed panic was `superseded, not Pending { id:
+  "0000000001-ping", phase: "unknown", flag: Some(Waking) }` after the 5 s
+  verdict wait, while the exited-pid restart and the ping test stayed green.
+
+```sweep-edit crates/dcs-eval/src/wait.rs
+-     if handshake.stamp != s.stamp {
++     if handshake.pid != s.pid {
+```
+
 ### status/round-trip-issued
 
 - task: T32
