@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0031](0031-the-live-reads-go-on-by-default-and-getmissionloaded-goes.md)
 
 ## Context
 
