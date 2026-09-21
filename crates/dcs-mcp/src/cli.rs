@@ -444,13 +444,18 @@ mod tests {
     /// A line-by-line rendering of what two texts disagree about, empty when
     /// they agree. Printed by the assertion that takes it, so a failure says
     /// which line moved rather than only that something did.
+    ///
+    /// Split on `\n` alone, never with `str::lines`, which drops a `\r`
+    /// before each newline: the stand-in ends its header lines with one, so
+    /// two texts differing only there would be unequal and yet show no line
+    /// that moved, and an assertion on the diff being empty would pass them.
     fn diff(want: &str, got: &str) -> String {
         if want == got {
             return String::new();
         }
         let mut out = String::new();
-        let mut want = want.lines();
-        let mut got = got.lines();
+        let mut want = want.split('\n');
+        let mut got = got.split('\n');
         loop {
             match (want.next(), got.next()) {
                 (None, None) => break,
