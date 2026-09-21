@@ -17,9 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-**Stage 9 live run, paused 2026-09-21 at step 8 of 10** — DCS 2.9.29.27468, variant `DCS`. Done: install and verify (after PR #80 and ADR 0029); `live dormant --label menu` 0.0011 ms/frame against 0.098, an upper bound (the empty-loop floor capped before the clock); `live rtt` at the menu and in a mission, hook and export: p50 13.8–14.0 ms against 30, ~300–410 replies/s; `missionscripting` answered through `a_do_script` (T49's first half).
-`live read all --label mission`: multiplayer false, server true, track false, player_id 0; **`mission_loaded` crashed DCS** — ACCESS_VIOLATION in lua.dll `luaS_newlstr` ← `lua_next` ← edCore `ED_lua_copyindex`, the events log ending on its open marker. A finding, not a regression; nothing is uncommitted.
-Resume: `live read mission_loaded --label mission` alone in a fresh mission (ADR 0028's retest); `live read all --label mission` for player_unit_type and mission_theatre; a fresh launch at the menu, `live read all --label menu`; `live report`. Results are in `%LOCALAPPDATA%\dcs-mcp\live.jsonl`. Then the figures into a decision record, and `live` leaves the binary.
+Nothing. The Stage 9 live run finished on 2026-09-21; its figures and the maintainer's calls on them are ADR 0031.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -27,19 +25,16 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **Stage 9's live run recorded (ADR 0031)**: dormant 0.0011 ms/frame, round trips p50 ~13.9 ms. Six reads answered and are sent by every game-state, `getMissionLoaded` crashed DCS twice and left the list, `--reads` and `reads` are gone, the editor is read from `MapWindow.getVisible()` in `gui`, a `tempMission` name gives way to the file; s17 dropped. Nine controls under T50, proved off DCS; how they read a live game is the maintainer's to see.
 - **`verify` failed straight after every relaunch**: the executor writes no heartbeat at load, so the last session's file read as two problems; one written before the handshake is now a leftover and no problem, one since still one (ADR 0030). Client-only, no reinstall; four controls under T32 and T46.
 - **`verify` failed a session `ping` answered**: DCS gives `lfs.tempdir()` as `%TEMP%\DCS`, under the client's, and `status` read that as a disagreement; now `Within` and no problem, one outside still one (ADR 0029). The round trip always read the handshake's transport; three controls under T32.
-- **The first live load refused its handshake** as `executor.txt: nil`: DCS's own `io`/`os` answers a success with nothing, so only nil and a message is a refusal now, and a silence is settled by a stat of the final name (`publish`) or the request (`take`); modelled in `executor/framer`, eleven controls under T08, T09 and T26; `SHIPPED` gains the third hash.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Stage 9**, the live proofs; **only the maintainer can verify any of it**, at a running
-install. The instrument is `dcs-mcp live` (README, "Measuring a live install"), proved off DCS only: whether it measures DCS correctly is the first session's to see.
-What is left of the run is In progress's resume line; `live report` prints all 47 rows.
-Not built, rows printing `unmeasured: not built`: `live scene` (T50's `sim_mode` per scene, editor-vs-menu, `mission_name` at the menu, callbacks), a follow-up branch; and the s17 fixture (T49).
-T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
+**`live` leaves the binary**, with its tests and its `live/` controls, now its figures are in ADR 0031: the maintainer's call, 2026-09-21. Agent-verifiable: `mise run check` and a sweep of the groups it touches.
+Then T52 and T51, **the maintainer's at a running install**. T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
 
 The MCP registration still points at `dcs-api-bridge`; the swap strands a session
 mid-task and is the maintainer's call (ADR 0001); `install` prints the snippet.
@@ -71,11 +66,11 @@ entries at most: an eleventh means something here is finished, or belongs in
   the suite's own carrier alone — what DCS does with one raising inside
   `net.dostring_in`, and whether every state has `setfenv` and `_G`, is unmeasured,
   the model's stubs evaluating nothing — and the carrier against the incumbent's
-  measured shift and `...`, not T49's. Unmeasured too: DCS's `os.clock` and
-  `os.time` against the harness's, a count hook raising inside either carrier or
-  already held by a state (`none`, ADR 0005), what `dcs.log` renders around a
-  crossing's markers, which the reader ignores (ADR 0007). `lfs.tempdir()` is
-  measured: `%TEMP%\DCS` on one machine, 2.9.29 (ADR 0029). Which of
+  measured shift and `...`, not T49's. Unmeasured too: DCS's `os.time` against
+  the harness's (its `os.clock` steps in whole ms, ADR 0031), a count hook raising
+  inside either carrier or already held by a state (`none`, ADR 0005), what
+  `dcs.log` renders around a crossing's markers, which the reader ignores (ADR
+  0007). Which of
   `write`, `close`, `rename`, `remove` answers a success with nothing is unmeasured
   (the empty output dir fits a write, a close, or a rename that did nothing); under that,
   the waking frame's heartbeat pays a stat.

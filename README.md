@@ -279,8 +279,8 @@ before it is sent, so a run you stop mid-wait still counts. A read that takes
 the game down is recorded as the session gone, with the id to look for in the
 executor's events log. `--label <word>` records the scene you
 say the game is in beside each figure. The scene phase — `sim_mode` per
-scene, `mission_name` at the menu, the callbacks seen — is *not built*, and
-its rows say so.
+scene, `mission_name` at the menu, the callbacks seen — was measured by hand
+instead (ADR 0031) and is not built; its rows say so.
 
 `live.jsonl` is only ever appended to. A line in it that is not an entry —
 torn by a crash, or edited by hand — makes `read` refuse and `report` print
