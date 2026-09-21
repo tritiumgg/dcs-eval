@@ -18,12 +18,9 @@
 # deliberate. Presence is owed only by Stages 3 to 6, which are built: a later
 # stage's row has no code to mutate yet, and demanding an entry for it would
 # fail every run until the last row landed. A stray is checked against the rows
-# of Stage 3 upwards, however far the plan grows, because a stage being unbuilt
+# of Stage 0 upwards, however far the plan grows, because a stage being unbuilt
 # is no reason to call the first entry written for it a control filed under a
-# row that names no mutation. Stages 0 to 2 are the one place an entry is
-# refused rather than merely unowed, because the inventory declares them out of
-# scope with a hand-counted figure: an entry filed under a row there would be
-# counted once by hand and once by the sweep.
+# row that names no mutation.
 #
 # No toolchain, so it runs inside `mise run check` and in CI's preflight job.
 
@@ -76,23 +73,7 @@ rows() {
 
 # What an entry is owed for, and what an entry is allowed to name.
 claimed=$(rows 3 6)
-named=$(rows 3 '')
-
-# Every row before Stage 3 whose done-condition names a mutation. Those rows
-# are counted by hand under the inventory's "Out of scope", so an entry filed
-# under one would be counted twice — refused for a different reason than a row
-# naming no mutation at all, and held apart here so the refusal says which.
-early=$(awk -v id="$ID" '
-    /^## Stage / { stage = $3 + 0 }
-    stage >= 3 { next }
-    $0 !~ ("^\\|[ \t]*" id "[ \t]*\\|") { next }
-    /mutations?:/ {
-        row = $0
-        sub(/^\|[ \t]*/, "", row)
-        sub(/[ \t]*\|.*$/, "", row)
-        print row
-    }
-' "$plan" | sort -u)
+named=$(rows 0 '')
 
 # Every task the inventory names, in-scope entry and out-of-scope entry alike:
 # a `task:` bullet is read the same way wherever it sits. The runner's own row
@@ -115,11 +96,7 @@ done
 stray=$(printf '%s\n' "$written" | grep -vxF "$(printf '%s\n' "$named")" 2>/dev/null || true)
 for s in $stray; do
     [ -n "$s" ] || continue
-    if printf '%s\n' "$early" | grep -qxF "$s"; then
-        printf 'sweep-cover: the inventory files a control under %s, a row before Stage 3, whose mutations the inventory counts by hand\n' "$s" >&2
-    else
-        printf 'sweep-cover: the inventory files a control under %s, which names no mutation in the plan\n' "$s" >&2
-    fi
+    printf 'sweep-cover: the inventory files a control under %s, which names no mutation in the plan\n' "$s" >&2
     fail=1
 done
 
