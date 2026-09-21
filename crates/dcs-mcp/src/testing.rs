@@ -13,7 +13,7 @@
 //! each would clear the other's tree out from under it.
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
@@ -106,4 +106,90 @@ pub(crate) fn published(s: &Standin) -> Vec<u8> {
         .collect();
     assert_eq!(found.len(), 1, "exactly one reply was published: {found:?}");
     fs::read(found.pop().expect("the one reply")).expect("the reply reads")
+}
+
+/// A session `verify` will call healthy, published at `output`: a handshake
+/// naming this process, which is certainly running, and the temp directory
+/// the host really has.
+pub(crate) fn a_live_session(output: &Path) -> Standin {
+    let mut ex = Standin::open(output, "hook").expect("the stand-in opens");
+    // A pid somebody is running, so the session half reports a live
+    // process rather than a gone one.
+    ex.pid = std::process::id();
+    ex.handshake().expect("the handshake is published");
+    // The stand-in names a temp directory of its own under the output,
+    // which no real executor would: `lfs.tempdir()` inside DCS gives
+    // the host's. Said the stand-in's way, every healthy fixture here
+    // would carry a temp-directory disagreement nothing asked for.
+    reheader(
+        &output.join("executor.txt"),
+        "lfs_tempdir",
+        &std::env::temp_dir().display().to_string(),
+    );
+    ex
+}
+
+/// The published handshake with one header carrying another value.
+///
+/// A whole-line rewrite, which the envelope admits because it is header
+/// lines and a blank line and nothing counts the bytes.
+pub(crate) fn reheader(path: &Path, name: &str, value: &str) {
+    let was = fs::read_to_string(path).expect("the handshake reads");
+    let head = format!("{name}: ");
+    let mut out = String::new();
+    let mut found = false;
+    for line in was.split_inclusive('\n') {
+        if line.starts_with(&head) {
+            out.push_str(&head);
+            out.push_str(value);
+            out.push('\n');
+            found = true;
+        } else {
+            out.push_str(line);
+        }
+    }
+    assert!(found, "the fixture carries no {name} header to replace");
+    fs::write(path, out.as_bytes()).expect("the handshake lands");
+}
+
+/// Every file under `dir`, as a sorted list of relative path and bytes.
+///
+/// Taken beside a `git status` assertion where there is one, and not instead
+/// of it: git does not track an empty directory, so a directory made on the
+/// way to a read is something git would call clean and this would not.
+pub(crate) fn snapshot(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    fn walk(root: &Path, at: &Path, into: &mut Vec<(String, Vec<u8>)>) {
+        let entries = match fs::read_dir(at) {
+            Ok(entries) => entries,
+            Err(_) => return,
+        };
+        for entry in entries {
+            let entry = entry.expect("the entry reads");
+            let path = entry.path();
+            if path.is_dir() {
+                into.push((
+                    format!(
+                        "{}/",
+                        path.strip_prefix(root)
+                            .expect("under the root")
+                            .to_string_lossy()
+                    ),
+                    Vec::new(),
+                ));
+                walk(root, &path, into);
+            } else {
+                into.push((
+                    path.strip_prefix(root)
+                        .expect("under the root")
+                        .to_string_lossy()
+                        .into_owned(),
+                    fs::read(&path).expect("the file reads"),
+                ));
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(dir, dir, &mut found);
+    found.sort();
+    found
 }
