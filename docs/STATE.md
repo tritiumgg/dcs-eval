@@ -17,9 +17,8 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. The last full sweep, on T64's branch before it landed: **82 of 82 in scope
-reddened**, 27 out of scope, tree identical afterward — `fence/` re-run alone after a
-concurrent run collided with it.
+Nothing. The last full sweep, on `build/owed-sweeps` before it landed: **108 entries reddened,
+109 of 109 in scope**, 2 out of scope, 0 unperformed, tree identical afterward.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -27,9 +26,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **The owed sweeps** — Stages 0 to 2 swept, all 25 entered and seen red, T02's through the build gate's roll call now printing `FAIL  `; `sweep-cover.sh` owes entries for Stages 0–8; T53's shape echo and T64's disarming-frame sweep named and entered.
 - **T64, the uncollected-reply sweep** — a reply is removed 300 s after it lands by any armed frame, the disarming one included, off a ledger of what the session published and never while dormant (ADR 0027); `SHIPPED` gains the executor's second hash, and `dcs_collect` says a reply may have been removed.
-- **The round trip's `superseded` half** — the shipped executor relaunched over one box, the client's real `wait` on the first session answers `superseded`, under a new pid or the old one back (`cargo test -p dcs-eval e2e`); swept as `e2e/stamp-change-not-superseded` and `e2e/pid-change-not-superseded`, filed under T54's row because Stages 0–2 hold no entry.
-- **Any path for a file eval** — `dcs_eval_file` and `eval --file` lost the roots, the `Config\` refusal and the install refusal (ADR 0026, superseding ADR 0014); the ceiling, judged on the stat before a byte is read, is the one refusal left.
+- **The round trip's `superseded` half** — the shipped executor relaunched over one box, the client's real `wait` on the first session answers `superseded`, under a new pid or the old one back (`cargo test -p dcs-eval e2e`); swept as `e2e/stamp-change-not-superseded` and `e2e/pid-change-not-superseded`, filed under T54's row, whose cell names them.
 
 *The last three at most, one line each. Git log holds the rest.*
 
@@ -82,8 +81,6 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A path with a byte past ASCII stops the load.** Header values are ASCII, so a user name past ASCII puts one in every path the handshake names and the load refuses, naming the header in `dcs.log` (`docs/audit.md`, Open: the spec says nothing).
   The client parses it as the executor does, the maintainer's call at T13; a
   spelling for such a path on the wire is the writer's side, unsettled.
-- **Two sweeps are owed, no row asks for either.**
-  Stages 0 to 2, which `sweep-cover.sh` does not reach, and the mutations proved past what a plan cell named — a dozen at T35 — which are in neither figure the run prints.
 - **The held sibling is a held file.** The sweep's "cannot be removed" path is proved
   with a file the suite keeps open. T56's directory handle refuses a removal here
   too; that no server holds one between tool calls is T41's.
