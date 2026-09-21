@@ -2172,9 +2172,9 @@ here too, and so are the ones for what T50's figures decided.
 - task: T63
 - command: `mise exec -- cargo test -p dcs-mcp installer`
 - reddens: `installer::tests::verify_exits_one_when_anything_is_found`
-- note: the report still ends `not verified: N found`, and only the exit
-  code lies, which is the defect for a script or an agent that reads the
-  code, as T52 and T51 are run.
+- note: the report still opens `not verified:`, and only the exit code
+  lies, which is the defect for a script or an agent that reads the code,
+  as T52 and T51 are run.
   `verify_exits_nought_on_a_healthy_install_with_a_session` stays green. The
   mutant compiles clean.
 

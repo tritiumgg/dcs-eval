@@ -34,7 +34,7 @@ use crate::verify;
 /// The usage line, which is also the list of what this module answers to.
 pub const USAGE: &str = "usage: dcs-mcp install | verify | uninstall\n       \
      [--saved-games <dir>] [--variant <name>] [--replace] [--host hook|export]\n       \
-     [--data-dir <dir>]";
+     [--data-dir <dir>] [--verbose]";
 
 /// What was asked for. One of three, and never a word `cli` owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +78,8 @@ struct Parsed {
     saved_games: Option<PathBuf>,
     variant: Option<String>,
     replace: bool,
+    /// `verify`'s: the full report rather than the summary.
+    verbose: bool,
     host: Host,
     data_dir: Option<PathBuf>,
 }
@@ -95,7 +97,7 @@ fn once<T>(slot: &mut Option<T>, flag: &str, value: T) -> Result<(), String> {
 ///
 /// Each verb takes only the flags it acts on, and refuses the rest by name
 /// rather than accepting and ignoring them: `--replace` is `install`'s alone,
-/// `--host` is `verify`'s, and `verify` reads no register, so it takes no
+/// `--host` and `--verbose` are `verify`'s, and `verify` reads no register, so it takes no
 /// `--data-dir`.
 fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     let mut args = args.into_iter();
@@ -107,6 +109,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     let mut host = None;
     let mut data_dir = None;
     let mut replace = false;
+    let mut verbose = false;
 
     while let Some(arg) = args.next() {
         let mut value = |name: &str| {
@@ -143,6 +146,12 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
                     .ok_or_else(|| format!("--host is hook or export, not {given}"))?;
                 once(&mut host, "--host", picked)?
             }
+            "--verbose" if verb == Verb::Verify => {
+                if verbose {
+                    return Err("--verbose is given twice".to_owned());
+                }
+                verbose = true;
+            }
             "--data-dir" if verb == Verb::Verify => {
                 return Err("verify does not take --data-dir: it reads no register".to_owned());
             }
@@ -160,6 +169,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
         saved_games,
         variant,
         replace,
+        verbose,
         host: host.unwrap_or(Host::Hook),
         data_dir,
     })
@@ -275,21 +285,24 @@ fn installing(parsed: &Parsed, out: &mut dyn Write, exe: &Path) -> io::Result<i3
 
 /// Report the installation and the session, and write nothing.
 ///
-/// The report opens with the release line itself, so it is not printed here
-/// a second time; a variant that cannot be found prints it, and then why.
+/// The summary by default, and the full report under `--verbose`, which is
+/// where the release line is (ADR 0032). The verdict is the first line either
+/// way, and so is a variant that cannot be found.
 fn verifying(parsed: &Parsed, out: &mut dyn Write) -> io::Result<i32> {
     let (_, variant) = match located(parsed) {
         Ok(found) => found,
-        Err(why) => {
-            writeln!(out, "{}", embed::release_line())?;
-            return stopped(out, "not verified", &why);
-        }
+        Err(why) => return stopped(out, "not verified", &why),
     };
     let report = verify::verify(
         &variant.path,
         &serve::output_in(variant.path.as_path(), parsed.host),
     );
-    writeln!(out, "{report}")?;
+    let detail = if parsed.verbose {
+        verify::Detail::Full
+    } else {
+        verify::Detail::Summary
+    };
+    writeln!(out, "{}", verify::render(&report, detail))?;
     Ok(i32::from(!report.verified()))
 }
 
@@ -733,12 +746,25 @@ mod tests {
         let (code, shown) = ran(&b, "verify", &["--variant", "DCS.openbeta"]);
         assert_eq!(code, 1, "{shown}");
         assert!(first(&shown).starts_with("not verified: "), "{shown}");
+        assert!(
+            !shown.contains(&embed::release_line()) && !shown.contains("problems (exact)"),
+            "the summary, without the full report's lines: {shown}"
+        );
+        assert_eq!(snapshot(&b.path), before, "verify wrote something");
+    }
+
+    #[test]
+    fn verify_verbose_prints_the_full_report_and_exits_the_same() {
+        let b = one_variant();
+        let (code, shown) = ran(&b, "verify", &["--variant", "DCS.openbeta", "--verbose"]);
+        assert_eq!(code, 1, "{shown}");
+        assert!(first(&shown).starts_with("not verified: "), "{shown}");
+        assert!(shown.contains("\nproblems (exact)\n"), "{shown}");
         assert_eq!(
             shown.matches(&embed::release_line()).count(),
             1,
             "the release line is printed once: {shown}"
         );
-        assert_eq!(snapshot(&b.path), before, "verify wrote something");
     }
 
     #[test]
@@ -806,6 +832,8 @@ mod tests {
             (&["uninstall", "--replace"][..], "--replace"),
             (&["uninstall", "--host", "hook"][..], "--host"),
             (&["verify", "--data-dir", "x"][..], "--data-dir"),
+            (&["install", "--verbose"][..], "--verbose"),
+            (&["verify", "--verbose", "--verbose"][..], "--verbose"),
         ] {
             let why = refused(line);
             assert!(why.contains(named), "{line:?}: {why}");
