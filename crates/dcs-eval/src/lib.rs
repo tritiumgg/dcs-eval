@@ -62,7 +62,8 @@ pub(crate) mod testing;
 #[cfg(test)]
 mod interop;
 
-// The round-trip control: the client's `send` against the shipped Lua on a
-// live tick. A test module and nothing else.
+// The round-trip control: the client's `send` and `wait` against the shipped
+// Lua, answered on a live tick or superseded by a restart. A test module and
+// nothing else.
 #[cfg(test)]
 mod e2e;

@@ -7,9 +7,9 @@
 -- frame; this is the one place the client's request meets a live tick.
 --
 -- Where the files land. As in `executor/interop`: when `DCS_EVAL_E2E` names
--- a directory, that directory is the box, no sandbox is made and nothing is
--- swept; unset, the suite runs over a sandbox like any other. The hazard
--- is worse here than there. A shell that exports the variable makes the
+-- a directory, that directory is the box, no sandbox is made and the runner
+-- removes nothing; unset, the suite runs over a sandbox like any other. The
+-- hazard is worse here than there. A shell that exports the variable makes the
 -- full harness wait for a client that never comes, for the whole deadline
 -- below, and then fail: the check that the directory exists is the only
 -- guard, and this comment the warning.
@@ -23,6 +23,21 @@
 -- proves the loop takes a request that was not there at the first frame.
 -- It is not the cross-process claim: nothing is renamed into place and no
 -- other process is involved, and a green run in this mode says only that.
+--
+-- The restart. With a box named and `DCS_EVAL_E2E_RESTART` set to two pids,
+-- the suite is the other half of a round trip that never comes back. The
+-- first session loads under the first pid and is never ticked; once the
+-- client has sent and dropped `restart` at the box's root, a second
+-- session loads in a state of its own over the same box, under the second
+-- pid, as a DCS launched again would. It sweeps the first session's
+-- directory, the request and the arm file with it, and publishes its own
+-- handshake under the one name a client re-reads. Then it ticks a few
+-- frames to show it was handed nothing. The client's `wait` on the first
+-- session runs after this suite has ended, and its verdict is the Rust
+-- side's claim. The sentinel, rather than the request's own name, is what
+-- the suite waits for, because `send` ensures the arm file after the
+-- request lands, and a sweep in that gap races the client for the
+-- directory.
 --
 -- The deadline is wall-clock seconds from after the load, counted with
 -- `os.time`, whose granularity is nothing against the budget. It is shorter
@@ -42,6 +57,9 @@ local NAME = "DcsEvalExecutor"
 local ID = "0000000001-ping"
 local DEADLINE_S = 20
 local PLANT_AT = 3
+-- The frames the second session runs after a restart: few, because every
+-- listing the model's `lfs` makes spawns `cmd.exe`.
+local TICKS = 3
 
 local SAVED = [[\Saved Games\DCS\]]
 local TEMP = [[\Temp\DCS\]]
@@ -89,7 +107,20 @@ else
   box = t.sandbox()
 end
 
-local host = { writedir = box .. SAVED, tempdir = box .. TEMP }
+-- The two pids a restart runs under, the first session's and the second's.
+local restart = os.getenv("DCS_EVAL_E2E_RESTART")
+local old, new
+if restart then
+  if not given then
+    error("harness: DCS_EVAL_E2E_RESTART is set, but DCS_EVAL_E2E names no box", 0)
+  end
+  old, new = restart:match("^(%d+) (%d+)$")
+  if not old then
+    error("harness: DCS_EVAL_E2E_RESTART is \"" .. restart .. "\", not two pids", 0)
+  end
+end
+
+local host = { writedir = box .. SAVED, tempdir = box .. TEMP, pid = tonumber(old) }
 local env = t.state("hook", host)
 t.load_executor(env)()
 local E = rawget(env, NAME)
@@ -98,6 +129,41 @@ t.eq(host.log, nil, "and nothing reached dcs.log: no refusal, no fallback")
 
 local frame = host.callbacks.onSimulationFrame
 local reply = E.res .. "\\" .. ID .. ".res"
+
+if restart then
+  local deadline = os.time() + DEADLINE_S
+  local signalled = present(box .. "\\restart")
+  while not signalled and os.time() < deadline do
+    signalled = present(box .. "\\restart")
+  end
+  t.check(signalled, "restart: the client said it had sent, within " .. DEADLINE_S .. " s")
+  t.check(present(E.req .. "\\" .. ID .. ".req"), "restart: the request is in the first session's req")
+  t.eq(env.lfs.attributes(E.arm, "mode"), "file", "restart: the client armed the first session")
+  t.eq(E.tick, 0, "restart: the first session never ran a frame")
+
+  local host2 = { writedir = host.writedir, tempdir = host.tempdir, pid = tonumber(new) }
+  local env2 = t.state("hook", host2)
+  t.load_executor(env2)()
+  local B = rawget(env2, NAME)
+  t.eq(type(B), "table", "restart: the second session loaded over the same box")
+  t.eq(host2.log, nil, "restart: nothing reached dcs.log, the sweep included")
+  t.check(B.stamp ~= E.stamp,
+    "restart: the second session has a stamp of its own (" .. E.stamp .. ", " .. B.stamp .. ")")
+  t.eq(B.handshake, E.handshake,
+    "restart: its handshake replaces the first's, under the one name a client re-reads")
+  t.eq(B.swept, 1, "restart: the first session was swept")
+  t.eq(env2.lfs.attributes(E.session, "mode"), nil,
+    "restart: the first session's directory is gone, request and arm file with it")
+
+  for _ = 1, TICKS do
+    host2.callbacks.onSimulationFrame()
+  end
+  t.eq(entries(env2, B.req), "", "restart: the second session was handed nothing")
+  t.eq(entries(env2, B.res), "", "restart: and answered nothing")
+  t.eq(B.raised, 0, "restart: nothing raised")
+  t.eq(B.unpublished, 0, "restart: nothing failed to publish")
+  return
+end
 
 -- The suite as its own client, in the order the client sends: the request
 -- under its final name, then the arm file.

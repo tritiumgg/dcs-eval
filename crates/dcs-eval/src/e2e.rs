@@ -24,12 +24,22 @@
 //! What reddens it. The control is behavioural, as the interop control is:
 //! a byte of the executor's `frame` that changes the wire, and a suite that
 //! stops ticking, which this side reports under the deadline rather than
-//! hanging. The mutation the plan also names, a stamp mismatch surfacing
-//! as `superseded`, is a verdict of the client's wait over the executor's
-//! fence. The fence is built: a request whose `for` is not the session's
-//! stamp is answered `stale-session` and never run, which `executor/fence`
-//! proves. The wait is not, and until it is there is no verdict here to
-//! redden, so this control does not reach for one.
+//! hanging.
+//!
+//! The other half is a round trip that never comes back: a request whose
+//! session restarts before any frame takes it. The suite loads a second
+//! executor over the same box, as a DCS launched again would, and the
+//! client's own `wait` on the first session must read the stamp the
+//! handshake now names and answer `superseded`. The first session's
+//! process is one that has exited, as the old game's is after a restart,
+//! so a wait that stopped reading the stamp answers `dead` instead, and the
+//! check goes red at once rather than at its deadline.
+//!
+//! The request is sent before the restart and waited on after it, never
+//! across it. A wait in flight holds a watch on the first session's reply
+//! directory, which is exactly what the next session's sweep has to
+//! remove; what that costs belongs to the tests of the watch. Here only the
+//! verdict is under test.
 
 use std::fs;
 use std::io;
@@ -40,7 +50,9 @@ use std::time::{Duration, Instant};
 
 use crate::protocol::{Envelope, PROTOCOL, parse};
 use crate::publish::send;
-use crate::testing::Sandbox;
+use crate::readers::Handshake;
+use crate::testing::{Sandbox, a_pid_that_has_exited};
+use crate::wait::{Outcome, Session, wait};
 
 const SUITE: &str = "executor/e2e";
 /// The one id both sides agree on: the suite waits for this reply by name.
@@ -51,6 +63,11 @@ const REPLY_WAIT: Duration = Duration::from_secs(30);
 /// After the reply, the suite has only its own checks left to run.
 const EXIT_WAIT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(5);
+/// The restart is over before the wait starts, so its first look decides.
+const VERDICT_WAIT: Duration = Duration::from_secs(5);
+/// Two pids, the first session's and the second's, turn the suite into a
+/// restart.
+const RESTART: &str = "DCS_EVAL_E2E_RESTART";
 
 fn root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -117,18 +134,27 @@ struct Live {
     lua: Reaper,
     b: Sandbox,
     handshake: Envelope,
+    handshake_path: PathBuf,
     req: PathBuf,
     res: PathBuf,
     arm: PathBuf,
 }
 
-/// Spawn the suite over a fresh box and wait for its handshake.
-fn start() -> Live {
+/// Spawn the suite over a fresh box and wait for its handshake. With two
+/// pids the suite restarts the session once the client has sent; with
+/// none it ticks until the reply, whatever the shell exported.
+fn start(restart: Option<(u32, u32)>) -> Live {
     let b = Sandbox::new();
-    let child = Command::new("lua5.1.exe")
+    let mut command = Command::new("lua5.1.exe");
+    command
         .args(["tools/harness.lua", SUITE])
         .current_dir(root())
-        .env("DCS_EVAL_E2E", &b.path)
+        .env("DCS_EVAL_E2E", &b.path);
+    match restart {
+        Some((old, new)) => command.env(RESTART, format!("{old} {new}")),
+        None => command.env_remove(RESTART),
+    };
+    let child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn();
@@ -165,6 +191,7 @@ fn start() -> Live {
         lua,
         b,
         handshake,
+        handshake_path,
         req,
         res,
         arm,
@@ -207,7 +234,7 @@ fn wait_for(lua: &mut Reaper, path: &Path, wait: Duration, what: &str) -> Vec<u8
 
 #[test]
 fn a_ping_the_client_sends_is_answered_by_the_shipped_executor() {
-    let mut live = start();
+    let mut live = start(None);
     let stamp = live
         .handshake
         .headers
@@ -282,5 +309,63 @@ fn a_ping_the_client_sends_is_answered_by_the_shipped_executor() {
     assert!(
         live.arm.is_file(),
         "the arm file is the client's, and the executor had no quiet period in which to remove it"
+    );
+}
+
+#[test]
+fn a_request_to_a_session_that_restarted_is_read_as_superseded() {
+    // The old game is gone after a restart. The child is held so that its
+    // pid is not handed to another process while the test runs.
+    let (_gone, old) = a_pid_that_has_exited();
+    let new = std::process::id();
+    let mut live = start(Some((old, new)));
+    let first = Handshake::read(&live.handshake_path)
+        .expect("the client reads the first session's handshake");
+    assert_eq!(
+        first.pid, old,
+        "the first session runs under the pid that exited"
+    );
+    let session = Session::addressed(&first);
+
+    let sent = send(
+        &live.req,
+        &live.arm,
+        ID,
+        &[("op", "ping"), ("for", session.stamp())],
+        b"",
+    )
+    .expect("the client sends into the first session's req");
+    // Only now may the suite restart: `send` has armed the session and let
+    // go of every file in it.
+    fs::write(live.b.path.join("restart"), b"").expect("the sentinel is written");
+
+    let out = live.lua.finish_within(EXIT_WAIT);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success() && stdout.starts_with("e2e: "),
+        "the harness did not run the suite to the end ({}):\n{stdout}{stderr}",
+        out.status
+    );
+
+    let got = wait(&session, &sent, VERDICT_WAIT).expect("the wait reads");
+    assert!(
+        matches!(&got, Outcome::Superseded { id } if id == ID),
+        "a request to a session that restarted is superseded, not {got:?}"
+    );
+    // The handshake the verdict re-read is the one the second load wrote.
+    let second = Handshake::read(session.handshake())
+        .expect("the client reads the second session's handshake");
+    assert_ne!(
+        second.stamp, first.stamp,
+        "the second session has a stamp of its own"
+    );
+    assert_eq!(
+        second.pid, new,
+        "the second session runs under the live pid"
+    );
+    assert!(
+        !live.req.join(format!("{ID}.req")).exists(),
+        "the request went with the first session's directory"
     );
 }
