@@ -627,6 +627,21 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +                 format!("{state} is not a state this host serves"),
 ```
 
+### echo/state-shape-uncut-in-the-standin
+
+- task: T53
+- command: `mise exec -- cargo test -p dcs-eval standin`
+- reddens: `an_eval_is_answered_as_a_chunk_that_returned_nil_and_refused_as_the_executor_refuses`
+- note: the third echo T53 found by comparing the dialects, a malformed
+  `state` echoed whole by the stand-in where the Lua already cut it; it was
+  fixed before the two cuts above were built on it. It reddens the same test
+  as `echo/state-uncut-in-the-standin`, whose cases hold both refusals.
+
+```sweep-edit crates/dcs-eval/src/standin.rs
+-                 format!("state: {} is not [A-Za-z][A-Za-z0-9_]*", excerpt(state)),
++                 format!("state: {state} is not [A-Za-z][A-Za-z0-9_]*"),
+```
+
 ---
 
 ## Stage 5 — dormancy and arming
@@ -2027,13 +2042,14 @@ meant to change nothing.
 
 **So the figure a run prints counts mutations the plan names, and not every
 mutation this build has seen go red.** Several sessions broke more than their
-cell asked for: `docs/STATE.md` records twelve mutations red for T35 and eight
-for T36, where each cell names one, and five for T53, where the cell names
-four. Those extra proofs are in neither figure — not swept, not out of scope,
-not counted at all — and nothing would notice one of them going quiet, which
-is the same gap one level down that this whole file exists to close. A row
-that wants one of them re-run names it in `docs/PLAN.md` first; it then gets
-an entry here like any other, and both figures move.
+cell asked for — the handoffs recorded fifteen for T25, thirteen for T26,
+twelve for T35 and eight for T36, where each cell names one or two — but they
+recorded counts, not edits, so there is nothing here to re-run them from, and
+a mutation rebuilt from a description would be a new control rather than the
+old proof. They are in neither figure. A row that wants one of them watched
+names it in `docs/PLAN.md` first and writes it anew; it then gets an entry
+here like any other, and both figures move. T53's fifth was recorded exactly
+and went that way.
 
 ### out/the-runner-itself
 
