@@ -292,6 +292,120 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +   if false then
 ```
 
+### framer/silence-read-as-refusal
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs: a publish whose calls answer nothing on success lands`
+- note: added after the first live load, where DCS's own `io` or `os`
+  answered a success with nothing and the handshake was refused as
+  `executor.txt: nil`. The harness's `io` is Lua 5.1's, which always
+  answers, so only the suite's model of DCS's library can see this.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   return not ok and why ~= nil
++   return not ok
+```
+
+### framer/false-taken-for-silence
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs false: with its message`
+- note: a refusal read as `nil` and a message only lets `false` and a
+  message through as a silence; the stat then refuses it for the wrong
+  reason, and the host's own message is lost.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   return not ok and why ~= nil
++   return ok == nil and why ~= nil
+```
+
+### framer/silent-rename-trusted
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs rename: a rename that answered nothing and did nothing is refused`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if asked and (lfs.attributes(path, "size") ~= #bytes or lfs.attributes(tmp, "mode") ~= nil) then
++   if false then
+```
+
+### framer/silent-rename-unasked
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs rename: a rename that answered nothing and did nothing is refused`
+- note: the rename's own silence, apart from the write's and the close's;
+  the case has every other call answer the way Lua 5.1 does.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   local asked = silent or not ok
++   local asked = silent
+```
+
+### framer/silent-write-forgotten
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs write: a write that answered nothing and wrote nothing is refused`
+- note: a write's silence is carried past a close and a rename that answer
+  true, because an empty file renames as well as a full one.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     silent = not ok
++     silent = false
+```
+
+### framer/silent-close-forgotten
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs close: a close that answered nothing and flushed nothing is refused`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     silent = silent or not ok
++     silent = silent
+```
+
+### framer/stale-final-taken
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs stale: a rename that did nothing over a file of the same size is refused`
+- note: the size alone agrees with a file the rename never replaced; the
+  `.tmp` still standing is what gives it away.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if asked and (lfs.attributes(path, "size") ~= #bytes or lfs.attributes(tmp, "mode") ~= nil) then
++   if asked and lfs.attributes(path, "size") ~= #bytes then
+```
+
+### framer/silent-remove-trusted
+
+- task: T09
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs take lie: a remove that answered nothing and removed nothing withholds the bytes`
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if refused(ok, why) or (not ok and lfs.attributes(path, "mode") ~= nil) then
++   if refused(ok, why) then
+```
+
+### session/silent-remove-stops-the-sweep
+
+- task: T08
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs relaunch: the first session is swept`
+- note: proved in `executor/framer`, where the model of DCS's library
+  lives: a remove that answers nothing on success, read as Lua 5.1's
+  answer, stops the sweep at the first file and leaves the session behind.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-       ok = not refused(ok, why)
+```
+
 ### request/for-check-dropped
 
 - task: T10
@@ -581,6 +695,35 @@ not cover is printed by the sweep itself rather than left to be assumed.
 ```sweep-edit tools/harness/crasher.lua
 -   return open[#open]
 +   return open[1]
+```
+
+### events/silent-line-refused
+
+- task: T26
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs load: the events line was written`
+- note: proved in `executor/framer`, where the model of DCS's library
+  lives: a close that answers nothing on success, read as Lua 5.1's answer,
+  counts every line written as one lost.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-     if not refused(ok, why) then
++     if ok then
+```
+
+### events/silent-rotation-refused
+
+- task: T26
+- command: `mise exec -- lua5.1 tools/harness.lua executor/framer`
+- reddens: `dcs relaunch: the events log was rotated`
+- note: proved in `executor/framer`, as the line above is: a rename that
+  answers nothing on success is recorded as a rotation that failed.
+
+```sweep-edit executor/DcsEvalExecutor.lua
+-   if refused(ok, why) then
+-     E.events_left = E.events .. ": " .. tostring(why)
++   if not ok then
++     E.events_left = E.events .. ": " .. tostring(why)
 ```
 
 ### echo/op-uncut-in-the-executor

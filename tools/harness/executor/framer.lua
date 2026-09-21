@@ -29,6 +29,14 @@
 -- hold lets the remove through and fails the rename instead, and ends the
 -- same way.
 --
+-- Under a model of DCS's own `io` and `os`, whose calls answer a success
+-- with nothing, a publish still lands, a take still gives the bytes back,
+-- and a load and the launch after it still publish, rotate and sweep. A
+-- write, a close or a rename that answers nothing and does nothing is
+-- caught by the stat after it and leaves no file, as is a rename that did
+-- nothing over a file of the same size; a remove that does the same
+-- withholds the request's bytes; `false` and a message is still a refusal.
+--
 -- A request is taken off the disk: opened for bytes, read whole, and
 -- removed before the bytes come back, so what it holds cannot run twice.
 -- Its size comes from a stat, so a request over 262,144 bytes is removed
@@ -52,7 +60,11 @@
 -- case reads bytes where it wants nil; read the file before testing its
 -- size and the case reads an open in the log where it wants a remove
 -- alone. Return the bytes before the remove and the held request case
--- reads them where it wants nil.
+-- reads them where it wants nil. Read a bare nil as a refusal, the way
+-- Lua 5.1's answers allow, and the modelled publish refuses as the first
+-- live load did; trust a silent write, close, rename or remove without
+-- asking the disk, or ask it about the size alone, and its lying case
+-- reads success.
 local t = ...
 
 local NAME = "DcsEvalExecutor"
@@ -305,6 +317,144 @@ do
 end
 
 --------------------------------------------------------------------------------
+-- What DCS's own io and os answer
+--------------------------------------------------------------------------------
+
+-- DCS's library answers some successes with nothing at all where Lua 5.1's
+-- answers true: the first live load refused its handshake with no reason,
+-- which Lua 5.1 never gives. Which calls do is not measured, so this model
+-- makes every one of them do it. `how` names what each of `write`,
+-- `close`, `remove` and `rename` does: `quiet`, the default, does the work
+-- and answers nothing on success and nil and a message on failure; `lie`
+-- does nothing and answers nothing; `loud` answers the way Lua 5.1 does.
+-- A handle buffers what is written and puts it on the disk at the close,
+-- so a close that lies loses every byte the way an unflushed buffer would.
+-- Installed over whatever the state already had, so over `spied` its log
+-- still sees every call.
+local function silenced(env, how)
+  how = how or {}
+  local open, remove, rename = env.io.open, env.os.remove, env.os.rename
+  local function answer(call, ok, ...)
+    if ok and (how[call] or "quiet") == "quiet" then
+      return
+    end
+    return ok, ...
+  end
+  env.io.open = function(path, m)
+    local fh, why = open(path, m)
+    if not fh then
+      return fh, why
+    end
+    local held = {}
+    return {
+      write = function(_, bytes)
+        if how.write == "lie" then
+          return
+        end
+        held[#held + 1] = bytes
+        return answer("write", true)
+      end,
+      close = function()
+        if how.close == "lie" then
+          fh:close()
+          return
+        end
+        local ok, failed = true, nil
+        if #held > 0 then
+          ok, failed = fh:write(table.concat(held))
+        end
+        local closed, why2 = fh:close()
+        if ok then
+          ok, failed = closed, why2
+        end
+        return answer("close", ok, failed)
+      end,
+      read = function(_, ...)
+        return fh:read(...)
+      end,
+    }
+  end
+  env.os.remove = function(path)
+    if how.remove == "lie" then
+      return
+    end
+    return answer("remove", remove(path))
+  end
+  env.os.rename = function(from, to)
+    if how.rename == "lie" then
+      return
+    end
+    return answer("rename", rename(from, to))
+  end
+end
+
+-- Lua 5.1's answers everywhere except the calls named.
+local function only(calls)
+  local how = { write = "loud", close = "loud", remove = "loud", rename = "loud" }
+  for call, what in pairs(calls) do
+    how[call] = what
+  end
+  return how
+end
+
+-- Every call answering nothing on success: a publish lands, and lands again
+-- over itself.
+do
+  local E, env, _, log = spied("hook")
+  silenced(env)
+  local path = E.output .. "\\executor.txt"
+  local ok, why = E.publish(path, "one")
+  t.eq(ok, true, "dcs: a publish whose calls answer nothing on success lands: " .. tostring(why))
+  t.eq(E.publish(path, "two"), true, "dcs: and lands again over itself")
+  t.eq(slurp(path), "two", "dcs: the bytes are on the disk")
+  t.eq(ops(log), published(path) .. "\n" .. published(path), "dcs: by the same sequence")
+  t.eq(entries(env, E.output), "events.log executor.txt", "dcs: no .tmp is left")
+end
+
+-- One call answering nothing and doing nothing, every other answering the
+-- way Lua 5.1 does: the stat after the rename catches each, and neither the
+-- file that did not land nor a .tmp is left.
+local function lands_not(call, what)
+  local E, env = spied("hook")
+  silenced(env, only({ [call] = "lie" }))
+  local final = E.res .. "\\1-a.res"
+  local ok, why = E.publish(final, "one")
+  t.eq(ok, nil, "dcs " .. call .. ": " .. what .. " is refused")
+  t.check(type(why) == "string" and why:find(final .. ": nothing refused, but the 3 bytes written did not land", 1, true),
+    "dcs " .. call .. ": saying so: " .. tostring(why))
+  t.eq(entries(env, E.res), "", "dcs " .. call .. ": and neither a file nor a .tmp is left")
+end
+lands_not("rename", "a rename that answered nothing and did nothing")
+lands_not("write", "a write that answered nothing and wrote nothing")
+lands_not("close", "a close that answered nothing and flushed nothing")
+
+-- A rename that did nothing over a file already there at the same size,
+-- with a remove that did nothing before it: the size agrees, and the .tmp
+-- still standing is what says the new bytes did not land.
+do
+  local E, env = spied("hook")
+  local final = E.res .. "\\1-a.res"
+  t.eq(E.publish(final, "one"), true, "dcs stale: the first publish lands")
+  silenced(env, only({ remove = "lie", rename = "lie" }))
+  local ok, why = E.publish(final, "two")
+  t.eq(ok, nil, "dcs stale: a rename that did nothing over a file of the same size is refused")
+  t.check(type(why) == "string" and why:find("did not land", 1, true), "dcs stale: saying so: " .. tostring(why))
+end
+
+-- A host answering `false` and a message refuses, as `not ok` always read it.
+do
+  local E, env = spied("hook")
+  env.os.rename = function()
+    return false, "denied"
+  end
+  local final = E.res .. "\\1-a.res"
+  local ok, why = E.publish(final, "one")
+  t.eq(ok, nil, "dcs false: a rename answering false and a message is refused")
+  t.eq(why, final .. ": denied", "dcs false: with its message")
+  t.eq(entries(env, E.res), "", "dcs false: and no .tmp is left")
+end
+
+--------------------------------------------------------------------------------
 -- A request, taken off the disk
 --------------------------------------------------------------------------------
 
@@ -392,4 +542,56 @@ do
   t.check(why:find("could not be removed", 1, true), "held: saying so: " .. tostring(why))
   t.eq(mode(env, path), "file", "held: the file stays")
   t.eq(ops(log), "open rb " .. path .. "\nremove " .. path, "held: it was read and the remove was tried")
+end
+
+-- A remove that answers nothing on success: the bytes come back. One that
+-- answers nothing and removes nothing: they are withheld.
+do
+  local E, env = spied("hook")
+  silenced(env)
+  local path = request(E, "1-a.req", "return 1")
+  local bytes, status, why = E.take(path)
+  t.eq(bytes, "return 1", "dcs take: a remove that answered nothing on success gives the bytes back: "
+    .. tostring(status) .. " " .. tostring(why))
+  t.eq(mode(env, path), nil, "dcs take: and the request is gone")
+end
+
+do
+  local E, env = spied("hook")
+  silenced(env, { remove = "lie" })
+  local path = request(E, "1-a.req", "return 1")
+  local bytes, status, why = E.take(path)
+  t.eq(bytes, nil, "dcs take lie: a remove that answered nothing and removed nothing withholds the bytes")
+  t.eq(status, "error", "dcs take lie: it is an error")
+  t.check(type(why) == "string" and why:find("could not be removed: it is still there", 1, true),
+    "dcs take lie: saying so: " .. tostring(why))
+  t.eq(mode(env, path), "file", "dcs take lie: the file stays")
+end
+
+-- A whole load over a host whose calls all answer nothing on success
+-- publishes its handshake, which is what the first live load could not.
+-- A second launch over it rotates the events log the first one wrote and
+-- sweeps the first session, a request in it, with the same answers.
+do
+  local host = sandboxed({ pid = 7 })
+  local env = t.state("hook", host)
+  silenced(env)
+  t.load_executor(env)()
+  local E = rawget(env, NAME)
+  t.eq(type(E), "table", "dcs load: the namespace is published: " .. tostring(host.log and host.log[1] and host.log[1].message))
+  t.eq(E and mode(env, E.handshake), "file", "dcs load: the handshake is on the disk")
+  t.check(E and (slurp(E.handshake) or ""):find("protocol: 2", 1, true), "dcs load: and holds the envelope")
+  t.eq(E and E.unrecorded, 0, "dcs load: the events line was written")
+  request(E, "old.req", "return 1")
+  host.pid = 8
+  local again = t.state("hook", host)
+  silenced(again)
+  t.load_executor(again)()
+  local second = rawget(again, NAME)
+  t.eq(type(second), "table", "dcs relaunch: the namespace is published")
+  t.eq(second and second.events_left, nil, "dcs relaunch: the events log was rotated: " .. tostring(second and second.events_left))
+  t.eq(mode(again, second.output .. "\\events.prev.log"), "file", "dcs relaunch: into events.prev.log")
+  t.eq(second.swept, 1, "dcs relaunch: the first session is swept")
+  t.eq(second.sweep_left, nil, "dcs relaunch: and nothing of it is left")
+  t.eq(mode(again, E.session), nil, "dcs relaunch: its directory is gone")
 end
