@@ -27,8 +27,8 @@ refused: they closed before this runner existed and stood in the figure as one
 hand-counted group, so an entry under one of their rows would have been
 counted twice. Each of their mutations now has an entry of its own, and the
 hand count went with the reason for the refusal. Stage 9's rows are live
-proofs and owe nothing; the six that name a mutation of something that runs
-off DCS — T47, T48, T50, T52, T62 and T63 — have their entries above all the
+proofs and owe nothing; the five that name a mutation of something that runs
+off DCS — T47, T48, T50, T52 and T63 — have their entries above all the
 same, written as their code landed, and counted in scope.
 
 **`reddens:` is what was observed, not what was predicted.** Where the red a
@@ -2068,65 +2068,12 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ## Stage 9 — proven live
 
-T62 and T63 are the developer-only rows here: the switch T50 turns, and the
-installer verbs T52 starts from. Their controls are swept like any other.
+T63 is the developer-only row here: the installer verbs T52 starts from. Its
+controls are swept like any other. T62's switch went when the reads it
+selected went on by default (ADR 0031), and its four controls with it.
 T47, T48 and T50 need a running game for their figures, but the instrument
-that takes them, `dcs-mcp live`, runs off DCS, so its five controls are
-entries here too.
-
-### reads/opt-in-sent-while-off
-
-- task: T62
-- command: `mise exec -- cargo test -p dcs-eval opt_in`
-- reddens: `opt_in_reads_are_none_of_them_published_by_a_default_gather`
-- note: three more `opt_in` tests go red beside it — the groups check, the
-  one-read check and the unasked-suspect check — because a suspect read sent
-  by default is also one no key selected and one no longer marked off.
-
-```sweep-edit crates/dcs-eval/src/reads.rs
--             Some(at) => READS[at].tier == Tier::One || self.on & (1 << at) != 0,
-+             Some(at) => READS[at].tier != Tier::Two || self.on & (1 << at) != 0,
-```
-
-### reads/one-key-turns-on-its-group
-
-- task: T62
-- command: `mise exec -- cargo test -p dcs-eval opt_in`
-- reddens: `opt_in_a_single_key_publishes_that_read_and_no_other`
-- note: two `game_state` `opt_in` tests go red beside it — the lone-`server`
-  session check and the per-read lines check — because `server` then turns
-  on `multiplayer` too, and `mission_loaded` the other two suspects.
-
-```sweep-edit crates/dcs-eval/src/reads.rs
--                     Some(at) => on |= 1 << at,
-+                     Some(at) => on |= group(READS[at].tier),
-```
-
-### cli/reads-flag-dropped
-
-- task: T62
-- command: `mise exec -- cargo test -p dcs-mcp opt_in`
-- reddens: `cli_opt_in_reads_flag_reaches_the_gather`
-
-```sweep-edit crates/dcs-mcp/src/cli.rs
--         Verb::GameState => tools::game_state(&serve, None, &parsed.reads, upto),
-+         Verb::GameState => tools::game_state(&serve, None, &[], upto),
-```
-
-### tools/reads-argument-dropped
-
-- task: T62
-- command: `mise exec -- cargo test -p dcs-mcp opt_in`
-- reddens: `tools_listed_opt_in_reads_argument_reaches_the_gather`
-- note: `tools_listed_opt_in_reads_argument_refuses_a_word_as_bad_argument`
-  goes red beside it, because a word that never reaches the parser is never
-  refused either. The mutant compiles clean, because the derived
-  deserializer still reads the field; the assertion is what reddens it.
-
-```sweep-edit crates/dcs-mcp/src/tools.rs
--             args.reads.as_deref().unwrap_or_default(),
-+             &[],
-```
+that takes them, `dcs-mcp live`, runs off DCS, so its controls are entries
+here too, and so are the ones for what T50's figures decided.
 
 ### installer/ambiguity-picked
 
@@ -2288,7 +2235,7 @@ entries here too.
 - note: the hunk drops the scene from the skip, so a read with a result at
   the menu is never sent in a mission — the one test the maintainer runs the
   reads twice for. `scene` is then unused, which warns and does not stop
-  `cargo test`; the red is the second pass's request count, 0 where 7 is
+  `cargo test`; the red is the second pass's request count, 0 where 6 is
   asserted.
 
 ```sweep-edit crates/dcs-mcp/src/live/read.rs
@@ -2336,6 +2283,21 @@ entries here too.
 ```sweep-edit crates/dcs-eval/src/reads.rs
 -     let specs = vec![spec];
 +     let specs = vec![Spec::new(&[("op", "ping"), ("for", h.stamp.as_str())], b""), spec];
+```
+
+### reads/dropped-read-put-back
+
+- task: T50
+- command: `mise exec -- cargo test -p dcs-eval game_reads`
+- reddens: `the_read_that_crashed_dcs_is_never_published`
+- note: the read that crashed DCS in a mission put back in the table, in the
+  slot of the one beside it, which is the smallest edit that sends it again.
+  The list test goes red beside it, since the table no longer holds the
+  callees it names.
+
+```sweep-edit crates/dcs-eval/src/reads.rs
+-         callee: "DCS.getMissionTheatre",
++         callee: "DCS.getMissionLoaded",
 ```
 
 ---

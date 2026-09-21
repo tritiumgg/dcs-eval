@@ -1,7 +1,8 @@
-//! The opt-in read phase: the seven reads nothing sends by default, each
-//! sent alone, and whatever each came to written down.
+//! The read phase: the six reads the live run sent alone before every
+//! game-state sent them, each sent alone, and whatever each came to written
+//! down.
 //!
-//! Alone means the only request on the disk: no ping, no tier-1 read and no
+//! Alone means the only request on the disk: no ping, no other read and no
 //! probe beside it. A session is one executor stamp, which changes when DCS
 //! restarts.
 //!
@@ -33,7 +34,7 @@ use std::io::Write;
 use std::time::Duration;
 
 use dcs_eval::readers::Handshake;
-use dcs_eval::reads::{self, Answer, Tiers, Unanswered};
+use dcs_eval::reads::{self, Answer, Unanswered};
 
 use super::ledger::{self, Entry, Session};
 use crate::register::DataDir;
@@ -50,19 +51,27 @@ fn refuse_a_second(rows: &[Entry], stamp: &str) -> Result<(), String> {
     }
 }
 
-/// The key, if it names one of the seven opt-in reads.
-fn opt_in(key: &str) -> Result<Tiers, String> {
-    let tiers = Tiers::from_words([key]).map_err(|why| why.to_string())?;
-    if reads::listed(Tiers::default())
-        .iter()
-        .any(|r| r.key() == key)
-    {
-        return Err(format!(
-            "{key} is a tier-1 read, sent by every game-state; live read takes one of the \
-             seven opt-in keys"
-        ));
+/// The reads this phase sends, in the order the live run sent them. The
+/// seventh, `mission_loaded`, crashed DCS and left the reads table, so it
+/// can no longer be sent from here (ADR 0031).
+const KEYS: [&str; 6] = [
+    "multiplayer",
+    "server",
+    "track",
+    "player_id",
+    "player_unit_type",
+    "mission_theatre",
+];
+
+/// The key, if it names one of the reads this phase sends.
+fn opt_in(key: &str) -> Result<(), String> {
+    if KEYS.contains(&key) {
+        return Ok(());
     }
-    Ok(tiers)
+    Err(format!(
+        "live read takes one of {}, not {key}",
+        KEYS.join(", ")
+    ))
 }
 
 /// What an answer says, in a row's words.
@@ -112,27 +121,11 @@ pub(crate) fn run(
     data: &DataDir,
     upto: Duration,
 ) -> Result<Vec<Entry>, String> {
-    let tiers = opt_in(key)?;
+    opt_in(key)?;
     let stamp = session.stamp.as_str();
     refuse_a_second(&rows, stamp)?;
-    let (entry, _) = send(h, session, key, tiers, data, upto)?;
+    let (entry, _) = send(h, session, key, data, upto)?;
     Ok(vec![entry])
-}
-
-/// The seven opt-in keys, in the table's order: tier 2's four, then the
-/// three from the crashing batch, so the reads with the least against them
-/// go first.
-fn opt_in_keys() -> Vec<&'static str> {
-    let every = Tiers::from_words(["extra", "suspect"]).expect("both groups are the table's");
-    let base: Vec<&str> = reads::listed(Tiers::default())
-        .iter()
-        .map(|r| r.key())
-        .collect();
-    reads::listed(every)
-        .iter()
-        .map(|r| r.key())
-        .filter(|key| !base.contains(key))
-        .collect()
 }
 
 /// Whether the ledger already holds what `key` came to in `scene`, in any
@@ -179,7 +172,7 @@ pub(crate) fn run_all(
     out: &mut dyn Write,
 ) -> Result<i32, String> {
     refuse_a_second(rows, &session.stamp)?;
-    let todo: Vec<&str> = opt_in_keys()
+    let todo: Vec<&str> = KEYS
         .into_iter()
         .filter(|key| !has_outcome(rows, key, session.scene.as_deref()))
         .collect();
@@ -193,7 +186,7 @@ pub(crate) fn run_all(
         return Ok(0);
     }
     for key in todo {
-        let (entry, answered) = send(h, session, key, opt_in(key)?, data, upto)?;
+        let (entry, answered) = send(h, session, key, data, upto)?;
         ledger::append(data, &entry).map_err(|why| {
             format!(
                 "{}: {why}, after {} was sent and came to: {}",
@@ -223,7 +216,6 @@ fn send(
     h: &Handshake,
     session: &Session,
     key: &str,
-    tiers: Tiers,
     data: &DataDir,
     upto: Duration,
 ) -> Result<(Entry, bool), String> {
@@ -234,7 +226,7 @@ fn send(
             data.live_path().display()
         )
     })?;
-    let answer = match reads::alone(h, key, tiers, upto) {
+    let answer = match reads::alone(h, key, upto) {
         Ok(answer) => answer,
         Err(why) => {
             // Refused before the disk, so the entry above overstates it, and
@@ -384,12 +376,12 @@ mod tests {
     }
 
     #[test]
-    fn a_tier_one_key_is_refused_by_name() {
+    fn a_key_it_does_not_send_is_refused_by_name() {
         let b = Sandbox::new();
         let mut s = standin(&b, "0000000001-4242");
         let (code, shown, entries) = read(&b, &mut s, "pause");
         assert_eq!(code, 1);
-        assert!(shown.contains("pause is a tier-1 read"), "{shown}");
+        assert!(shown.contains("live read takes one of"), "{shown}");
         assert!(s.seen().is_empty() && entries.is_empty());
     }
 
@@ -439,7 +431,7 @@ mod tests {
         assert_eq!(code, 0, "{shown}");
         assert_eq!(
             s.seen().len(),
-            7,
+            6,
             "one request per read, and nothing beside"
         );
         assert_eq!(
@@ -449,15 +441,14 @@ mod tests {
                 "read.server",
                 "read.track",
                 "read.player_id",
-                "read.mission_loaded",
                 "read.player_unit_type",
                 "read.mission_theatre",
             ],
-            "tier 2 first, then the three from the crashing batch"
+            "in the order the live run sent them"
         );
         assert_eq!(
             entries.len(),
-            14,
+            12,
             "each written down as sent, then as answered"
         );
     }
@@ -505,8 +496,8 @@ mod tests {
         let mut s = standin(&b, "0000000002-4242");
         let (code, shown, entries) = read(&b, &mut s, "all");
         assert_eq!(code, 0, "{shown}");
-        assert_eq!(s.seen().len(), 6, "multiplayer was not sent again");
-        assert_eq!(entries.len(), 14);
+        assert_eq!(s.seen().len(), 5, "multiplayer was not sent again");
+        assert_eq!(entries.len(), 12);
         let (again, shown, _) = {
             drop(s);
             let mut s = standin(&b, "0000000003-4242");
@@ -534,7 +525,7 @@ mod tests {
             crate::live::run(labelled("all", "menu"), out).expect("the line parses")
         });
         assert_eq!(code, 0, "{shown}");
-        assert_eq!(s.seen().len(), 7);
+        assert_eq!(s.seen().len(), 6);
         drop(s);
 
         let mut s = standin(&b, "0000000002-4242");
@@ -544,7 +535,7 @@ mod tests {
         assert_eq!(code, 0, "{shown}");
         assert_eq!(
             s.seen().len(),
-            7,
+            6,
             "a result at the menu says nothing of a mission"
         );
         drop(s);

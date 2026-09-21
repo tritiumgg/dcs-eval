@@ -29,7 +29,6 @@ use dcs_eval::file;
 use dcs_eval::game;
 use dcs_eval::paths::{self, Real};
 use dcs_eval::pipeline::{Pipeline, Spec};
-use dcs_eval::reads::Tiers;
 use dcs_eval::wait::{self, Collected, Outcome};
 use dcs_eval::{source, status};
 use rmcp::ErrorData;
@@ -240,12 +239,6 @@ pub struct GameState {
     pub host: Option<String>,
     /// How long to wait on the window of reads.
     pub wait_seconds: Option<u64>,
-    /// Reads to send beyond the five always sent, off by default. A group:
-    /// `extra` (`multiplayer`, `server`, `track`, `player_id`, with no
-    /// hook-state precedent), `suspect` (`mission_loaded`,
-    /// `player_unit_type`, `mission_theatre`, from a batch that crashed
-    /// DCS) or `base` (none). Or one of those seven keys, to send it alone.
-    pub reads: Option<Vec<String>>,
 }
 
 /// `dcs_eval`'s arguments.
@@ -354,34 +347,19 @@ pub(crate) fn ping(serve: &Serve, host: Option<&str>, upto: Duration) -> Answere
 }
 
 /// What `dcs_game_state` and the `game-state` verb both do.
-///
-/// `reads` names the opt-in reads to send beside the five that always go.
-/// A word that names none is refused before any session is looked for,
-/// because it is the caller's mistake and not the game's.
-pub(crate) fn game_state(
-    serve: &Serve,
-    host: Option<&str>,
-    reads: &[String],
-    upto: Duration,
-) -> Answered {
-    let tiers = match Tiers::from_words(reads.iter().map(String::as_str)) {
-        Ok(tiers) => tiers,
-        Err(why) => return Answered::plain(refuse("bad-argument", vec![why.to_string()])),
-    };
+pub(crate) fn game_state(serve: &Serve, host: Option<&str>, upto: Duration) -> Answered {
     let client = match client_for(serve, host) {
         Ok(client) => client,
         Err(no) => return Answered::plain(no),
     };
-    Answered::plain(
-        match game::game_state(client.output().as_path(), tiers, upto) {
-            Ok(state) => {
-                let mut lines = vec![state.to_string()];
-                lines.extend(state.recorded_lines());
-                say("game-state", lines)
-            }
-            Err(why) => refuse("refused", vec![why.to_string()]),
-        },
-    )
+    Answered::plain(match game::game_state(client.output().as_path(), upto) {
+        Ok(state) => {
+            let mut lines = vec![state.to_string()];
+            lines.extend(state.recorded_lines());
+            say("game-state", lines)
+        }
+        Err(why) => refuse("refused", vec![why.to_string()]),
+    })
 }
 
 /// What `dcs_eval` and the `eval` verb both do.
@@ -530,13 +508,7 @@ impl Serve {
         &self,
         Parameters(args): Parameters<GameState>,
     ) -> Result<CallToolResult, ErrorData> {
-        Ok(game_state(
-            self,
-            args.host.as_deref(),
-            args.reads.as_deref().unwrap_or_default(),
-            waiting(args.wait_seconds),
-        )
-        .answer)
+        Ok(game_state(self, args.host.as_deref(), waiting(args.wait_seconds)).answer)
     }
 
     /// Run a chunk of Lua inside the running game and report what it came to.
@@ -896,99 +868,6 @@ mod tests {
 
         client.cancel().await.expect("the client hangs up");
         server.cancel().await.expect("the server comes down");
-    }
-
-    /// `dcs_game_state` over the wire with `json` as its arguments, and
-    /// the text that came back.
-    async fn game_state_said(
-        client: &RunningService<RoleClient, ()>,
-        json: serde_json::Value,
-    ) -> CallToolResult {
-        let serde_json::Value::Object(arguments) = json else {
-            panic!("the arguments are an object");
-        };
-        client
-            .call_tool(CallToolRequestParams::new("dcs_game_state").with_arguments(arguments))
-            .await
-            .expect("dcs_game_state answers")
-    }
-
-    /// The argument reaches the gather. Nothing ticks the stand-in, so a
-    /// read that was published comes back unanswered at a zero wait, and
-    /// one that was not says it is off. The call without `reads` is the
-    /// control that makes the absence of the "off" line mean something.
-    #[tokio::test]
-    async fn tools_listed_opt_in_reads_argument_reaches_the_gather() {
-        let box_ = Sandbox::new();
-        let (server, client) = pair(&box_).await;
-        let off = "mission_loaded: unknown (suspect reads off)";
-
-        let default = game_state_said(&client, serde_json::json!({ "wait_seconds": 0 })).await;
-        let default = wording::text(&default);
-        assert!(
-            default.lines().any(|line| line == off),
-            "the control: unasked, the read says it is off: {default}"
-        );
-
-        let asked = game_state_said(
-            &client,
-            serde_json::json!({ "reads": ["mission_loaded"], "wait_seconds": 0 }),
-        )
-        .await;
-        let asked = wording::text(&asked);
-        assert!(
-            asked
-                .lines()
-                .any(|line| line.starts_with("mission_loaded: ")),
-            "the read has a line: {asked}"
-        );
-        assert!(
-            !asked.lines().any(|line| line == off),
-            "the read was asked for and still says it is off: {asked}"
-        );
-
-        client.cancel().await.expect("the client hangs up");
-        server.cancel().await.expect("the server comes down");
-    }
-
-    #[tokio::test]
-    async fn tools_listed_opt_in_reads_argument_refuses_a_word_as_bad_argument() {
-        let box_ = Sandbox::new();
-        let (server, client) = pair(&box_).await;
-
-        let answer = game_state_said(&client, serde_json::json!({ "reads": ["nope"] })).await;
-        let said = wording::text(&answer);
-        assert_eq!(answer.is_error, Some(true), "a refusal: {said}");
-        assert_eq!(
-            said.lines().next(),
-            Some("bad-argument"),
-            "headed bad-argument: {said}"
-        );
-        assert!(said.contains("nope"), "it names the word: {said}");
-
-        client.cancel().await.expect("the client hangs up");
-        server.cancel().await.expect("the server comes down");
-    }
-
-    /// The word is judged before any session is looked for, so a caller
-    /// with nothing running still hears that the word is wrong. The call
-    /// without `reads` is the control that shows there is no session here.
-    #[test]
-    fn tools_listed_opt_in_reads_word_is_refused_before_the_session() {
-        let box_ = Sandbox::new();
-        let serve = Serve::new(Options {
-            saved_games: box_.path.clone(),
-            variant: "DCS.openbeta".to_owned(),
-            host: Host::Hook,
-            data_dir: Some(box_.join("data")),
-        });
-        let first = |reads: &[String]| {
-            let answered = game_state(&serve, None, reads, Duration::ZERO);
-            let said = wording::text(&answered.answer);
-            said.lines().next().unwrap_or_default().to_owned()
-        };
-        assert_eq!(first(&[]), "no-session", "the control: nothing is running");
-        assert_eq!(first(&["nope".to_owned()]), "bad-argument");
     }
 
     /// The naming rule, held rather than described.

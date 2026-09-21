@@ -179,19 +179,18 @@ impl fmt::Display for Fact {
 /// answer. The axis values stay in an enum each. Decision record 0018.
 ///
 /// The arms are kept apart on purpose and none of them subsumes another.
-/// "The read raised", "the read was never sent because nobody asked for it",
-/// "there is no heartbeat", "the heartbeat would not parse" and "the
-/// heartbeat is another session's" are five different findings, and an
-/// agent reading one has to be able to tell which it has — two of them
-/// say the answer is purchasable and the rest do not.
+/// "The read raised", "the read was never sent because the session was
+/// loading", "there is no heartbeat", "the heartbeat would not parse" and
+/// "the heartbeat is another session's" are five different findings, and
+/// an agent reading one has to be able to tell which it has — the load is
+/// purchasable by waiting and the rest are not.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Why {
     /// The read threw inside its own `pcall`, message verbatim. It is
     /// printed alone: nothing else joins it, because an errored read
     /// decides its axis and no other fact gets a say.
     Errored { message: String },
-    /// The read was never published, and this is which of the three
-    /// reasons.
+    /// The read was never published, and this is why.
     NotSent { why: crate::reads::NotSent },
     /// No `ok` reply came back for it.
     Unanswered { why: crate::reads::Unanswered },
@@ -264,8 +263,6 @@ impl fmt::Display for Why {
                 // Spelt out here rather than taken from the reason's own
                 // prose, because this exact line is what tells an agent
                 // the answer is purchasable and how.
-                crate::reads::NotSent::TierTwoOff => f.write_str("unknown (tier 2 off)"),
-                crate::reads::NotSent::SuspectOff => f.write_str("unknown (suspect reads off)"),
                 crate::reads::NotSent::Loading => f.write_str("unknown (the session is loading)"),
             },
             Self::Unanswered { why } => write!(f, "unknown: no answer came back, {why}"),
@@ -701,10 +698,8 @@ pub fn pause_of(
 pub enum SessionAxis {
     /// Joined to somebody else's server.
     Client,
-    /// Reachable, with tier 2 off. Hosting from the client is
-    /// indistinguishable from single player by reachability alone, so the
-    /// value names both and says what would separate them.
-    SingleOrHost,
+    /// `isMultiplayer` false. DCS answers `isServer` true here too,
+    /// counting single player as hosting, so that read is not consulted.
     Single,
     Host,
     Unknown {
@@ -716,9 +711,8 @@ impl fmt::Display for SessionAxis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Client => f.write_str("a client joined to a server (gui refused)"),
-            Self::SingleOrHost => f.write_str("single player or host (tier 2 off)"),
-            Self::Single => f.write_str("single player (tier 2)"),
-            Self::Host => f.write_str("hosting (tier 2)"),
+            Self::Single => f.write_str("single player (read)"),
+            Self::Host => f.write_str("hosting (read)"),
             Self::Unknown { why } => write!(f, "{why}"),
         }
     }
@@ -735,8 +729,8 @@ pub enum Track {
 impl fmt::Display for Track {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Replay => f.write_str("a track playing back (tier 2)"),
-            Self::Live => f.write_str("live (tier 2)"),
+            Self::Replay => f.write_str("a track playing back (read)"),
+            Self::Live => f.write_str("live (read)"),
             Self::Unknown { why } => write!(f, "{why}"),
         }
     }
@@ -797,9 +791,9 @@ fn refusal_word(probe: &crate::reads::Probe) -> Option<&str> {
 }
 
 /// What kind of session this is, from the `gui` reachability probe and
-/// then the tier-2 reads, gated on being in a mission.
+/// then the `multiplayer` and `server` reads, gated on being in a mission.
 ///
-/// **The probe is read first, and the tier-2 mapping is reached only where
+/// **The probe is read first, and the reads are consulted only where
 /// the probe was reachable.** Without that ordering written down, a
 /// `refused` probe with `isMultiplayer` true and `isServer` false has two
 /// rows of the vocabulary claiming it at once. Both are this axis's own
@@ -822,7 +816,6 @@ fn refusal_word(probe: &crate::reads::Probe) -> Option<&str> {
 pub fn session_of(
     activity: &Activity,
     probe: Option<&crate::reads::Probe>,
-    tiers: crate::reads::Tiers,
     multiplayer: Option<&crate::reads::Answer>,
     server: Option<&crate::reads::Answer>,
 ) -> SessionAxis {
@@ -887,7 +880,7 @@ pub fn session_of(
         Some(Probe::Malformed { body }) => SessionAxis::Unknown {
             why: Why::Malformed { body: body.clone() },
         },
-        Some(Probe::Reachable) => reachable_session(tiers, multiplayer, server),
+        Some(Probe::Reachable) => reachable_session(multiplayer, server),
         None => SessionAxis::Unknown {
             why: Why::Unanswered {
                 why: crate::reads::Unanswered::Unyielded,
@@ -896,11 +889,11 @@ pub fn session_of(
     }
 }
 
-/// What the tier-2 reads say, where the `gui` state answered the probe.
+/// What the `multiplayer` and `server` reads say, where the `gui` state
+/// answered the probe.
 ///
-/// Without `multiplayer` asked for, reachability is all there is, and
-/// the answer is single player or host. With it asked for and `server`
-/// not, a `true` there is unknown naming the read nobody asked for.
+/// `isMultiplayer` false is single player whatever `isServer` says: DCS
+/// answers it true in single player, counting that as hosting (ADR 0031).
 ///
 /// `isMultiplayer` true with `isServer` false is a combination the
 /// vocabulary maps to nothing, so it is unknown naming both reads.
@@ -908,13 +901,9 @@ pub fn session_of(
 /// corroboration: the probe already said what it had to say, and this is
 /// a second reading that does not fit.
 fn reachable_session(
-    tiers: crate::reads::Tiers,
     multiplayer: Option<&crate::reads::Answer>,
     server: Option<&crate::reads::Answer>,
 ) -> SessionAxis {
-    if !tiers.sends("multiplayer") {
-        return SessionAxis::SingleOrHost;
-    }
     let multi = match bool_of(multiplayer) {
         Ok(multi) => multi,
         Err(why) => return SessionAxis::Unknown { why },
@@ -940,11 +929,9 @@ fn reachable_session(
     }
 }
 
-/// Whether a track is playing, from the tier-2 read alone.
+/// Whether a track is playing, from the `track` read alone.
 ///
-/// No gate: the vocabulary gives this row none. With tier 2 off the read
-/// is never sent, and the answer says so in the one line that tells an
-/// agent the answer is purchasable and how.
+/// No gate: the vocabulary gives this row none.
 #[must_use]
 pub fn track_of(track: Option<&crate::reads::Answer>) -> Track {
     use crate::reads::Answer;
@@ -984,8 +971,8 @@ pub fn track_of(track: Option<&crate::reads::Answer>) -> Track {
         Some(Answer::Unanswered { why }) => Track::Unknown {
             why: Why::Unanswered { why: why.clone() },
         },
-        // Which unknown this is matters: tier 2 off is purchasable and
-        // the rest are not.
+        // Which unknown this is matters: a load is purchasable by waiting
+        // and the rest are not.
         Some(Answer::NotSent { why }) => Track::Unknown {
             why: Why::NotSent { why: *why },
         },
@@ -1275,7 +1262,6 @@ pub struct Evidence {
     pub ping: Option<Result<crate::protocol::Envelope, crate::reads::Unanswered>>,
     pub probe: Option<crate::reads::Probe>,
     pub answers: Vec<(&'static crate::reads::Read, crate::reads::Answer)>,
-    pub tiers: crate::reads::Tiers,
 }
 
 impl Evidence {
@@ -1290,7 +1276,6 @@ impl Evidence {
             ping: None,
             probe: None,
             answers: Vec::new(),
-            tiers: crate::reads::Tiers::default(),
         }
     }
 
@@ -1306,19 +1291,18 @@ impl Evidence {
 
 /// The reads that map to no axis, and are carried anyway.
 ///
-/// `sim_mode` is recorded verbatim and maps to nothing until a table of
-/// observed values exists, and no such table exists: mapping it here would
-/// be inventing one. `mission_file`, `model_time` and `player_id` are
-/// gathered on the same window and no row of the vocabulary reads them. A
-/// reader that wants them should not have to go back to the wire for them,
-/// so they are carried as inert data. The three suspect reads map to no
-/// axis either, and are carried the same way.
-const UNMAPPED_READS: [&str; 7] = [
+/// `sim_mode` is recorded verbatim and maps to nothing: the values measured
+/// live, 1 at the menu and in the editor and 4 in a mission (ADR 0031), say
+/// nothing the phase does not. `mission_file`, `model_time`, `player_id`,
+/// `player_unit_type` and `mission_theatre` are gathered on the same window
+/// and no row of the vocabulary reads them. A reader that wants them should
+/// not have to go back to the wire for them, so they are carried as inert
+/// data.
+const UNMAPPED_READS: [&str; 6] = [
     "sim_mode",
     "mission_file",
     "model_time",
     "player_id",
-    "mission_loaded",
     "player_unit_type",
     "mission_theatre",
 ];
@@ -1350,9 +1334,8 @@ pub struct GameState {
 ///
 /// Composed from the axes, so a value and the basis it rests on cannot
 /// come apart: `paused (read)` says which of the two disagreeing sources
-/// decided it, `single player or host (tier 2 off)` says what would
-/// separate the two, and an unknown carries its reason rather than a bare
-/// word.
+/// decided it, `single player (read)` says it was read rather than
+/// inferred, and an unknown carries its reason rather than a bare word.
 ///
 /// Two things are deliberately not here. The word this build uses is
 /// `executor`, so no headline says the other one, whatever the frozen
@@ -1408,8 +1391,7 @@ impl fmt::Display for GameState {
 impl GameState {
     /// One line per read no axis is made of, in table order:
     /// `<key>: <lua type> <value>` where it answered, and otherwise the
-    /// reason an axis would print — `unknown (tier 2 off)` for a read
-    /// nobody asked for, which is also what says it can be asked for.
+    /// reason an axis would print.
     ///
     /// It walks what was gathered and invents nothing: where no window was
     /// opened, because there was no handshake to open one against, there
@@ -1455,7 +1437,6 @@ pub fn derive(e: &Evidence) -> GameState {
     let session = session_of(
         &activity,
         e.probe.as_ref(),
-        e.tiers,
         e.of("multiplayer"),
         e.of("server"),
     );
@@ -1497,7 +1478,6 @@ pub fn derive(e: &Evidence) -> GameState {
 /// as if the session had been busy loading.
 pub fn game_state(
     output: &std::path::Path,
-    tiers: crate::reads::Tiers,
     upto: std::time::Duration,
 ) -> Result<GameState, crate::reads::Refused> {
     let path = output.join("executor.txt");
@@ -1512,7 +1492,6 @@ pub fn game_state(
     let Found::Read(h) = &handshake else {
         return Ok(derive(&Evidence {
             handshake,
-            tiers,
             ..Evidence::nothing()
         }));
     };
@@ -1537,7 +1516,7 @@ pub fn game_state(
         ),
     };
     let process = crate::status::process_of(h.pid, crate::sys::liveness(h.pid)).0;
-    let readings = crate::reads::gather(h, &word, tiers, upto)?;
+    let readings = crate::reads::gather(h, &word, upto)?;
     let evidence = Evidence {
         handshake: handshake.clone(),
         beat,
@@ -1545,7 +1524,6 @@ pub fn game_state(
         ping: readings.ping().map(|r| r.cloned().map_err(Clone::clone)),
         probe: readings.probe().cloned(),
         answers: readings.entries().to_vec(),
-        tiers,
     };
     Ok(derive(&evidence))
 }
@@ -2134,59 +2112,47 @@ mod game_state {
     #[test]
     fn a_refused_gui_probe_in_a_mission_is_session_client() {
         let (_, activity) = in_mission("sim");
-        let got = session_of(
-            &activity,
-            Some(&refused_with("refused")),
-            reads::Tiers::default(),
-            None,
-            None,
-        );
+        let got = session_of(&activity, Some(&refused_with("refused")), None, None);
         assert_eq!(got, SessionAxis::Client);
     }
 
     #[test]
-    fn a_refused_probe_wins_over_the_tier_two_reads() {
+    fn a_refused_probe_wins_over_the_session_reads() {
         // Two rows of the vocabulary claim this one at once, and the
         // order is written down: the probe is read first.
         let (_, activity) = in_mission("sim");
         let got = session_of(
             &activity,
             Some(&refused_with("refused")),
-            reads::Tiers::with_tier_two(),
             Some(&told(true)),
             Some(&told(false)),
         );
         assert_eq!(
             got,
             SessionAxis::Client,
-            "the tier-2 reads overruled the probe"
+            "the session reads overruled the probe"
         );
     }
 
     #[test]
-    fn a_reachable_probe_with_tier_two_off_is_single_or_host() {
+    fn single_player_as_dcs_answers_it_is_single_and_not_host() {
+        // Measured live: single player answers `isServer` true, because
+        // DCS counts it as hosting. `isMultiplayer` false decides it.
         let (_, activity) = in_mission("sim");
         let got = session_of(
             &activity,
             Some(&reads::Probe::Reachable),
-            reads::Tiers::default(),
-            None,
-            None,
+            Some(&told(false)),
+            Some(&told(true)),
         );
-        assert_eq!(got, SessionAxis::SingleOrHost);
-        assert!(got.to_string().contains("tier 2 off"), "{got}");
+        assert_eq!(got, SessionAxis::Single);
+        assert_eq!(got.to_string(), "single player (read)");
     }
 
     #[test]
     fn an_invalid_state_probe_is_unknown_and_not_client() {
         let (_, activity) = in_mission("sim");
-        let got = session_of(
-            &activity,
-            Some(&refused_with("invalid-state")),
-            reads::Tiers::default(),
-            None,
-            None,
-        );
+        let got = session_of(&activity, Some(&refused_with("invalid-state")), None, None);
         assert_ne!(got, SessionAxis::Client);
         assert!(
             got.to_string().contains("invalid-state"),
@@ -2201,13 +2167,7 @@ mod game_state {
         // nothing about whether this session is a client.
         let (_, activity) = in_mission("sim");
         for word in ["unsupported", "bad-request", "oversize", "budget"] {
-            let got = session_of(
-                &activity,
-                Some(&refused_with(word)),
-                reads::Tiers::default(),
-                None,
-                None,
-            );
+            let got = session_of(&activity, Some(&refused_with(word)), None, None);
             assert_ne!(got, SessionAxis::Client, "{word} was read as a client");
             assert!(got.to_string().contains(word), "{word} was lost: {got}");
         }
@@ -2217,13 +2177,7 @@ mod game_state {
     fn a_refused_probe_at_the_menu_is_unknown_and_the_facts_disagree() {
         let beat = ours(Host::Hook, "menu", true);
         let activity = activity_of(Some(&beat), None);
-        let got = session_of(
-            &activity,
-            Some(&refused_with("refused")),
-            reads::Tiers::default(),
-            None,
-            None,
-        );
+        let got = session_of(&activity, Some(&refused_with("refused")), None, None);
         let SessionAxis::Unknown {
             why: Why::Disagrees { facts },
         } = &got
@@ -2242,13 +2196,7 @@ mod game_state {
         let beat = ours(Host::Hook, "menu", true);
         let activity = activity_of(Some(&beat), None);
         assert_eq!(activity, Activity::MenuOrEditor);
-        let _ = session_of(
-            &activity,
-            Some(&refused_with("refused")),
-            reads::Tiers::default(),
-            None,
-            None,
-        );
+        let _ = session_of(&activity, Some(&refused_with("refused")), None, None);
         assert_eq!(
             activity_of(Some(&beat), None),
             Activity::MenuOrEditor,
@@ -2264,13 +2212,7 @@ mod game_state {
         let beat = ours(Host::Export, "sim", true);
         let activity = activity_of(Some(&beat), None);
         assert!(matches!(activity, Activity::Unknown { .. }), "{activity:?}");
-        let got = session_of(
-            &activity,
-            Some(&reads::Probe::Reachable),
-            reads::Tiers::default(),
-            None,
-            None,
-        );
+        let got = session_of(&activity, Some(&reads::Probe::Reachable), None, None);
         assert_eq!(
             got,
             SessionAxis::Unknown {
@@ -2286,15 +2228,8 @@ mod game_state {
         // no answer. A reader who cannot tell them apart cannot tell
         // whether waiting would buy the answer.
         let reachable = reads::Probe::Reachable;
-        let unknown = |beat: &Beat| {
-            session_of(
-                &activity_of(Some(beat), None),
-                Some(&reachable),
-                reads::Tiers::default(),
-                None,
-                None,
-            )
-        };
+        let unknown =
+            |beat: &Beat| session_of(&activity_of(Some(beat), None), Some(&reachable), None, None);
         let all = [
             unknown(&ours(Host::Hook, "load", true)),
             unknown(&ours(Host::Hook, "menu", true)),
@@ -2340,12 +2275,11 @@ mod game_state {
     }
 
     #[test]
-    fn tier_two_on_maps_multiplayer_false_to_single() {
+    fn multiplayer_false_maps_to_single() {
         let (_, activity) = in_mission("sim");
         let got = session_of(
             &activity,
             Some(&reads::Probe::Reachable),
-            reads::Tiers::with_tier_two(),
             Some(&told(false)),
             Some(&told(false)),
         );
@@ -2353,12 +2287,11 @@ mod game_state {
     }
 
     #[test]
-    fn tier_two_on_maps_multiplayer_and_server_to_host() {
+    fn multiplayer_and_server_map_to_host() {
         let (_, activity) = in_mission("sim");
         let got = session_of(
             &activity,
             Some(&reads::Probe::Reachable),
-            reads::Tiers::with_tier_two(),
             Some(&told(true)),
             Some(&told(true)),
         );
@@ -2374,7 +2307,6 @@ mod game_state {
         let got = session_of(
             &activity,
             Some(&reads::Probe::Reachable),
-            reads::Tiers::with_tier_two(),
             Some(&told(true)),
             Some(&told(false)),
         );
@@ -2392,13 +2324,12 @@ mod game_state {
     }
 
     #[test]
-    fn an_errored_tier_two_read_is_unknown_naming_the_error() {
+    fn an_errored_session_read_is_unknown_naming_the_error() {
         let (_, activity) = in_mission("sim");
         for (multi, server) in [(raised(), told(true)), (told(true), raised())] {
             let got = session_of(
                 &activity,
                 Some(&reads::Probe::Reachable),
-                reads::Tiers::with_tier_two(),
                 Some(&multi),
                 Some(&server),
             );
@@ -2414,26 +2345,26 @@ mod game_state {
     }
 
     #[test]
-    fn track_is_unknown_tier_2_off_when_the_switch_is_off() {
-        // What a gather hands back for a tier-2 read with the switch off,
-        // taken from the gather's own arm rather than composed here.
+    fn track_is_unknown_naming_the_load_when_the_read_was_held_back() {
+        // What a gather hands back for a read during a load, taken from
+        // the gather's own arm rather than composed here.
         let answer = reads::Answer::NotSent {
-            why: reads::NotSent::TierTwoOff,
+            why: reads::NotSent::Loading,
         };
         let got = track_of(Some(&answer));
         assert_eq!(
             got,
             Track::Unknown {
                 why: Why::NotSent {
-                    why: reads::NotSent::TierTwoOff
+                    why: reads::NotSent::Loading
                 }
             }
         );
-        assert_eq!(got.to_string(), "unknown (tier 2 off)");
+        assert_eq!(got.to_string(), "unknown (the session is loading)");
     }
 
     #[test]
-    fn track_reads_replay_and_live_when_the_switch_is_on() {
+    fn track_reads_replay_and_live() {
         assert_eq!(track_of(Some(&told(true))), Track::Replay);
         assert_eq!(track_of(Some(&told(false))), Track::Live);
     }
@@ -2761,7 +2692,6 @@ mod game_state {
         let _: fn(
             &Activity,
             Option<&reads::Probe>,
-            reads::Tiers,
             Option<&reads::Answer>,
             Option<&reads::Answer>,
         ) -> SessionAxis = session_of;
@@ -2825,7 +2755,7 @@ mod game_state {
 
     /// One derivation against a stand-in that answers the whole window in
     /// one tick.
-    fn derived(s: &mut Standin, tiers: reads::Tiers, want: usize) -> GameState {
+    fn derived(s: &mut Standin, want: usize) -> GameState {
         let output = s.output().to_owned();
         let req = s.req().to_owned();
         std::thread::scope(|scope| {
@@ -2833,7 +2763,7 @@ mod game_state {
                 until(&req, want, UPTO);
                 s.tick();
             });
-            let state = game_state(&output, tiers, UPTO);
+            let state = game_state(&output, UPTO);
             ticker.join().expect("the ticker finishes");
             state
         })
@@ -2846,10 +2776,7 @@ mod game_state {
         // one is about what the far end actually read.
         let b = Sandbox::new();
         let mut s = ticking(&b, "load");
-        // Tier 2 on, so that the only reason a read can be unsent here
-        // is the load itself.
-        let state =
-            game_state(s.output(), reads::Tiers::with_tier_two(), UPTO).expect("not refused");
+        let state = game_state(s.output(), UPTO).expect("not refused");
         assert_eq!(state.activity, Activity::Loading);
         assert_eq!(
             published(s.req()),
@@ -2862,8 +2789,6 @@ mod game_state {
         assert_eq!(state.pause.value, Pause::NotApplicable);
         // `track` takes no gate, so it is the one axis that has to carry
         // the gather's load skip all the way to the rendered reason.
-        // Rendering it as tier 2 off would tell an agent to buy an
-        // answer by flipping a switch that is already on.
         assert_eq!(
             state.track,
             Track::Unknown {
@@ -2883,7 +2808,7 @@ mod game_state {
         let mut s = Standin::open(&b.join("dcs"), "hook").expect("the stand-in opens");
         s.pid = std::process::id();
         s.handshake().expect("the handshake publishes");
-        let state = derived(&mut s, reads::Tiers::default(), 7);
+        let state = derived(&mut s, 13);
         assert_eq!(
             state.activity,
             Activity::Unknown {
@@ -2921,7 +2846,7 @@ mod game_state {
             "",
             b"net.dostring_in returned nil",
         );
-        let state = derived(&mut s, reads::Tiers::default(), 7);
+        let state = derived(&mut s, 13);
         assert_eq!(
             state.activity,
             Activity::Mission {
@@ -2932,19 +2857,21 @@ mod game_state {
     }
 
     #[test]
-    fn tier_two_off_leaves_track_unknown_tier_2_off() {
+    fn every_game_state_reads_the_track_and_the_session() {
         let b = Sandbox::new();
         let mut s = ticking(&b, "sim");
-        let state = derived(&mut s, reads::Tiers::default(), 7);
-        assert_eq!(
-            state.track,
-            Track::Unknown {
-                why: Why::NotSent {
-                    why: reads::NotSent::TierTwoOff
-                }
-            }
+        s.script(
+            "DCS.getMissionName",
+            "ok",
+            "string",
+            b"string\tCaucasus TvT",
         );
-        assert_eq!(state.track.to_string(), "unknown (tier 2 off)");
+        s.script("DCS.isTrackPlaying", "ok", "string", b"boolean\tfalse");
+        s.script("DCS.isMultiplayer", "ok", "string", b"boolean\tfalse");
+        s.script("return 'ok'", "ok", "string", b"ok");
+        let state = derived(&mut s, 13);
+        assert_eq!(state.track, Track::Live);
+        assert_eq!(state.session, SessionAxis::Single);
     }
 
     #[test]
@@ -2958,7 +2885,7 @@ mod game_state {
             b"string\tCaucasus TvT",
         );
         s.script("DCS.getPause", "ok", "string", b"boolean\ttrue");
-        let state = derived(&mut s, reads::Tiers::default(), 7);
+        let state = derived(&mut s, 13);
         assert_eq!(state.pause.value, Pause::Paused, "the read did not win");
         assert_eq!(state.pause.phase_callback, Some(Phase::Sim));
         assert!(
@@ -2987,7 +2914,8 @@ mod game_state {
             b"error\tattempt to call a nil value",
         );
         s.script("return 'ok'", "ok", "string", b"ok");
-        let state = derived(&mut s, reads::Tiers::default(), 7);
+        s.script("DCS.isMultiplayer", "ok", "string", b"boolean\tfalse");
+        let state = derived(&mut s, 13);
         assert_eq!(
             state.pause.value,
             Pause::Unknown {
@@ -3003,7 +2931,7 @@ mod game_state {
                 name: "Caucasus TvT".to_owned()
             }
         );
-        assert_eq!(state.session, SessionAxis::SingleOrHost);
+        assert_eq!(state.session, SessionAxis::Single);
     }
 
     #[test]
@@ -3019,7 +2947,7 @@ mod game_state {
             b"string\tCaucasus TvT",
         );
         s.script("DCS.getSimulatorMode", "ok", "string", b"number\t2");
-        let state = derived(&mut s, reads::Tiers::default(), 7);
+        let state = derived(&mut s, 13);
         let recorded = state
             .recorded
             .iter()
@@ -3045,7 +2973,7 @@ mod game_state {
             b"string\tCaucasus TvT",
         );
         s2.script("DCS.getSimulatorMode", "ok", "string", b"number\t7");
-        let other = derived(&mut s2, reads::Tiers::default(), 7);
+        let other = derived(&mut s2, 13);
         assert_eq!(
             axes(&state),
             axes(&other),
@@ -3068,7 +2996,7 @@ mod game_state {
     /// Every read paired with the answer `pairs` gives it, in table
     /// order. A read `pairs` does not name is left out.
     fn answers(pairs: &[(&str, reads::Answer)]) -> Vec<(&'static reads::Read, reads::Answer)> {
-        reads::listed(reads::Tiers::with_tier_two())
+        reads::listed()
             .into_iter()
             .filter_map(|read| {
                 pairs
@@ -3097,7 +3025,6 @@ mod game_state {
                 ("track", told(false)),
                 ("sim_mode", said("2")),
             ]),
-            tiers: reads::Tiers::with_tier_two(),
         }
     }
 
@@ -3169,17 +3096,6 @@ mod game_state {
                     },
                 ),
                 Why::Unanswered { why: window },
-            ),
-            (
-                setting(
-                    key,
-                    reads::Answer::NotSent {
-                        why: reads::NotSent::TierTwoOff,
-                    },
-                ),
-                Why::NotSent {
-                    why: reads::NotSent::TierTwoOff,
-                },
             ),
             (
                 setting(
@@ -3481,16 +3397,13 @@ mod game_state {
     }
 
     #[test]
-    fn the_headline_for_a_paused_mission_names_the_read_and_the_tier() {
+    fn the_headline_for_a_paused_mission_names_the_reads() {
         // The basis, not the wording: the examples in the frozen
         // document are examples, and one of them names a DCS version
         // this build has never seen.
         let b = Sandbox::new();
         let s = handshaken(&b);
         let line = headline(&s, |e| {
-            e.tiers = reads::Tiers::default();
-            e.answers
-                .retain(|(read, _)| read.tier() == reads::Tier::One);
             for (read, answer) in &mut e.answers {
                 if read.key() == "pause" {
                     *answer = reads::Answer::Value {
@@ -3502,7 +3415,7 @@ mod game_state {
         });
         assert!(line.contains("in a mission"), "{line}");
         assert!(line.contains("paused (read)"), "{line}");
-        assert!(line.contains("(tier 2 off)"), "{line}");
+        assert!(line.contains("single player (read)"), "{line}");
     }
 
     #[test]
@@ -3614,9 +3527,7 @@ mod game_state {
         assert!(line.contains(&whole.pause.value.to_string()), "{line}");
         assert!(line.contains(&whole.session.to_string()), "{line}");
         assert!(line.contains(&whole.track.to_string()), "{line}");
-        for basis in ["(read)", "(tier 2)"] {
-            assert!(line.contains(basis), "{basis} is missing from {line}");
-        }
+        assert!(line.contains("(read)"), "(read) is missing from {line}");
     }
 
     #[test]
@@ -3630,50 +3541,28 @@ mod game_state {
     }
 
     #[test]
-    fn tier_two_off_renders_exactly_unknown_tier_2_off() {
+    fn a_load_skip_renders_exactly_unknown_the_session_is_loading() {
         // The exact line, because it is what tells an agent the answer is
-        // purchasable and how. A near miss would read as an ordinary
+        // purchasable by waiting. A near miss would read as an ordinary
         // unknown.
         let why = Why::NotSent {
-            why: reads::NotSent::TierTwoOff,
-        };
-        assert_eq!(why.to_string(), "unknown (tier 2 off)");
-    }
-
-    #[test]
-    fn a_load_skip_and_a_tier_two_skip_do_not_render_alike() {
-        // Both are reads that were never sent, and one of them is
-        // purchasable by turning a switch on while the other is not.
-        let load = Why::NotSent {
             why: reads::NotSent::Loading,
         };
-        let tier = Why::NotSent {
-            why: reads::NotSent::TierTwoOff,
-        };
-        assert_ne!(load, tier);
-        assert_ne!(load.to_string(), tier.to_string());
-        assert!(!load.to_string().contains("tier 2"), "{load}");
+        assert_eq!(why.to_string(), "unknown (the session is loading)");
     }
 
     #[test]
-    fn opt_in_a_suspect_read_off_renders_unknown_suspect_reads_off() {
-        let suspect = Why::NotSent {
-            why: reads::NotSent::SuspectOff,
-        };
-        assert_eq!(suspect.to_string(), "unknown (suspect reads off)");
-        for other in [reads::NotSent::TierTwoOff, reads::NotSent::Loading] {
-            let other = Why::NotSent { why: other };
-            assert_ne!(suspect.to_string(), other.to_string());
-        }
-    }
-
-    #[test]
-    fn opt_in_the_unmapped_reads_render_a_line_each() {
+    fn the_unmapped_reads_render_a_line_each() {
         let b = Sandbox::new();
         let mut s = ticking(&b, "sim");
-        s.script("DCS.getMissionLoaded", "ok", "string", b"boolean\tfalse");
-        let tiers = reads::Tiers::from_words(["mission_loaded"]).expect("a key");
-        let state = derived(&mut s, tiers, 8);
+        s.script(
+            "DCS.getPlayerUnitType",
+            "ok",
+            "string",
+            b"string\tF-4E-45MC",
+        );
+        s.script("net.get_my_player_id", "ok", "string", b"number\t0");
+        let state = derived(&mut s, 13);
         let lines = state.recorded_lines();
         let keys: Vec<&str> = lines
             .iter()
@@ -3686,17 +3575,12 @@ mod game_state {
                 "model_time",
                 "sim_mode",
                 "player_id",
-                "mission_loaded",
                 "player_unit_type",
                 "mission_theatre",
             ],
             "{lines:#?}"
         );
-        for want in [
-            "mission_loaded: boolean false",
-            "player_unit_type: unknown (suspect reads off)",
-            "player_id: unknown (tier 2 off)",
-        ] {
+        for want in ["player_unit_type: string F-4E-45MC", "player_id: number 0"] {
             assert!(
                 lines.iter().any(|line| line == want),
                 "no line reads `{want}`: {lines:#?}"
@@ -3708,13 +3592,13 @@ mod game_state {
     }
 
     #[test]
-    fn opt_in_a_suspect_read_that_raises_or_answers_no_text_renders_so() {
-        // A raise is what a live run reads off a suspect read whose name
-        // the installed build lacks, so its line is held exactly, beside a
-        // value with no text and a reply that is not the grammar.
+    fn a_read_that_raises_or_answers_no_text_renders_so() {
+        // A raise is what a read whose name the installed build lacks
+        // answers, so its line is held exactly, beside a value with no
+        // text and a reply that is not the grammar.
         let b = Sandbox::new();
         let mut s = ticking(&b, "sim");
-        s.script("DCS.getMissionLoaded", "ok", "number", b"x");
+        s.script("DCS.getSimulatorMode", "ok", "number", b"x");
         s.script(
             "DCS.getPlayerUnitType",
             "ok",
@@ -3722,10 +3606,9 @@ mod game_state {
             b"error\tattempt to call a nil value",
         );
         s.script("DCS.getMissionTheatre", "ok", "string", b"table\t");
-        let tiers = reads::Tiers::from_words(["suspect"]).expect("a group");
-        let lines = derived(&mut s, tiers, 10).recorded_lines();
+        let lines = derived(&mut s, 13).recorded_lines();
         for want in [
-            "mission_loaded: unknown: the reply is not the read grammar, 1 bytes of it",
+            "sim_mode: unknown: the reply is not the read grammar, 1 bytes of it",
             "player_unit_type: unknown: attempt to call a nil value",
             "mission_theatre: a table",
         ] {
@@ -3734,44 +3617,6 @@ mod game_state {
                 "no line reads `{want}`: {lines:#?}"
             );
         }
-    }
-
-    #[test]
-    fn opt_in_server_alone_leaves_the_session_single_or_host() {
-        let (_, activity) = in_mission("sim");
-        let got = session_of(
-            &activity,
-            Some(&reads::Probe::Reachable),
-            reads::Tiers::from_words(["server"]).expect("a key"),
-            Some(&reads::Answer::NotSent {
-                why: reads::NotSent::TierTwoOff,
-            }),
-            Some(&told(true)),
-        );
-        assert_eq!(got, SessionAxis::SingleOrHost);
-    }
-
-    #[test]
-    fn opt_in_multiplayer_alone_true_leaves_the_session_unknown_tier_2_off() {
-        let (_, activity) = in_mission("sim");
-        let got = session_of(
-            &activity,
-            Some(&reads::Probe::Reachable),
-            reads::Tiers::from_words(["multiplayer"]).expect("a key"),
-            Some(&told(true)),
-            Some(&reads::Answer::NotSent {
-                why: reads::NotSent::TierTwoOff,
-            }),
-        );
-        assert_eq!(
-            got,
-            SessionAxis::Unknown {
-                why: Why::NotSent {
-                    why: reads::NotSent::TierTwoOff
-                }
-            }
-        );
-        assert_eq!(got.to_string(), "unknown (tier 2 off)");
     }
 
     #[test]
@@ -3821,9 +3666,6 @@ mod game_state {
         vec![
             Why::Errored {
                 message: "attempt to call a nil value".to_owned(),
-            },
-            Why::NotSent {
-                why: reads::NotSent::TierTwoOff,
             },
             Why::NotSent {
                 why: reads::NotSent::Loading,

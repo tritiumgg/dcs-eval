@@ -29,14 +29,13 @@ use std::path::{Path, PathBuf};
 use crate::serve::{self, Host, Serve, host_of};
 use crate::tools::{self, Answered, Reply};
 use crate::wording;
-use dcs_eval::reads::Tiers;
 
 /// The usage line, which is also the list of what this module answers to.
 pub const USAGE: &str = "usage: dcs-mcp status | ping | game-state \
      | eval <state> (<code> | --file <path>)\n       \
      --saved-games <dir> --variant <name> [--host hook|export]\n       \
      [--wait-seconds <n>] [--max-instructions <n>] [--chunkname <name>]\n       \
-     [--reads <word,...>] [--out <path>] [--capture] [--data-dir <dir>]";
+     [--out <path>] [--capture] [--data-dir <dir>]";
 
 /// What was asked for. One of four, and never a word the installer owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,8 +99,6 @@ struct Parsed {
     file: Option<String>,
     out: Option<PathBuf>,
     capture: bool,
-    /// The opt-in reads `game-state` sends, as words. Empty for the rest.
-    reads: Vec<String>,
 }
 
 /// Fill a slot that has not been filled, or name the flag that filled it.
@@ -140,7 +137,6 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     let mut file = None;
     let mut out = None;
     let mut data_dir = None;
-    let mut reads = None;
     let mut capture = false;
     let mut loose: Vec<String> = Vec::new();
 
@@ -180,7 +176,6 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
             }
             "--chunkname" => once(&mut chunkname, "--chunkname", value("--chunkname")?)?,
             "--file" => once(&mut file, "--file", value("--file")?)?,
-            "--reads" => once(&mut reads, "--reads", value("--reads")?)?,
             "--out" => once(&mut out, "--out", PathBuf::from(value("--out")?))?,
             "--data-dir" => once(
                 &mut data_dir,
@@ -217,19 +212,6 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
             ));
         }
     }
-    // The opt-in reads are a game-state question and nobody else's. The
-    // words are checked here, so a misspelt one is a line that will not
-    // parse rather than an answer about a selection nobody meant.
-    let reads: Vec<String> = match (verb, reads) {
-        (_, None) => Vec::new(),
-        (Verb::GameState, Some(given)) => {
-            let words: Vec<String> = given.split(',').map(str::to_owned).collect();
-            Tiers::from_words(words.iter().map(String::as_str))
-                .map_err(|why| format!("--reads: {why}"))?;
-            words
-        }
-        (other, Some(_)) => return Err(format!("{} does not take --reads", other.word())),
-    };
     // `--data-dir` is not guarded by `--capture`. It names the directory this
     // build keeps its own files in, and every evaluation appends a line to
     // the run record there whether or not a reply is being kept — so a line
@@ -289,7 +271,6 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
         file,
         out,
         capture,
-        reads,
     })
 }
 
@@ -365,7 +346,7 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
     let answered = match parsed.verb {
         Verb::Status => tools::status(&serve, None),
         Verb::Ping => tools::ping(&serve, None, upto),
-        Verb::GameState => tools::game_state(&serve, None, &parsed.reads, upto),
+        Verb::GameState => tools::game_state(&serve, None, upto),
         Verb::Eval => match &parsed.file {
             Some(path) => tools::eval_file(
                 &serve,
@@ -830,93 +811,6 @@ mod tests {
             "the refusal names the verb and the flag: {why}"
         );
         assert!(!out.exists(), "a refused line wrote nothing");
-    }
-
-    /// The flag reaches the gather: the read it names is on the disk exactly
-    /// once, and its line in the answer is not the one an unasked read
-    /// prints.
-    #[test]
-    fn cli_opt_in_reads_flag_reaches_the_gather() {
-        let box_ = Sandbox::new();
-        let mut s = Standin::open(&opts(&box_).output(), "hook").expect("the stand-in opens");
-        ticking(&mut s);
-        let (code, shown) = ran(
-            &mut s,
-            args(
-                &box_,
-                &[
-                    "game-state",
-                    "--reads",
-                    "mission_loaded",
-                    "--wait-seconds",
-                    "5",
-                ],
-            ),
-        );
-        assert_eq!(code, 0, "an answered game-state is not an error: {shown}");
-        let carried = s
-            .seen()
-            .iter()
-            .filter(|seen| {
-                String::from_utf8_lossy(&seen.bytes).contains("=dcs-eval read DCS.getMissionLoaded")
-            })
-            .count();
-        assert_eq!(carried, 1, "the read asked for reached the disk once");
-        assert!(
-            shown
-                .lines()
-                .any(|line| line.starts_with("mission_loaded: ")),
-            "the read has a line: {shown}"
-        );
-        assert!(
-            !shown.contains("mission_loaded: unknown (suspect reads off)"),
-            "the read was asked for and still says it is off: {shown}"
-        );
-    }
-
-    #[test]
-    fn cli_opt_in_reads_flag_refuses_a_word_that_is_no_read() {
-        let box_ = Sandbox::new();
-        let mut sink: Vec<u8> = Vec::new();
-        let why = run(
-            args(&box_, &["game-state", "--reads", "extra,nope"]),
-            &mut sink,
-        )
-        .expect_err("a word that is no read is refused");
-        assert!(
-            why.contains("--reads") && why.contains("nope"),
-            "the refusal names the flag and the word: {why}"
-        );
-    }
-
-    #[test]
-    fn cli_opt_in_reads_flag_belongs_to_game_state_alone() {
-        let box_ = Sandbox::new();
-        let mut sink: Vec<u8> = Vec::new();
-        let why = run(args(&box_, &["ping", "--reads", "extra"]), &mut sink)
-            .expect_err("ping does not take --reads");
-        assert!(
-            why.contains("ping does not take --reads"),
-            "the refusal names the verb and the flag: {why}"
-        );
-    }
-
-    #[test]
-    fn cli_opt_in_reads_given_twice_is_refused() {
-        let box_ = Sandbox::new();
-        let mut sink: Vec<u8> = Vec::new();
-        let why = run(
-            args(
-                &box_,
-                &["game-state", "--reads", "extra", "--reads", "suspect"],
-            ),
-            &mut sink,
-        )
-        .expect_err("a flag given twice is refused");
-        assert!(
-            why.contains("--reads is given twice"),
-            "the refusal says so: {why}"
-        );
     }
 
     /// The naming rule, held rather than described: the filtered command this

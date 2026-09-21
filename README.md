@@ -167,16 +167,15 @@ says it may have been removed.
 `unknown` is a value, not a guess: an axis nothing measured says so and says
 why.
 
-`dcs_game_state` sends five reads every time — the five ED's own hook script
-makes — and seven more only when you ask. Four, `extra`, have no precedent in
-the state they would run in; three, `suspect`, were in a batch of reads that
-crashed DCS, one of them named as the likely cause. None of the seven is
-measured safe yet. Ask with `reads` on the tool or `--reads` on the
-`game-state` verb: a group, or one read by its name — `multiplayer`, `server`,
-`track`, `player_id`, `mission_loaded`, `player_unit_type`, `mission_theatre`
-— several separated by commas on the command line. A read you did not ask for
-says so, `unknown (tier 2 off)` or `unknown (suspect reads off)`, and every
-read no summary is made of is printed on a line of its own.
+`dcs_game_state` sends eleven reads every time: the five ED's own hook script
+makes, and six more — `multiplayer`, `server`, `track`, `player_id`,
+`player_unit_type`, `mission_theatre` — that a live run sent alone from the
+hook, at the menu and in a mission, and that answered. `DCS.getMissionLoaded`
+crashed DCS in a mission, twice, and is never sent; `dcs_eval` can still call
+it, at your own risk. The session is `single player` where `multiplayer` says
+false — DCS answers `server` true in single player too — and `hosting` where
+both say true. Every read no summary is made of is printed on a line of its
+own.
 
 `dcs_eval_file` reads any file this server can read, wherever it lies — much
 as a chunk could open it with `io.open` in the `hook` state — and
@@ -200,7 +199,6 @@ headers and body, a refusal that says why, a `pending` that names its id.
 dcs-mcp status --saved-games "%USERPROFILE%\Saved Games" --variant DCS.openbeta
 dcs-mcp ping --saved-games ... --variant DCS.openbeta
 dcs-mcp game-state --saved-games ... --variant DCS.openbeta
-dcs-mcp game-state --reads mission_loaded --saved-games ... --variant DCS.openbeta
 dcs-mcp eval hook "return #coalition.getGroups(2)" --saved-games ... --variant DCS.openbeta
 dcs-mcp eval missionscripting --file .\probe.lua --saved-games ... --variant DCS.openbeta
 ```
@@ -209,7 +207,7 @@ dcs-mcp eval missionscripting --file .\probe.lua --saved-games ... --variant DCS
 `serve`, and `--host hook|export` picks which of the executor's two hosts to
 talk to. `--wait-seconds`, `--max-instructions` and `--chunkname` are the
 call's own, and a verb waits 15 seconds by default — a wait and never a
-limit, exactly as for the tools. `--reads` belongs to `game-state` alone.
+limit, exactly as for the tools.
 
 `--out <path>` writes the reply to a file, and `--capture` keeps a copy under
 this build's own data directory. Both write the bytes the executor published,
@@ -238,7 +236,7 @@ install*.
 ## Measuring a live install
 
 `dcs-mcp live` takes the figures only a running game can give — round trips,
-what a dormant frame costs, what each opt-in read does — one phase at a time,
+what a dormant frame costs, what each read does sent alone — one phase at a time,
 because each wants a scene you set up in DCS first. Every phase appends to
 `live.jsonl` under the data directory, and `live report` prints every row,
 measured or not, against the figure it is compared with. A row nothing has
@@ -260,7 +258,7 @@ for about a quarter of a second, five times; run it at the menu or paused.
 `rtt` sends a few hundred `return 1` chunks to each state the session serves,
 and nothing else; `--count` changes how many, and `--host export` times the
 export host's own state; `dormant` and `read` are the hook's and refuse
-`--host`. `read all` sends the seven opt-in reads one after another, each
+`--host`. `read all` sends the six reads it measured one after another, each
 alone, skipping any that already has a result in the scene `--label` names,
 and stops at the first that comes back as anything but an answer. Run it once
 per scene — `--label menu`, then `--label mission` — because a read that is

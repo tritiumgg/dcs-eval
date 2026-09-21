@@ -1,25 +1,24 @@
-//! The game-state reads: which `DCS.*` calls this client will ever send,
-//! and the shape each one is sent in.
+//! The game-state reads: which calls this client will ever send, the
+//! state each goes to, and the shape each one is sent in.
 //!
 //! Every read here is authored by this side, not by the executor: the
 //! executor evaluates what it is given and keeps no catalogue of calls,
-//! so whether a read is safe to make is this crate's concern. The answer
-//! taken is precedent rather than plausibility — the tier-1 five are the
-//! ones ED's own hook script calls from the hook state, which is the
-//! strongest evidence available that a hook may — and the answer to
-//! everything else is a constant table: a call that is not in it is not a
-//! game-state read at all, and an agent that wants one evaluates it under
-//! its own name where a crash names it.
+//! so whether a read is safe to make is this crate's concern. The first
+//! five are the ones ED's own hook script calls from the hook state; the
+//! next six were sent alone from a hook in a live session and answered
+//! (ADR 0031). The answer to everything else is a constant table: a call
+//! that is not in it is not a game-state read at all, and an agent that
+//! wants one evaluates it under its own name where a crash names it.
 //!
-//! Seven of the table's reads are opt-in: sent only when a caller names
-//! them, by group or by key. None is refused by name any more; the one
-//! refusal is the table itself (ADR 0023).
+//! Every read is sent by every game-state. None is refused by name; the
+//! one refusal is the table itself, and `DCS.getMissionLoaded` is not in
+//! it, because it crashed DCS in a mission (ADR 0031).
 //!
 //! The table is not the proof. Asserting that a list lacks a name is
-//! circular, so the tests below that pin this table to the frozen text
-//! prove exactly that and nothing about what is published; what is
-//! published is proved at the publication seam and on the stand-in's own
-//! ledger of the bytes that reached the disk.
+//! circular, so the tests below that pin this table prove exactly that and
+//! nothing about what is published; what is published is proved at the
+//! publication seam and on the stand-in's own ledger of the bytes that
+//! reached the disk.
 
 use std::fmt;
 use std::time::Duration;
@@ -29,25 +28,8 @@ use crate::protocol::Envelope;
 use crate::readers::Handshake;
 use crate::wait::{Flag, Outcome, PHASE_LOAD};
 
-/// Which tier a read belongs to, and so whether it is sent by default.
-///
-/// Tier 1 is always sent. The other two are off by default.
-///
-/// Tier 2's four are present in the hook state by the census but are
-/// called by ED only from `gui`, so there is no hook-state precedent for
-/// any of them; a caller asks for them with `extra` or one by its key.
-/// The suspect three were in a batch of reads that crashed a hook state,
-/// one of them the named suspect; they are sent only when a caller asks
-/// with `suspect` or by key (ADR 0023).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tier {
-    One,
-    Two,
-    Suspect,
-}
-
 /// One read: the name a caller asks for it under, the Lua expression the
-/// chunk calls, and its tier.
+/// chunk calls, and the state it is evaluated in.
 ///
 /// The fields are private and [`READS`] is the only value of this type
 /// anywhere, so no caller can assemble a read the table does not hold.
@@ -57,7 +39,7 @@ pub enum Tier {
 pub struct Read {
     key: &'static str,
     callee: &'static str,
-    tier: Tier,
+    state: &'static str,
 }
 
 impl Read {
@@ -75,185 +57,79 @@ impl Read {
         self.callee
     }
 
-    /// Which tier it belongs to.
+    /// The state the read is evaluated in.
     #[must_use]
-    pub fn tier(&self) -> Tier {
-        self.tier
+    pub fn state(&self) -> &'static str {
+        self.state
     }
 }
 
 /// Every read this client may send, in the order it sends them.
 ///
-/// The five tier-1 entries come first and in the frozen document's own
-/// order, which is the order ED's hook script makes them in.
-const READS: [Read; 12] = [
+/// The first five come in the frozen document's own order, which is the
+/// order ED's hook script makes them in, and the six measured live follow.
+const READS: [Read; 11] = [
     Read {
         key: "pause",
         callee: "DCS.getPause",
-        tier: Tier::One,
+        state: "hook",
     },
     Read {
         key: "mission_name",
         callee: "DCS.getMissionName",
-        tier: Tier::One,
+        state: "hook",
     },
     Read {
         key: "mission_file",
         callee: "DCS.getMissionFilename",
-        tier: Tier::One,
+        state: "hook",
     },
     Read {
         key: "model_time",
         callee: "DCS.getModelTime",
-        tier: Tier::One,
+        state: "hook",
     },
     Read {
         key: "sim_mode",
         callee: "DCS.getSimulatorMode",
-        tier: Tier::One,
+        state: "hook",
     },
     Read {
         key: "multiplayer",
         callee: "DCS.isMultiplayer",
-        tier: Tier::Two,
+        state: "hook",
     },
     Read {
         key: "server",
         callee: "DCS.isServer",
-        tier: Tier::Two,
+        state: "hook",
     },
     Read {
         key: "track",
         callee: "DCS.isTrackPlaying",
-        tier: Tier::Two,
+        state: "hook",
     },
     Read {
         key: "player_id",
         callee: "net.get_my_player_id",
-        tier: Tier::Two,
-    },
-    Read {
-        key: "mission_loaded",
-        callee: "DCS.getMissionLoaded",
-        tier: Tier::Suspect,
+        state: "hook",
     },
     Read {
         key: "player_unit_type",
         callee: "DCS.getPlayerUnitType",
-        tier: Tier::Suspect,
+        state: "hook",
     },
     Read {
         key: "mission_theatre",
         callee: "DCS.getMissionTheatre",
-        tier: Tier::Suspect,
+        state: "hook",
     },
 ];
 
-// A selection is one bit per table position, so the table cannot outgrow
-// the bits without this refusing to compile.
-const _: () = assert!(READS.len() <= u16::BITS as usize);
-
-/// Which reads a gather may send beyond tier 1, one bit per table entry.
-///
-/// The default is tier 1 alone: the seven opt-in reads are off until a
-/// caller names them. A group word turns on its tier, and a key turns on
-/// exactly one read, which is what lets a live run send each opt-in read
-/// as the only one in its window.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct Tiers {
-    on: u16,
-}
-
-impl Tiers {
-    /// Tier 1 and tier 2's four, which is what the word `extra` asks for.
-    #[must_use]
-    pub fn with_tier_two() -> Self {
-        Self {
-            on: group(Tier::Two),
-        }
-    }
-
-    /// The selection a list of words asks for.
-    ///
-    /// `base` adds nothing, `extra` adds tier 2, `suspect` adds the
-    /// suspect three, and any read's key adds that read alone. A tier-1
-    /// key is accepted and changes nothing, because tier 1 is always
-    /// sent. Anything else is refused naming the word, and the match is
-    /// exact: a caller who misspelt a read is told, rather than sent a
-    /// different selection from the one they meant.
-    ///
-    /// # Errors
-    ///
-    /// [`UnknownRead`] for the first word that is neither a group nor a
-    /// read's key.
-    pub fn from_words<'a, I: IntoIterator<Item = &'a str>>(words: I) -> Result<Self, UnknownRead> {
-        let mut on = 0;
-        for word in words {
-            match word {
-                "base" => {}
-                "extra" => on |= group(Tier::Two),
-                "suspect" => on |= group(Tier::Suspect),
-                key => match READS.iter().position(|r| r.key == key) {
-                    Some(at) => on |= 1 << at,
-                    None => {
-                        return Err(UnknownRead {
-                            word: key.to_owned(),
-                        });
-                    }
-                },
-            }
-        }
-        Ok(Self { on })
-    }
-
-    /// Whether the read under `key` is sent. Tier 1 always is, and a key
-    /// that names no read never is.
-    #[must_use]
-    pub fn sends(self, key: &str) -> bool {
-        match READS.iter().position(|r| r.key == key) {
-            Some(at) => READS[at].tier == Tier::One || self.on & (1 << at) != 0,
-            None => false,
-        }
-    }
-}
-
-/// Every read of one tier, as bits.
-fn group(tier: Tier) -> u16 {
-    READS
-        .iter()
-        .enumerate()
-        .filter(|(_, r)| r.tier == tier)
-        .fold(0, |on, (at, _)| on | 1 << at)
-}
-
-/// A word that names no read and no group. It is quoted when printed, and
-/// never trimmed when matched, so a space that made it wrong shows.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UnknownRead {
-    pub word: String,
-}
-
-impl fmt::Display for UnknownRead {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.word.is_empty() {
-            return f.write_str("an empty word is not a read");
-        }
-        let keys: Vec<&str> = READS.iter().map(|r| r.key).collect();
-        write!(
-            f,
-            "\"{}\" is not a read: say base, extra, suspect or a read's key ({})",
-            self.word,
-            keys.join(", ")
-        )
-    }
-}
-
-impl std::error::Error for UnknownRead {}
-
-/// The reads `t` admits, in table order.
+/// Every read, in table order.
 #[must_use]
-pub fn listed(t: Tiers) -> Vec<&'static Read> {
-    READS.iter().filter(|r| t.sends(r.key)).collect()
+pub fn listed() -> Vec<&'static Read> {
+    READS.iter().collect()
 }
 
 /// The chunk that makes one read, for the call expression `callee`.
@@ -288,17 +164,8 @@ pub fn chunk(callee: &str) -> Vec<u8> {
 }
 
 /// Why a listed read was not published at all.
-///
-/// The reasons are kept apart, and the selection is applied first: an
-/// opt-in read the caller did not name says which group it sits in even
-/// during a load, because it would not have been sent either way, and only
-/// a read the selection admits can be held back by the load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotSent {
-    /// Nobody asked for this tier-2 read.
-    TierTwoOff,
-    /// Nobody asked for this suspect read.
-    SuspectOff,
     /// The session is loading. Nothing answers during a load, so a
     /// request published into one would only wait.
     Loading,
@@ -307,8 +174,6 @@ pub enum NotSent {
 impl fmt::Display for NotSent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::TierTwoOff => write!(f, "tier 2 is off"),
-            Self::SuspectOff => write!(f, "the suspect reads are off"),
             Self::Loading => write!(f, "the session is loading"),
         }
     }
@@ -576,7 +441,7 @@ pub fn probe_of(item: Result<Outcome, PipeError>) -> Probe {
 /// Why a window of reads was not published at all.
 ///
 /// There is one refusal, the table, and it is decided before anything
-/// reaches the disk. Nothing is refused by name (ADR 0023).
+/// reaches the disk. Nothing is refused by name (ADR 0031).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refused {
     /// A request named a callee the constant list does not hold. The rule
@@ -646,18 +511,6 @@ impl Readings {
             .find(|(r, _)| r.key() == key)
             .map(|(_, a)| a)
     }
-
-    /// The reads that were never published, and why each one was not.
-    #[must_use]
-    pub fn skipped(&self) -> Vec<(&'static Read, NotSent)> {
-        self.entries
-            .iter()
-            .filter_map(|(r, a)| match a {
-                Answer::NotSent { why } => Some((*r, *why)),
-                _ => None,
-            })
-            .collect()
-    }
 }
 
 /// The call expression a read chunk hands to `pcall`, where the body is
@@ -678,8 +531,8 @@ fn callee_of(body: &[u8]) -> Option<String> {
 /// nothing, so the check sits on the bytes at the publication seam where a
 /// test can hand it a spec the table could not have produced.
 ///
-/// This is the one refusal. The three reads once refused by name are in
-/// the table now, opt-in like tier 2, and ADR 0023 says why.
+/// This is the one refusal. A read the table dropped, `getMissionLoaded`
+/// among them, is refused as unlisted and never by name (ADR 0031).
 pub(crate) fn vet(specs: &[Spec]) -> Result<(), Refused> {
     for spec in specs {
         let op = spec
@@ -742,38 +595,21 @@ pub(crate) fn publish_reads(
     Ok(Pipeline::over(h, specs, depth, upto).collect())
 }
 
-/// Every listed read this session will answer, in list order.
+/// Every read this session will answer, in list order.
 ///
 /// A load publishes nothing: nothing answers during one, so a request
-/// written into it would only wait. The selection runs first and the load
-/// skip second, so an opt-in read nobody asked for says so even during a
-/// load — it would not have been sent either way.
+/// written into it would only wait.
 ///
 /// The window is as deep as there are reads, because the whole point of
-/// the window here is that the five share one tick rather than costing a
+/// the window here is that the reads share one tick rather than costing a
 /// wake each.
-pub fn gather(
-    h: &Handshake,
-    phase: &str,
-    tiers: Tiers,
-    upto: Duration,
-) -> Result<Readings, Refused> {
-    let reads = listed(tiers);
+pub fn gather(h: &Handshake, phase: &str, upto: Duration) -> Result<Readings, Refused> {
+    let reads = listed();
     let mut entries: Vec<(&'static Read, Answer)> = Vec::with_capacity(READS.len());
-    for r in READS.iter() {
-        if !tiers.sends(r.key()) {
-            entries.push((
-                r,
-                Answer::NotSent {
-                    why: off_reason(r.tier()),
-                },
-            ));
-        }
-    }
     // The word is the wait's own, so the half that decides a load and the
     // half that skips the window cannot come to spell it differently.
     if phase == PHASE_LOAD {
-        for r in &reads {
+        for r in reads {
             entries.push((
                 r,
                 Answer::NotSent {
@@ -781,7 +617,6 @@ pub fn gather(
                 },
             ));
         }
-        entries.sort_by_key(|(r, _)| order_of(r));
         return Ok(Readings {
             entries,
             ping: None,
@@ -791,20 +626,7 @@ pub fn gather(
     // The ping first, then the reads, then the probe: one window, one
     // wake, one quiet period for all three.
     let mut specs: Vec<Spec> = vec![Spec::new(&[("op", "ping"), ("for", h.stamp.as_str())], b"")];
-    specs.extend(reads.iter().map(|r| {
-        // `for` is written here because a window adds nothing on the
-        // way out, the session stamp included.
-        let name = chunkname(r.callee());
-        Spec::new(
-            &[
-                ("op", "eval"),
-                ("for", h.stamp.as_str()),
-                ("state", "hook"),
-                ("chunkname", name.as_str()),
-            ],
-            &chunk(r.callee()),
-        )
-    }));
+    specs.extend(reads.iter().map(|r| spec_of(h, r)));
     specs.push(Spec::new(
         &[
             ("op", "eval"),
@@ -817,7 +639,7 @@ pub fn gather(
     let depth = specs.len().max(1);
     let mut items = publish_reads(h, specs, depth, upto)?.into_iter();
     let ping = Some(items.next().map_or(Err(Unanswered::Unyielded), replied));
-    for r in &reads {
+    for r in reads {
         let answer = items.next().map_or(
             Answer::Unanswered {
                 why: Unanswered::Unyielded,
@@ -827,7 +649,6 @@ pub fn gather(
         entries.push((r, answer));
     }
     let probe = items.next().map(probe_of);
-    entries.sort_by_key(|(r, _)| order_of(r));
     Ok(Readings {
         entries,
         ping,
@@ -835,36 +656,42 @@ pub fn gather(
     })
 }
 
-/// One read, published as the only request in its window: no ping, no
-/// tier-1 read and no probe beside it.
+/// The request that makes `read`, in the state it names.
 ///
-/// This is not what `gather` means by alone, where the opt-in read is the
-/// only one of its kind in a window the five tier-1 reads also ride. A live
-/// run that sends one read per DCS session to learn whether it is safe
-/// wants nothing else on the disk that session could be blamed on, so this
-/// sends the one chunk and nothing more. It is the same chunk under the
-/// same chunkname, and it goes out through the same vetted seam.
+/// `for` is written here because a window adds nothing on the way out,
+/// the session stamp included.
+fn spec_of(h: &Handshake, read: &Read) -> Spec {
+    let name = chunkname(read.callee());
+    Spec::new(
+        &[
+            ("op", "eval"),
+            ("for", h.stamp.as_str()),
+            ("state", read.state()),
+            ("chunkname", name.as_str()),
+        ],
+        &chunk(read.callee()),
+    )
+}
+
+/// One read, published as the only request in its window: no ping, no
+/// other read and no probe beside it.
+///
+/// A live run that sent one read per DCS session to learn whether it was
+/// safe wanted nothing else on the disk that session could be blamed on,
+/// so this sends the one chunk and nothing more. It is the same request
+/// `gather` makes, and it goes out through the same vetted seam.
 ///
 /// # Errors
 ///
-/// [`Refused::Unlisted`] where `key` names no read `tiers` admits. Nothing
-/// is published then.
-pub fn alone(h: &Handshake, key: &str, tiers: Tiers, upto: Duration) -> Result<Answer, Refused> {
-    let Some(read) = listed(tiers).into_iter().find(|r| r.key() == key) else {
+/// [`Refused::Unlisted`] where `key` names no read. Nothing is published
+/// then.
+pub fn alone(h: &Handshake, key: &str, upto: Duration) -> Result<Answer, Refused> {
+    let Some(read) = READS.iter().find(|r| r.key() == key) else {
         return Err(Refused::Unlisted {
             name: key.to_owned(),
         });
     };
-    let name = chunkname(read.callee());
-    let spec = Spec::new(
-        &[
-            ("op", "eval"),
-            ("for", h.stamp.as_str()),
-            ("state", "hook"),
-            ("chunkname", name.as_str()),
-        ],
-        &chunk(read.callee()),
-    );
+    let spec = spec_of(h, read);
     let specs = vec![spec];
     let mut items = publish_reads(h, specs, 1, upto)?.into_iter();
     Ok(items.next().map_or(
@@ -873,26 +700,6 @@ pub fn alone(h: &Handshake, key: &str, tiers: Tiers, upto: Duration) -> Result<A
         },
         answer_of,
     ))
-}
-
-/// Why an unselected read of `tier` was not sent: the group it sits in.
-fn off_reason(tier: Tier) -> NotSent {
-    match tier {
-        Tier::Two => NotSent::TierTwoOff,
-        Tier::Suspect => NotSent::SuspectOff,
-        // Never reached: tier 1 is always sent, so no tier-1 read is ever
-        // asked why it was not. Tier 2's word is the least wrong answer.
-        Tier::One => NotSent::TierTwoOff,
-    }
-}
-
-/// Where a read sits in the table, so the entries come back in list order
-/// whichever branch put each one there.
-fn order_of(read: &Read) -> usize {
-    READS
-        .iter()
-        .position(|r| r.key() == read.key())
-        .unwrap_or(usize::MAX)
 }
 
 #[cfg(test)]
@@ -905,12 +712,9 @@ mod game_reads {
     use std::path::Path;
     use std::time::{Instant, SystemTime};
 
-    /// The five tier-1 callees, spelt as the frozen text spells them.
-    fn tier_one() -> Vec<&'static str> {
-        listed(Tiers::default())
-            .iter()
-            .map(|r| r.callee())
-            .collect()
+    /// Every callee, in table order.
+    fn callees() -> Vec<&'static str> {
+        listed().iter().map(|r| r.callee()).collect()
     }
 
     /// The chunk as a string, which is how every assertion about it reads
@@ -939,14 +743,9 @@ mod game_reads {
         );
     }
 
-    /// Every read the table holds, the seven opt-in ones included.
-    fn everything() -> Tiers {
-        Tiers::from_words(["extra", "suspect"]).expect("both groups are words")
-    }
-
     #[test]
     fn every_listed_read_has_exactly_one_pcall() {
-        for r in listed(everything()) {
+        for r in listed() {
             assert_eq!(
                 text(r.callee()).matches("pcall(").count(),
                 1,
@@ -958,9 +757,9 @@ mod game_reads {
 
     #[test]
     fn a_chunk_names_its_own_callee_and_no_other_dcs_name() {
-        for r in listed(everything()) {
+        for r in listed() {
             let body = text(r.callee());
-            for other in listed(everything()) {
+            for other in listed() {
                 if other.callee() == r.callee() {
                     continue;
                 }
@@ -1081,7 +880,7 @@ mod game_reads {
         let raised = ok(b"error\tattempt to call a nil value");
         let unanswered = answer_of(Err(PipeError::Exhausted));
         let not_sent = Answer::NotSent {
-            why: NotSent::TierTwoOff,
+            why: NotSent::Loading,
         };
         assert!(matches!(raised, Answer::Raised { .. }), "{raised:?}");
         assert!(
@@ -1454,19 +1253,13 @@ mod game_reads {
 
     /// One gather against a stand-in that answers the whole window in one
     /// tick, and how many ticks it took.
-    fn gathered(
-        s: &mut Standin,
-        h: &Handshake,
-        phase: &str,
-        tiers: Tiers,
-        want: usize,
-    ) -> Readings {
+    fn gathered(s: &mut Standin, h: &Handshake, phase: &str, want: usize) -> Readings {
         std::thread::scope(|scope| {
             let ticker = scope.spawn(|| {
                 until(s.req(), ".req", want, UPTO);
                 s.tick();
             });
-            let readings = gather(h, phase, tiers, UPTO);
+            let readings = gather(h, phase, UPTO);
             ticker.join().expect("the ticker finishes");
             readings
         })
@@ -1477,8 +1270,8 @@ mod game_reads {
     fn each_read_is_its_own_request() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 7);
-        for callee in tier_one() {
+        gathered(&mut s, &h, "menu", 13);
+        for callee in callees() {
             assert_eq!(
                 carrying(&s, &chunkname(callee)),
                 1,
@@ -1486,30 +1279,30 @@ mod game_reads {
             );
         }
         // The window's size is this test's subject, so it counts a total:
-        // five reads, the ping and the probe.
+        // eleven reads, the ping and the probe.
         assert_eq!(
             carrying(&s, "=dcs-eval read "),
-            5,
-            "the ledger holds {} eval requests naming a read and should hold 5, one per read",
+            11,
+            "the ledger holds {} eval requests naming a read and should hold 11, one per read",
             carrying(&s, "=dcs-eval read ")
         );
         assert_eq!(
             s.seen().len(),
-            7,
-            "the ledger holds {} requests and should hold 7: five reads, a ping and a probe",
+            13,
+            "the ledger holds {} requests and should hold 13: eleven reads, a ping and a probe",
             s.seen().len()
         );
     }
 
     #[test]
-    fn the_five_reads_share_one_tick() {
-        // The window's whole purpose here: five reads, one wake. The
-        // ticker waits for all five to be on the disk before it answers
+    fn the_reads_share_one_tick() {
+        // The window's whole purpose here: eleven reads, one wake. The
+        // ticker waits for all of them to be on the disk before it answers
         // anything, so a client that published them one at a time would
         // never let it past the wait.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        gathered(&mut s, &h, "menu", 13);
         assert_eq!(s.tick, 1, "the session answered over {} ticks", s.tick);
     }
 
@@ -1517,9 +1310,9 @@ mod game_reads {
     fn every_read_is_sent_to_the_hook_state() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 7);
-        assert_eq!(carrying(&s, "state: hook"), 5);
-        assert_eq!(carrying(&s, "=dcs-eval read "), 5);
+        gathered(&mut s, &h, "menu", 13);
+        assert_eq!(carrying(&s, "state: hook"), 11);
+        assert_eq!(carrying(&s, "=dcs-eval read "), 11);
         // The probe is the one eval that goes elsewhere, and the ping
         // names no state at all.
         assert_eq!(carrying(&s, "state: gui"), 1);
@@ -1529,7 +1322,7 @@ mod game_reads {
     fn every_published_body_holds_exactly_one_pcall() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        gathered(&mut s, &h, "menu", 13);
         let mut reads = 0;
         for (n, seen) in s.seen().iter().enumerate() {
             let text = String::from_utf8_lossy(&seen.bytes);
@@ -1545,14 +1338,14 @@ mod game_reads {
                 n + 1
             );
         }
-        assert_eq!(reads, 5, "the control: {reads} read bodies were looked at");
+        assert_eq!(reads, 11, "the control: {reads} read bodies were looked at");
     }
 
     #[test]
     fn the_readings_come_back_in_the_list_order() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let readings = gathered(&mut s, &h, "menu", 13);
         let keys: Vec<&str> = readings.entries().iter().map(|(r, _)| r.key()).collect();
         assert_eq!(
             keys,
@@ -1566,7 +1359,6 @@ mod game_reads {
                 "server",
                 "track",
                 "player_id",
-                "mission_loaded",
                 "player_unit_type",
                 "mission_theatre"
             ]
@@ -1577,7 +1369,7 @@ mod game_reads {
     fn a_loading_phase_publishes_nothing_at_all() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
+        let readings = gather(&h, PHASE_LOAD, UPTO).expect("not refused");
         assert_eq!(
             published(s.req()),
             0,
@@ -1586,7 +1378,7 @@ mod game_reads {
         );
         s.tick();
         assert_eq!(s.seen().len(), 0, "the ledger holds a request");
-        for r in listed(Tiers::default()) {
+        for r in listed() {
             assert_eq!(
                 readings.of(r.key()),
                 Some(&Answer::NotSent {
@@ -1603,7 +1395,7 @@ mod game_reads {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
         s.script("DCS.getPause", "ok", "string", b"boolean\ttrue");
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let readings = gathered(&mut s, &h, "menu", 13);
         assert_eq!(
             readings.of("pause"),
             Some(&Answer::Value {
@@ -1621,64 +1413,39 @@ mod game_reads {
         );
     }
 
+    /// The read that crashed DCS in a mission is not in the table, so no
+    /// gather sends it. The control is in the same test: every listed
+    /// callee is carried once, so a gather that published nothing fails
+    /// here first and the absence cannot be true vacuously.
     #[test]
-    fn tier_two_is_not_published_while_the_switch_is_off() {
-        // The absence and the control are one assertion: a gather that
-        // published nothing would fail the five before it could pass the
-        // four, so the absence cannot be true vacuously.
+    fn the_read_that_crashed_dcs_is_never_published() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 7);
-        for callee in tier_one() {
+        gathered(&mut s, &h, "menu", 13);
+        for callee in callees() {
             assert_eq!(
-                carrying(&s, callee),
+                carrying(&s, &chunkname(callee)),
                 1,
                 "the control: no request names {callee}"
             );
         }
         for (n, seen) in s.seen().iter().enumerate() {
             let text = String::from_utf8_lossy(&seen.bytes);
-            for off in [
-                "isMultiplayer",
-                "isServer",
-                "isTrackPlaying",
-                "get_my_player_id",
-            ] {
-                assert!(
-                    !text.contains(off),
-                    "request {} carries {off} and tier 2 is off",
-                    n + 1
-                );
-            }
+            assert!(
+                !text.contains("getMissionLoaded"),
+                "request {} carries getMissionLoaded\n{text}",
+                n + 1
+            );
         }
     }
 
     #[test]
-    fn a_tier_two_read_with_the_switch_off_is_not_sent_rather_than_unanswered() {
+    fn every_read_has_exactly_one_answer() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
-        for key in ["multiplayer", "server", "track", "player_id"] {
-            assert_eq!(
-                readings.of(key),
-                Some(&Answer::NotSent {
-                    why: NotSent::TierTwoOff
-                }),
-                "{key}"
-            );
-        }
-        assert_eq!(readings.skipped().len(), 7);
-        // One entry per read and no more. Without this the check is a
-        // ceiling alone: a gather that both marked a tier-2 read not sent
-        // *and* published it would leave two entries under one key, and
-        // the lookup above would find the first and pass.
-        assert_eq!(
-            readings.entries().len(),
-            12,
-            "the readings hold {} entries and there are twelve reads",
-            readings.entries().len()
-        );
-        for r in listed(everything()) {
+        let readings = gathered(&mut s, &h, "menu", 13);
+        assert_eq!(readings.entries().len(), 11);
+        for r in listed() {
             assert_eq!(
                 readings
                     .entries()
@@ -1686,61 +1453,10 @@ mod game_reads {
                     .filter(|(e, _)| e.key() == r.key())
                     .count(),
                 1,
-                "{} has more than one answer",
+                "{} has other than one answer",
                 r.key()
             );
         }
-    }
-
-    #[test]
-    fn a_tier_two_read_is_not_sent_during_a_load_either_and_says_the_switch_not_the_load() {
-        // The tier filter runs first: a read the switch would not have
-        // sent is not held back by the load, because it would not have
-        // gone either way.
-        let b = Sandbox::new();
-        let (_s, h) = ticking(&b);
-        let readings = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
-        assert_eq!(
-            readings.of("multiplayer"),
-            Some(&Answer::NotSent {
-                why: NotSent::TierTwoOff
-            })
-        );
-        assert_eq!(
-            readings.of("pause"),
-            Some(&Answer::NotSent {
-                why: NotSent::Loading
-            })
-        );
-    }
-
-    #[test]
-    fn the_switch_exists_and_sends_nine_when_it_is_asked_for() {
-        let b = Sandbox::new();
-        let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::with_tier_two(), 11);
-        for r in listed(Tiers::with_tier_two()) {
-            assert_eq!(
-                carrying(&s, &chunkname(r.callee())),
-                1,
-                "no request names {}",
-                r.callee()
-            );
-        }
-        assert_eq!(
-            s.seen().len(),
-            11,
-            "nine reads, the ping and the probe: {} requests",
-            s.seen().len()
-        );
-    }
-
-    #[test]
-    fn the_default_tiers_value_is_tier_one_alone() {
-        assert!(Tiers::default().sends("pause"));
-        assert!(!Tiers::default().sends("multiplayer"));
-        assert!(!Tiers::default().sends("mission_loaded"));
-        assert!(Tiers::with_tier_two().sends("multiplayer"));
     }
 
     /// A read spec as `gather` builds one, for any callee at all — which
@@ -1777,215 +1493,29 @@ mod game_reads {
         assert_eq!(s.seen().len(), 0, "the ledger holds a request");
     }
 
-    /// The seven reads a caller has to ask for, read off the table rather
-    /// than spelt here, so a read added to either opt-in tier is covered
-    /// without this list being remembered.
-    fn opt_in() -> Vec<&'static Read> {
-        READS.iter().filter(|r| r.tier() != Tier::One).collect()
-    }
-
     #[test]
-    fn opt_in_reads_are_none_of_them_published_by_a_default_gather() {
-        // What actually reached the disk, headers included. The positive
-        // control is in the same test and counted by predicate, so a
-        // gather that published nothing fails here first.
+    fn the_dropped_read_is_refused_as_unlisted() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 7);
-        for callee in tier_one() {
-            assert_eq!(
-                carrying(&s, &chunkname(callee)),
-                1,
-                "the control: no request names {callee}"
-            );
-        }
-        assert_eq!(opt_in().len(), 7, "the table holds seven opt-in reads");
-        for (n, seen) in s.seen().iter().enumerate() {
-            let text = String::from_utf8_lossy(&seen.bytes);
-            for r in opt_in() {
-                assert!(
-                    !text.contains(r.callee()),
-                    "request {} carries {}, which nobody asked for\n{text}",
-                    n + 1,
-                    r.callee()
-                );
+        let got = publish_reads(&h, vec![spec_for(&h, "DCS.getMissionLoaded")], 1, UPTO);
+        assert_eq!(
+            got.expect_err("wanted Refused, got Ok(..)"),
+            Refused::Unlisted {
+                name: "DCS.getMissionLoaded".to_owned()
             }
-        }
-    }
-
-    #[test]
-    fn opt_in_a_single_key_publishes_that_read_and_no_other() {
-        for r in opt_in() {
-            let b = Sandbox::new();
-            let (mut s, h) = ticking(&b);
-            let tiers = Tiers::from_words([r.key()]).expect("a key is a word");
-            gathered(&mut s, &h, "menu", tiers, 8);
-            assert_eq!(
-                s.seen().len(),
-                8,
-                "{}: five reads, the one asked for, a ping and a probe, and the ledger holds {}",
-                r.key(),
-                s.seen().len()
-            );
-            assert_eq!(
-                carrying(&s, &chunkname(r.callee())),
-                1,
-                "{} was asked for and not sent exactly once",
-                r.key()
-            );
-            for other in opt_in() {
-                if other.key() == r.key() {
-                    continue;
-                }
-                assert_eq!(
-                    carrying(&s, &chunkname(other.callee())),
-                    0,
-                    "asking for {} also sent {}",
-                    r.key(),
-                    other.key()
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn opt_in_the_groups_are_the_four_and_the_three() {
-        let callees = |t: Tiers| -> Vec<&str> {
-            listed(t)
-                .iter()
-                .filter(|r| r.tier() != Tier::One)
-                .map(|r| r.callee())
-                .collect()
-        };
-        assert_eq!(
-            callees(Tiers::from_words(["extra"]).expect("a group")),
-            vec![
-                "DCS.isMultiplayer",
-                "DCS.isServer",
-                "DCS.isTrackPlaying",
-                "net.get_my_player_id",
-            ]
         );
-        assert_eq!(
-            callees(Tiers::from_words(["suspect"]).expect("a group")),
-            vec![
-                "DCS.getMissionLoaded",
-                "DCS.getPlayerUnitType",
-                "DCS.getMissionTheatre",
-            ]
-        );
-        assert_eq!(listed(everything()).len(), 12);
-        assert_eq!(
-            Tiers::from_words(["base"]).expect("a word"),
-            Tiers::default()
-        );
-        assert_eq!(
-            Tiers::from_words(std::iter::empty()).expect("no words"),
-            Tiers::default()
-        );
-        assert_eq!(
-            Tiers::with_tier_two(),
-            Tiers::from_words(["extra"]).expect("a group")
-        );
-        // A tier-1 key is accepted and changes nothing that is sent.
-        assert_eq!(
-            listed(Tiers::from_words(["pause"]).expect("a key")),
-            listed(Tiers::default())
-        );
-    }
-
-    #[test]
-    fn opt_in_a_word_that_names_no_read_and_no_group_is_refused_naming_it() {
-        let why = Tiers::from_words(["getMissionLoaded"]).expect_err("a callee is not a key");
-        let said = why.to_string();
-        assert!(
-            said.contains("getMissionLoaded"),
-            "it names the word: {said}"
-        );
-        assert!(said.contains("mission_loaded"), "it names the keys: {said}");
-        assert!(Tiers::from_words(["EXTRA"]).is_err(), "the match is exact");
-        let empty = Tiers::from_words([""]).expect_err("an empty word");
-        assert_eq!(empty.to_string(), "an empty word is not a read");
-        // Quoted, because a stray space is what makes `extra, suspect`
-        // fail and it is invisible unquoted.
-        let spaced = Tiers::from_words([" suspect"]).expect_err("a space is not trimmed");
-        assert!(
-            spaced
-                .to_string()
-                .starts_with("\" suspect\" is not a read: "),
-            "{spaced}"
-        );
-    }
-
-    #[test]
-    fn opt_in_the_three_once_refused_by_name_now_pass_the_vet() {
-        let b = Sandbox::new();
-        let (mut s, h) = ticking(&b);
-        // No wait: nothing ticks until the call has returned, and what is
-        // asserted is what reached the disk, not what came back.
-        let got = publish_reads(
-            &h,
-            vec![spec_for(&h, "DCS.getMissionLoaded")],
-            1,
-            Duration::ZERO,
-        );
-        assert!(got.is_ok(), "the vet refused a listed read: {got:?}");
         s.tick();
-        assert_eq!(
-            carrying(&s, &chunkname("DCS.getMissionLoaded")),
-            1,
-            "the read reached the disk"
-        );
-    }
-
-    #[test]
-    fn opt_in_an_unasked_suspect_read_is_not_sent_and_says_its_group() {
-        let b = Sandbox::new();
-        let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
-        assert_eq!(
-            readings.of("mission_loaded"),
-            Some(&Answer::NotSent {
-                why: NotSent::SuspectOff
-            })
-        );
-        assert_eq!(
-            readings.of("multiplayer"),
-            Some(&Answer::NotSent {
-                why: NotSent::TierTwoOff
-            })
-        );
-        let loading = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
-        assert_eq!(
-            loading.of("mission_theatre"),
-            Some(&Answer::NotSent {
-                why: NotSent::SuspectOff
-            }),
-            "the selection runs before the load skip"
-        );
-    }
-
-    #[test]
-    fn opt_in_everything_sends_twelve_reads() {
-        let b = Sandbox::new();
-        let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", everything(), 14);
-        assert_eq!(
-            s.seen().len(),
-            14,
-            "twelve reads, the ping and the probe: {} requests",
-            s.seen().len()
-        );
+        assert_eq!(s.seen().len(), 0, "the ledger holds a request");
     }
 
     #[test]
     fn the_ping_and_the_probe_share_the_reads_tick() {
         // A window is one wake whatever is in it, so the ping and the
         // probe cost nothing beyond the reads. The ticker waits for all
-        // seven before it answers anything.
+        // thirteen before it answers anything.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let readings = gathered(&mut s, &h, "menu", 13);
         assert_eq!(s.tick, 1, "the session answered over {} ticks", s.tick);
         let ping = readings
             .ping()
@@ -2004,7 +1534,7 @@ mod game_reads {
         let b = Sandbox::new();
         let (mut s, mut h) = ticking(&b);
         h.stamp.push_str("-not-this-session");
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let readings = gathered(&mut s, &h, "menu", 13);
         let Some(Err(why)) = readings.ping() else {
             panic!("wanted a ping that says why, got {:?}", readings.ping());
         };
@@ -2014,7 +1544,7 @@ mod game_reads {
         );
         // The other half of the distinction, from the branch that sends
         // no ping at all.
-        let loaded = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
+        let loaded = gather(&h, PHASE_LOAD, UPTO).expect("not refused");
         assert!(loaded.ping().is_none(), "a load asks nothing");
     }
 
@@ -2027,7 +1557,7 @@ mod game_reads {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
         s.script("return 'ok'", "ok", "string", b"ok");
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let readings = gathered(&mut s, &h, "menu", 13);
         assert_eq!(readings.probe(), Some(&Probe::Reachable));
     }
 
@@ -2039,7 +1569,7 @@ mod game_reads {
         // apart by it and by nothing else.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        let readings = gathered(&mut s, &h, "menu", 13);
         let Some(Probe::Unanswered {
             why: Unanswered::NotOk { status, .. },
         }) = readings.probe()
@@ -2095,9 +1625,9 @@ mod game_reads {
     fn the_probe_is_the_one_request_that_does_not_go_to_hook() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        gathered(&mut s, &h, "menu", 13);
         assert_eq!(carrying(&s, "state: gui"), 1);
-        assert_eq!(carrying(&s, "state: hook"), 5);
+        assert_eq!(carrying(&s, "state: hook"), 11);
         assert_eq!(carrying(&s, "op: ping"), 1);
     }
 
@@ -2108,7 +1638,7 @@ mod game_reads {
         // about the game.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        gathered(&mut s, &h, "menu", 13);
         let probe = s
             .seen()
             .iter()
@@ -2124,7 +1654,7 @@ mod game_reads {
     fn a_loading_phase_sends_no_ping_and_no_probe_either() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let readings = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
+        let readings = gather(&h, PHASE_LOAD, UPTO).expect("not refused");
         assert_eq!(
             published(s.req()),
             0,
@@ -2138,56 +1668,30 @@ mod game_reads {
     }
 
     #[test]
-    fn the_tier_one_list_is_the_five_ed_calls_from_a_hook() {
+    fn the_list_is_the_five_ed_calls_from_a_hook_then_the_six_measured_live() {
         assert_eq!(
-            tier_one(),
+            callees(),
             vec![
                 "DCS.getPause",
                 "DCS.getMissionName",
                 "DCS.getMissionFilename",
                 "DCS.getModelTime",
                 "DCS.getSimulatorMode",
-            ]
-        );
-        let keys: Vec<&str> = listed(Tiers::default()).iter().map(|r| r.key()).collect();
-        assert_eq!(
-            keys,
-            vec![
-                "pause",
-                "mission_name",
-                "mission_file",
-                "model_time",
-                "sim_mode"
-            ]
-        );
-    }
-
-    #[test]
-    fn tier_two_is_the_four_and_is_off_unless_asked_for() {
-        assert_eq!(listed(Tiers::default()).len(), 5);
-        let all = listed(Tiers::with_tier_two());
-        assert_eq!(all.len(), 9);
-        let extra: Vec<&str> = all
-            .iter()
-            .filter(|r| r.tier() == Tier::Two)
-            .map(|r| r.callee())
-            .collect();
-        assert_eq!(
-            extra,
-            vec![
                 "DCS.isMultiplayer",
                 "DCS.isServer",
                 "DCS.isTrackPlaying",
                 "net.get_my_player_id",
+                "DCS.getPlayerUnitType",
+                "DCS.getMissionTheatre",
             ]
         );
     }
 
     #[test]
-    fn the_one_tier_two_callee_that_is_not_a_dcs_name_is_the_net_one() {
+    fn the_one_callee_that_is_not_a_dcs_name_is_the_net_one() {
         // The chunk builder must never prepend `DCS.`, and this is the
         // entry that says why.
-        let odd: Vec<&str> = listed(Tiers::with_tier_two())
+        let odd: Vec<&str> = listed()
             .iter()
             .map(|r| r.callee())
             .filter(|c| !c.starts_with("DCS."))
@@ -2216,13 +1720,12 @@ mod game_reads {
     /// One read sent alone against a stand-in that answers it on the tick
     /// after it reaches the disk.
     fn sent_alone(s: &mut Standin, h: &Handshake, key: &str) -> Answer {
-        let tiers = Tiers::from_words([key]).expect("a key is a word");
         std::thread::scope(|scope| {
             let ticker = scope.spawn(|| {
                 until(s.req(), ".req", 1, UPTO);
                 s.tick();
             });
-            let answer = alone(h, key, tiers, UPTO);
+            let answer = alone(h, key, UPTO);
             ticker.join().expect("the ticker finishes");
             answer
         })
@@ -2233,14 +1736,14 @@ mod game_reads {
     fn alone_publishes_the_one_read_and_nothing_beside_it() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        sent_alone(&mut s, &h, "mission_loaded");
+        sent_alone(&mut s, &h, "mission_theatre");
         assert_eq!(
             s.seen().len(),
             1,
             "one read alone, and the ledger holds {} requests",
             s.seen().len()
         );
-        assert_eq!(carrying(&s, &chunkname("DCS.getMissionLoaded")), 1);
+        assert_eq!(carrying(&s, &chunkname("DCS.getMissionTheatre")), 1);
         assert_eq!(carrying(&s, "op: ping"), 0, "a ping rode beside the read");
     }
 
@@ -2259,14 +1762,14 @@ mod game_reads {
     }
 
     #[test]
-    fn alone_refuses_a_key_the_switch_does_not_list() {
+    fn alone_refuses_a_key_the_table_does_not_hold() {
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        let got = alone(&h, "server", Tiers::default(), UPTO);
+        let got = alone(&h, "mission_loaded", UPTO);
         assert_eq!(
             got,
             Err(Refused::Unlisted {
-                name: "server".to_owned(),
+                name: "mission_loaded".to_owned(),
             })
         );
         s.tick();
