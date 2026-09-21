@@ -10,3 +10,6 @@
 
 // The append-only record of what each phase measured.
 pub mod ledger;
+
+// Every row the instrument knows of, printed measured or not.
+pub mod report;
