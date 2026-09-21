@@ -179,7 +179,7 @@ impl fmt::Display for Fact {
 /// answer. The axis values stay in an enum each. Decision record 0018.
 ///
 /// The arms are kept apart on purpose and none of them subsumes another.
-/// "The read raised", "the read was never sent because tier 2 is off",
+/// "The read raised", "the read was never sent because nobody asked for it",
 /// "there is no heartbeat", "the heartbeat would not parse" and "the
 /// heartbeat is another session's" are five different findings, and an
 /// agent reading one has to be able to tell which it has — two of them
@@ -190,7 +190,7 @@ pub enum Why {
     /// printed alone: nothing else joins it, because an errored read
     /// decides its axis and no other fact gets a say.
     Errored { message: String },
-    /// The read was never published, and this is which of the two
+    /// The read was never published, and this is which of the three
     /// reasons.
     NotSent { why: crate::reads::NotSent },
     /// No `ok` reply came back for it.
@@ -265,6 +265,7 @@ impl fmt::Display for Why {
                 // prose, because this exact line is what tells an agent
                 // the answer is purchasable and how.
                 crate::reads::NotSent::TierTwoOff => f.write_str("unknown (tier 2 off)"),
+                crate::reads::NotSent::SuspectOff => f.write_str("unknown (suspect reads off)"),
                 crate::reads::NotSent::Loading => f.write_str("unknown (the session is loading)"),
             },
             Self::Unanswered { why } => write!(f, "unknown: no answer came back, {why}"),
@@ -897,6 +898,10 @@ pub fn session_of(
 
 /// What the tier-2 reads say, where the `gui` state answered the probe.
 ///
+/// Without `multiplayer` asked for, reachability is all there is, and
+/// the answer is single player or host. With it asked for and `server`
+/// not, a `true` there is unknown naming the read nobody asked for.
+///
 /// `isMultiplayer` true with `isServer` false is a combination the
 /// vocabulary maps to nothing, so it is unknown naming both reads.
 /// Agreeing with the probe there would be a guess wearing a
@@ -907,7 +912,7 @@ fn reachable_session(
     multiplayer: Option<&crate::reads::Answer>,
     server: Option<&crate::reads::Answer>,
 ) -> SessionAxis {
-    if !tiers.tier_two() {
+    if !tiers.sends("multiplayer") {
         return SessionAxis::SingleOrHost;
     }
     let multi = match bool_of(multiplayer) {
@@ -1306,8 +1311,17 @@ impl Evidence {
 /// be inventing one. `mission_file`, `model_time` and `player_id` are
 /// gathered on the same window and no row of the vocabulary reads them. A
 /// reader that wants them should not have to go back to the wire for them,
-/// so they are carried as inert data.
-const UNMAPPED_READS: [&str; 4] = ["sim_mode", "mission_file", "model_time", "player_id"];
+/// so they are carried as inert data. The three suspect reads map to no
+/// axis either, and are carried the same way.
+const UNMAPPED_READS: [&str; 7] = [
+    "sim_mode",
+    "mission_file",
+    "model_time",
+    "player_id",
+    "mission_loaded",
+    "player_unit_type",
+    "mission_theatre",
+];
 
 /// What the game is doing, on every axis at once.
 #[derive(Debug, Clone, PartialEq, Eq)]

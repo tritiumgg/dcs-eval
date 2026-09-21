@@ -11,6 +11,10 @@
 //! game-state read at all, and an agent that wants one evaluates it under
 //! its own name where a crash names it.
 //!
+//! Seven of the table's reads are opt-in: sent only when a caller names
+//! them, by group or by key. None is refused by name any more; the one
+//! refusal is the table itself (ADR 0023).
+//!
 //! The table is not the proof. Asserting that a list lacks a name is
 //! circular, so the tests below that pin this table to the frozen text
 //! prove exactly that and nothing about what is published; what is
@@ -27,15 +31,19 @@ use crate::wait::{Flag, Outcome, PHASE_LOAD};
 
 /// Which tier a read belongs to, and so whether it is sent by default.
 ///
-/// Tier 2 is built and off. The four in it are present in the hook state
-/// by the census but are called by ED only from `gui`, so there is no
-/// hook-state precedent for any of them; they are enabled one at a time,
-/// each measured alone under the probe supervisor on a live run, and
-/// nothing in this crate or the binary flips the switch.
+/// Tier 1 is always sent. The other two are off by default.
+///
+/// Tier 2's four are present in the hook state by the census but are
+/// called by ED only from `gui`, so there is no hook-state precedent for
+/// any of them; a caller asks for them with `extra` or one by its key.
+/// The suspect three were in a batch of reads that crashed a hook state,
+/// one of them the named suspect; they are sent only when a caller asks
+/// with `suspect` or by key (ADR 0023).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tier {
     One,
     Two,
+    Suspect,
 }
 
 /// One read: the name a caller asks for it under, the Lua expression the
@@ -60,8 +68,8 @@ impl Read {
     }
 
     /// The Lua expression the chunk hands to `pcall`. It is a whole
-    /// expression and not a bare function name, because one of the nine
-    /// is not under `DCS` at all.
+    /// expression and not a bare function name, because one of them is
+    /// not under `DCS` at all.
     #[must_use]
     pub fn callee(&self) -> &'static str {
         self.callee
@@ -78,7 +86,7 @@ impl Read {
 ///
 /// The five tier-1 entries come first and in the frozen document's own
 /// order, which is the order ED's hook script makes them in.
-const READS: [Read; 9] = [
+const READS: [Read; 12] = [
     Read {
         key: "pause",
         callee: "DCS.getPause",
@@ -124,54 +132,128 @@ const READS: [Read; 9] = [
         callee: "net.get_my_player_id",
         tier: Tier::Two,
     },
+    Read {
+        key: "mission_loaded",
+        callee: "DCS.getMissionLoaded",
+        tier: Tier::Suspect,
+    },
+    Read {
+        key: "player_unit_type",
+        callee: "DCS.getPlayerUnitType",
+        tier: Tier::Suspect,
+    },
+    Read {
+        key: "mission_theatre",
+        callee: "DCS.getMissionTheatre",
+        tier: Tier::Suspect,
+    },
 ];
 
-/// The three names this client never sends, whatever else happens.
-///
-/// One is a named suspect in a hook-state crash and the other two were in
-/// the batch that crashed. They are stored bare, without the `DCS.`
-/// prefix, for two reasons: the frozen text gives two of the three that
-/// way, and a bare name matches every spelling a caller could reach the
-/// call under.
-///
-/// This is a second gate and deliberately redundant with the table: it is
-/// not known whether the batching was the hazard or the particular reads
-/// were, so the rule is a constant list of what may be sent, and these
-/// three are named again so that promoting one into the table is still
-/// refused.
-pub const NEVER: [&str; 3] = ["getMissionLoaded", "getPlayerUnitType", "getMissionTheatre"];
+// A selection is one bit per table position, so the table cannot outgrow
+// the bits without this refusing to compile.
+const _: () = assert!(READS.len() <= u16::BITS as usize);
 
-/// Which tiers a gather may send. The default is tier 1 alone and
-/// [`Tiers::with_tier_two`] is the only route to the other; nothing
-/// outside a test calls it, and no command-line flag reaches it yet.
+/// Which reads a gather may send beyond tier 1, one bit per table entry.
+///
+/// The default is tier 1 alone: the seven opt-in reads are off until a
+/// caller names them. A group word turns on its tier, and a key turns on
+/// exactly one read, which is what lets a live run send each opt-in read
+/// as the only one in its window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Tiers {
-    tier_two: bool,
+    on: u16,
 }
 
 impl Tiers {
-    /// Tier 1 and tier 2 both. It exists so the switch is built and
-    /// testable; turning it on for real waits on a live run that has
-    /// measured each tier-2 read alone.
+    /// Tier 1 and tier 2's four, which is what the word `extra` asks for.
     #[must_use]
     pub fn with_tier_two() -> Self {
-        Self { tier_two: true }
+        Self {
+            on: group(Tier::Two),
+        }
     }
 
-    /// Whether tier 2 is on.
+    /// The selection a list of words asks for.
+    ///
+    /// `base` adds nothing, `extra` adds tier 2, `suspect` adds the
+    /// suspect three, and any read's key adds that read alone. A tier-1
+    /// key is accepted and changes nothing, because tier 1 is always
+    /// sent. Anything else is refused naming the word, and the match is
+    /// exact: a caller who misspelt a read is told, rather than sent a
+    /// different selection from the one they meant.
+    ///
+    /// # Errors
+    ///
+    /// [`UnknownRead`] for the first word that is neither a group nor a
+    /// read's key.
+    pub fn from_words<'a, I: IntoIterator<Item = &'a str>>(words: I) -> Result<Self, UnknownRead> {
+        let mut on = 0;
+        for word in words {
+            match word {
+                "base" => {}
+                "extra" => on |= group(Tier::Two),
+                "suspect" => on |= group(Tier::Suspect),
+                key => match READS.iter().position(|r| r.key == key) {
+                    Some(at) => on |= 1 << at,
+                    None => {
+                        return Err(UnknownRead {
+                            word: key.to_owned(),
+                        });
+                    }
+                },
+            }
+        }
+        Ok(Self { on })
+    }
+
+    /// Whether the read under `key` is sent. Tier 1 always is, and a key
+    /// that names no read never is.
     #[must_use]
-    pub fn tier_two(self) -> bool {
-        self.tier_two
+    pub fn sends(self, key: &str) -> bool {
+        match READS.iter().position(|r| r.key == key) {
+            Some(at) => READS[at].tier == Tier::One || self.on & (1 << at) != 0,
+            None => false,
+        }
     }
 }
+
+/// Every read of one tier, as bits.
+fn group(tier: Tier) -> u16 {
+    READS
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.tier == tier)
+        .fold(0, |on, (at, _)| on | 1 << at)
+}
+
+/// A word that names no read and no group. It is quoted when printed, and
+/// never trimmed when matched, so a space that made it wrong shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnknownRead {
+    pub word: String,
+}
+
+impl fmt::Display for UnknownRead {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.word.is_empty() {
+            return f.write_str("an empty word is not a read");
+        }
+        let keys: Vec<&str> = READS.iter().map(|r| r.key).collect();
+        write!(
+            f,
+            "\"{}\" is not a read: say base, extra, suspect or a read's key ({})",
+            self.word,
+            keys.join(", ")
+        )
+    }
+}
+
+impl std::error::Error for UnknownRead {}
 
 /// The reads `t` admits, in table order.
 #[must_use]
 pub fn listed(t: Tiers) -> Vec<&'static Read> {
-    READS
-        .iter()
-        .filter(|r| r.tier == Tier::One || t.tier_two)
-        .collect()
+    READS.iter().filter(|r| t.sends(r.key)).collect()
 }
 
 /// The chunk that makes one read, for the call expression `callee`.
@@ -207,14 +289,16 @@ pub fn chunk(callee: &str) -> Vec<u8> {
 
 /// Why a listed read was not published at all.
 ///
-/// The two are kept apart, and the tier filter is applied first: a tier-2
-/// read while the switch is off says so even during a load, because it
-/// would not have been sent either way, and only a read the switch admits
-/// can be held back by the load.
+/// The reasons are kept apart, and the selection is applied first: an
+/// opt-in read the caller did not name says which group it sits in even
+/// during a load, because it would not have been sent either way, and only
+/// a read the selection admits can be held back by the load.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotSent {
-    /// Tier 2 is off, and this read is in it.
+    /// Nobody asked for this tier-2 read.
     TierTwoOff,
+    /// Nobody asked for this suspect read.
+    SuspectOff,
     /// The session is loading. Nothing answers during a load, so a
     /// request published into one would only wait.
     Loading,
@@ -224,6 +308,7 @@ impl fmt::Display for NotSent {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::TierTwoOff => write!(f, "tier 2 is off"),
+            Self::SuspectOff => write!(f, "the suspect reads are off"),
             Self::Loading => write!(f, "the session is loading"),
         }
     }
@@ -490,15 +575,10 @@ pub fn probe_of(item: Result<Outcome, PipeError>) -> Probe {
 
 /// Why a window of reads was not published at all.
 ///
-/// Both refusals are decided before anything reaches the disk, and
-/// neither subsumes the other: a name may be unlisted without being
-/// forbidden, and a forbidden name promoted into the table would be
-/// listed and must still be refused.
+/// There is one refusal, the table, and it is decided before anything
+/// reaches the disk. Nothing is refused by name (ADR 0023).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Refused {
-    /// One of the three names that are never sent appeared in a request
-    /// about to be published.
-    NeverSent { name: String },
     /// A request named a callee the constant list does not hold. The rule
     /// is a list of what may be sent, not a list of what may not.
     Unlisted { name: String },
@@ -507,7 +587,6 @@ pub enum Refused {
 impl fmt::Display for Refused {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NeverSent { name } => write!(f, "gather refused: {name} is never sent"),
             Self::Unlisted { name } => write!(
                 f,
                 "gather refused: {name} is not a read on the constant list"
@@ -590,44 +669,18 @@ fn callee_of(body: &[u8]) -> Option<String> {
     Some(callee.to_owned())
 }
 
-/// Refuse to publish anything carrying a name that is never sent, or an
-/// `eval` whose callee the constant list does not hold.
+/// Refuse to publish an `eval` whose callee the constant list does not
+/// hold.
 ///
-/// Both layers are here on purpose. `Read`'s fields are private and the
-/// table is the only value of that type, so production cannot assemble an
-/// unlisted read — but it is the specs that reach the disk, and a guard
-/// nothing can drive proves nothing, so the check sits on the bytes at the
-/// publication seam where a test can hand it a spec the table could not
-/// have produced. Its cost is a substring scan of a few short strings once
-/// per window.
+/// `Read`'s fields are private and the table is the only value of that
+/// type, so production cannot assemble an unlisted read — but it is the
+/// specs that reach the disk, and a guard nothing can drive proves
+/// nothing, so the check sits on the bytes at the publication seam where a
+/// test can hand it a spec the table could not have produced.
 ///
-/// The two refusals are independent, and that is the point of having two.
-/// The list is an allowlist because it is not known whether the batching
-/// was the hazard or the particular reads were; the three never-names are
-/// checked separately so that one promoted *into* the table is still
-/// refused, which an allowlist alone would wave through.
-///
-/// The never scan is a substring match and not a parse, which is sound
-/// only while no name the table holds contains one of the three. That is
-/// what the collision test above keeps true.
+/// This is the one refusal. The three reads once refused by name are in
+/// the table now, opt-in like tier 2, and ADR 0023 says why.
 pub(crate) fn vet(specs: &[Spec]) -> Result<(), Refused> {
-    for spec in specs {
-        for never in NEVER {
-            let folded = never.to_ascii_lowercase();
-            let in_headers = spec
-                .headers
-                .iter()
-                .any(|(_, v)| v.to_ascii_lowercase().contains(&folded));
-            let in_body = String::from_utf8_lossy(&spec.body)
-                .to_ascii_lowercase()
-                .contains(&folded);
-            if in_headers || in_body {
-                return Err(Refused::NeverSent {
-                    name: never.to_owned(),
-                });
-            }
-        }
-    }
     for spec in specs {
         let op = spec
             .headers
@@ -639,14 +692,13 @@ pub(crate) fn vet(specs: &[Spec]) -> Result<(), Refused> {
         }
         // The allowlist falls on anything shaped like a read: a chunk
         // that protects a call. The window carries other evals — a
-        // reachability probe that calls nothing — and they are held to
-        // the never rule above like everything else, but they are not
-        // reads and have no callee to look up. So this is narrower than
-        // "every name is on the list": an eval written some other way
-        // passes here on the never rule alone. `gather` is the only
-        // caller and publishes exactly one such eval, the probe; a
-        // caller handing this its own body is the gap, and the record
-        // says why it is left open.
+        // reachability probe that calls nothing — and they are not reads
+        // and have no callee to look up. So this is narrower than "every
+        // name is on the list": an eval written some other way passes
+        // here with no check at all. `gather` is the only caller and
+        // publishes exactly one such eval, the probe; a caller handing
+        // this its own body is the gap, and ADR 0017 says why it is left
+        // open.
         let Some(callee) = callee_of(&spec.body) else {
             continue;
         };
@@ -693,9 +745,9 @@ pub(crate) fn publish_reads(
 /// Every listed read this session will answer, in list order.
 ///
 /// A load publishes nothing: nothing answers during one, so a request
-/// written into it would only wait. The tier filter runs first and the
-/// load skip second, so a tier-2 read with the switch off says so even
-/// during a load — it would not have been sent either way.
+/// written into it would only wait. The selection runs first and the load
+/// skip second, so an opt-in read nobody asked for says so even during a
+/// load — it would not have been sent either way.
 ///
 /// The window is as deep as there are reads, because the whole point of
 /// the window here is that the five share one tick rather than costing a
@@ -709,11 +761,11 @@ pub fn gather(
     let reads = listed(tiers);
     let mut entries: Vec<(&'static Read, Answer)> = Vec::with_capacity(READS.len());
     for r in READS.iter() {
-        if r.tier() == Tier::Two && !tiers.tier_two() {
+        if !tiers.sends(r.key()) {
             entries.push((
                 r,
                 Answer::NotSent {
-                    why: NotSent::TierTwoOff,
+                    why: off_reason(r.tier()),
                 },
             ));
         }
@@ -783,6 +835,17 @@ pub fn gather(
     })
 }
 
+/// Why an unselected read of `tier` was not sent: the group it sits in.
+fn off_reason(tier: Tier) -> NotSent {
+    match tier {
+        Tier::Two => NotSent::TierTwoOff,
+        Tier::Suspect => NotSent::SuspectOff,
+        // Never reached: tier 1 is always sent, so no tier-1 read is ever
+        // asked why it was not. Tier 2's word is the least wrong answer.
+        Tier::One => NotSent::TierTwoOff,
+    }
+}
+
 /// Where a read sits in the table, so the entries come back in list order
 /// whichever branch put each one there.
 fn order_of(read: &Read) -> usize {
@@ -836,9 +899,14 @@ mod game_reads {
         );
     }
 
+    /// Every read the table holds, the seven opt-in ones included.
+    fn everything() -> Tiers {
+        Tiers::from_words(["extra", "suspect"]).expect("both groups are words")
+    }
+
     #[test]
     fn every_listed_read_has_exactly_one_pcall() {
-        for r in listed(Tiers::with_tier_two()) {
+        for r in listed(everything()) {
             assert_eq!(
                 text(r.callee()).matches("pcall(").count(),
                 1,
@@ -850,9 +918,9 @@ mod game_reads {
 
     #[test]
     fn a_chunk_names_its_own_callee_and_no_other_dcs_name() {
-        for r in listed(Tiers::with_tier_two()) {
+        for r in listed(everything()) {
             let body = text(r.callee());
-            for other in listed(Tiers::with_tier_two()) {
+            for other in listed(everything()) {
                 if other.callee() == r.callee() {
                     continue;
                 }
@@ -1457,7 +1525,10 @@ mod game_reads {
                 "multiplayer",
                 "server",
                 "track",
-                "player_id"
+                "player_id",
+                "mission_loaded",
+                "player_unit_type",
+                "mission_theatre"
             ]
         );
     }
@@ -1556,18 +1627,18 @@ mod game_reads {
                 "{key}"
             );
         }
-        assert_eq!(readings.skipped().len(), 4);
+        assert_eq!(readings.skipped().len(), 7);
         // One entry per read and no more. Without this the check is a
         // ceiling alone: a gather that both marked a tier-2 read not sent
         // *and* published it would leave two entries under one key, and
         // the lookup above would find the first and pass.
         assert_eq!(
             readings.entries().len(),
-            9,
-            "the readings hold {} entries and there are nine reads",
+            12,
+            "the readings hold {} entries and there are twelve reads",
             readings.entries().len()
         );
-        for r in listed(Tiers::with_tier_two()) {
+        for r in listed(everything()) {
             assert_eq!(
                 readings
                     .entries()
@@ -1626,8 +1697,10 @@ mod game_reads {
 
     #[test]
     fn the_default_tiers_value_is_tier_one_alone() {
-        assert!(!Tiers::default().tier_two());
-        assert!(Tiers::with_tier_two().tier_two());
+        assert!(Tiers::default().sends("pause"));
+        assert!(!Tiers::default().sends("multiplayer"));
+        assert!(!Tiers::default().sends("mission_loaded"));
+        assert!(Tiers::with_tier_two().sends("multiplayer"));
     }
 
     /// A read spec as `gather` builds one, for any callee at all — which
@@ -1648,27 +1721,6 @@ mod game_reads {
     }
 
     #[test]
-    fn a_forbidden_name_is_refused_before_anything_reaches_the_disk() {
-        let b = Sandbox::new();
-        let (mut s, h) = ticking(&b);
-        let got = publish_reads(&h, vec![spec_for(&h, "DCS.getMissionLoaded")], 1, UPTO);
-        assert_eq!(
-            got.expect_err("wanted Refused, got Ok(..)"),
-            Refused::NeverSent {
-                name: "getMissionLoaded".to_owned()
-            }
-        );
-        assert_eq!(
-            published(s.req()),
-            0,
-            "the request directory holds {} files and should hold none",
-            published(s.req())
-        );
-        s.tick();
-        assert_eq!(s.seen().len(), 0, "the ledger holds a request");
-    }
-
-    #[test]
     fn a_name_that_is_merely_unlisted_is_refused_too_because_the_rule_is_a_list_and_not_a_blocklist()
      {
         let b = Sandbox::new();
@@ -1685,76 +1737,205 @@ mod game_reads {
         assert_eq!(s.seen().len(), 0, "the ledger holds a request");
     }
 
-    #[test]
-    fn a_forbidden_name_in_a_chunkname_is_refused_as_one_in_a_body_is() {
-        let b = Sandbox::new();
-        let (mut s, h) = ticking(&b);
-        let spec = Spec::new(
-            &[
-                ("op", "eval"),
-                ("for", h.stamp.as_str()),
-                ("state", "hook"),
-                ("chunkname", "=dcs-eval read DCS.getMissionTheatre"),
-            ],
-            &chunk("DCS.getPause"),
-        );
-        assert_eq!(
-            publish_reads(&h, vec![spec], 1, UPTO).expect_err("wanted Refused, got Ok(..)"),
-            Refused::NeverSent {
-                name: "getMissionTheatre".to_owned()
-            }
-        );
-        assert_eq!(published(s.req()), 0);
-        s.tick();
-        assert_eq!(s.seen().len(), 0, "the ledger holds a request");
+    /// The seven reads a caller has to ask for, read off the table rather
+    /// than spelt here, so a read added to either opt-in tier is covered
+    /// without this list being remembered.
+    fn opt_in() -> Vec<&'static Read> {
+        READS.iter().filter(|r| r.tier() != Tier::One).collect()
     }
 
     #[test]
-    fn a_forbidden_name_is_refused_even_when_it_is_in_the_read_table() {
-        // The never gate is independent of the list: a name promoted into
-        // the table would pass an allowlist, and this is the check that
-        // would still refuse it. The spec here is byte for byte what a
-        // tenth table entry would produce.
-        let b = Sandbox::new();
-        let (_s, h) = ticking(&b);
-        let got = publish_reads(&h, vec![spec_for(&h, "DCS.getMissionLoaded")], 1, UPTO);
-        assert_eq!(
-            got.expect_err("wanted Refused::NeverSent, got Ok(())"),
-            Refused::NeverSent {
-                name: "getMissionLoaded".to_owned()
-            },
-            "the refusal must be the never gate's and not the list's"
-        );
-    }
-
-    #[test]
-    fn no_request_of_a_full_gather_carries_a_never_sent_name() {
-        // The sweep: what actually reached the disk, headers included,
-        // with tier 2 on so every read the client can ever send is in it.
-        // The positive control is in the same test and counted by
-        // predicate, so a gather that published nothing fails here first.
+    fn opt_in_reads_are_none_of_them_published_by_a_default_gather() {
+        // What actually reached the disk, headers included. The positive
+        // control is in the same test and counted by predicate, so a
+        // gather that published nothing fails here first.
         let b = Sandbox::new();
         let (mut s, h) = ticking(&b);
-        gathered(&mut s, &h, "menu", Tiers::with_tier_two(), 11);
-        for r in listed(Tiers::with_tier_two()) {
+        gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        for callee in tier_one() {
             assert_eq!(
-                carrying(&s, &chunkname(r.callee())),
+                carrying(&s, &chunkname(callee)),
                 1,
-                "the control: no request names {}",
-                r.callee()
+                "the control: no request names {callee}"
             );
         }
+        assert_eq!(opt_in().len(), 7, "the table holds seven opt-in reads");
         for (n, seen) in s.seen().iter().enumerate() {
-            let text = String::from_utf8_lossy(&seen.bytes).to_ascii_lowercase();
-            for never in NEVER {
+            let text = String::from_utf8_lossy(&seen.bytes);
+            for r in opt_in() {
                 assert!(
-                    !text.contains(&never.to_ascii_lowercase()),
-                    "request {} of the ledger carries a name that is never sent: {never}\n{}",
+                    !text.contains(r.callee()),
+                    "request {} carries {}, which nobody asked for\n{text}",
                     n + 1,
-                    String::from_utf8_lossy(&seen.bytes)
+                    r.callee()
                 );
             }
         }
+    }
+
+    #[test]
+    fn opt_in_a_single_key_publishes_that_read_and_no_other() {
+        for r in opt_in() {
+            let b = Sandbox::new();
+            let (mut s, h) = ticking(&b);
+            let tiers = Tiers::from_words([r.key()]).expect("a key is a word");
+            gathered(&mut s, &h, "menu", tiers, 8);
+            assert_eq!(
+                s.seen().len(),
+                8,
+                "{}: five reads, the one asked for, a ping and a probe, and the ledger holds {}",
+                r.key(),
+                s.seen().len()
+            );
+            assert_eq!(
+                carrying(&s, &chunkname(r.callee())),
+                1,
+                "{} was asked for and not sent exactly once",
+                r.key()
+            );
+            for other in opt_in() {
+                if other.key() == r.key() {
+                    continue;
+                }
+                assert_eq!(
+                    carrying(&s, &chunkname(other.callee())),
+                    0,
+                    "asking for {} also sent {}",
+                    r.key(),
+                    other.key()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn opt_in_the_groups_are_the_four_and_the_three() {
+        let callees = |t: Tiers| -> Vec<&str> {
+            listed(t)
+                .iter()
+                .filter(|r| r.tier() != Tier::One)
+                .map(|r| r.callee())
+                .collect()
+        };
+        assert_eq!(
+            callees(Tiers::from_words(["extra"]).expect("a group")),
+            vec![
+                "DCS.isMultiplayer",
+                "DCS.isServer",
+                "DCS.isTrackPlaying",
+                "net.get_my_player_id",
+            ]
+        );
+        assert_eq!(
+            callees(Tiers::from_words(["suspect"]).expect("a group")),
+            vec![
+                "DCS.getMissionLoaded",
+                "DCS.getPlayerUnitType",
+                "DCS.getMissionTheatre",
+            ]
+        );
+        assert_eq!(listed(everything()).len(), 12);
+        assert_eq!(
+            Tiers::from_words(["base"]).expect("a word"),
+            Tiers::default()
+        );
+        assert_eq!(
+            Tiers::from_words(std::iter::empty()).expect("no words"),
+            Tiers::default()
+        );
+        assert_eq!(
+            Tiers::with_tier_two(),
+            Tiers::from_words(["extra"]).expect("a group")
+        );
+        // A tier-1 key is accepted and changes nothing that is sent.
+        assert_eq!(
+            listed(Tiers::from_words(["pause"]).expect("a key")),
+            listed(Tiers::default())
+        );
+    }
+
+    #[test]
+    fn opt_in_a_word_that_names_no_read_and_no_group_is_refused_naming_it() {
+        let why = Tiers::from_words(["getMissionLoaded"]).expect_err("a callee is not a key");
+        let said = why.to_string();
+        assert!(
+            said.contains("getMissionLoaded"),
+            "it names the word: {said}"
+        );
+        assert!(said.contains("mission_loaded"), "it names the keys: {said}");
+        assert!(Tiers::from_words(["EXTRA"]).is_err(), "the match is exact");
+        let empty = Tiers::from_words([""]).expect_err("an empty word");
+        assert_eq!(empty.to_string(), "an empty word is not a read");
+        // Quoted, because a stray space is what makes `extra, suspect`
+        // fail and it is invisible unquoted.
+        let spaced = Tiers::from_words([" suspect"]).expect_err("a space is not trimmed");
+        assert!(
+            spaced
+                .to_string()
+                .starts_with("\" suspect\" is not a read: "),
+            "{spaced}"
+        );
+    }
+
+    #[test]
+    fn opt_in_the_three_once_refused_by_name_now_pass_the_vet() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        // No wait: nothing ticks until the call has returned, and what is
+        // asserted is what reached the disk, not what came back.
+        let got = publish_reads(
+            &h,
+            vec![spec_for(&h, "DCS.getMissionLoaded")],
+            1,
+            Duration::ZERO,
+        );
+        assert!(got.is_ok(), "the vet refused a listed read: {got:?}");
+        s.tick();
+        assert_eq!(
+            carrying(&s, &chunkname("DCS.getMissionLoaded")),
+            1,
+            "the read reached the disk"
+        );
+    }
+
+    #[test]
+    fn opt_in_an_unasked_suspect_read_is_not_sent_and_says_its_group() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let readings = gathered(&mut s, &h, "menu", Tiers::default(), 7);
+        assert_eq!(
+            readings.of("mission_loaded"),
+            Some(&Answer::NotSent {
+                why: NotSent::SuspectOff
+            })
+        );
+        assert_eq!(
+            readings.of("multiplayer"),
+            Some(&Answer::NotSent {
+                why: NotSent::TierTwoOff
+            })
+        );
+        let loading = gather(&h, PHASE_LOAD, Tiers::default(), UPTO).expect("not refused");
+        assert_eq!(
+            loading.of("mission_theatre"),
+            Some(&Answer::NotSent {
+                why: NotSent::SuspectOff
+            }),
+            "the selection runs before the load skip"
+        );
+    }
+
+    #[test]
+    fn opt_in_everything_sends_twelve_reads() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        gathered(&mut s, &h, "menu", everything(), 14);
+        assert_eq!(
+            s.seen().len(),
+            14,
+            "twelve reads, the ping and the probe: {} requests",
+            s.seen().len()
+        );
     }
 
     #[test]
@@ -1975,14 +2156,6 @@ mod game_reads {
     }
 
     #[test]
-    fn the_never_list_holds_the_suspect_and_the_two_from_its_batch() {
-        assert_eq!(
-            NEVER.to_vec(),
-            vec!["getMissionLoaded", "getPlayerUnitType", "getMissionTheatre"]
-        );
-    }
-
-    #[test]
     fn no_callee_sits_on_two_lists() {
         for r in READS {
             assert_eq!(
@@ -1997,25 +2170,6 @@ mod game_reads {
                 "the key {} appears more than once",
                 r.key
             );
-        }
-    }
-
-    #[test]
-    fn no_listed_callee_contains_a_never_sent_name() {
-        // The never gate matches bare names as substrings rather than
-        // parsing them, which is only sound while no name it may send
-        // contains one of them.
-        for r in READS {
-            for never in NEVER {
-                assert!(
-                    !r.callee
-                        .to_ascii_lowercase()
-                        .contains(&never.to_ascii_lowercase()),
-                    "{} contains the never-sent name {never}, and the substring gate would \
-                     refuse a read the table holds",
-                    r.callee
-                );
-            }
         }
     }
 }

@@ -1295,6 +1295,38 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ---
 
+## Stage 9 — proven live
+
+T62 is the one developer-only row here: the switch T50 turns. Its controls are
+swept like any other.
+
+### reads/opt-in-sent-while-off
+
+- task: T62
+- command: `mise exec -- cargo test -p dcs-eval opt_in`
+- reddens: `opt_in_reads_are_none_of_them_published_by_a_default_gather`
+- note: three more `opt_in` tests go red beside it — the groups check, the
+  one-read check and the unasked-suspect check — because a suspect read sent
+  by default is also one no key selected and one no longer marked off.
+
+```sweep-edit crates/dcs-eval/src/reads.rs
+-             Some(at) => READS[at].tier == Tier::One || self.on & (1 << at) != 0,
++             Some(at) => READS[at].tier != Tier::Two || self.on & (1 << at) != 0,
+```
+
+### reads/one-key-turns-on-its-group
+
+- task: T62
+- command: `mise exec -- cargo test -p dcs-eval opt_in`
+- reddens: `opt_in_a_single_key_publishes_that_read_and_no_other`
+
+```sweep-edit crates/dcs-eval/src/reads.rs
+-                     Some(at) => on |= 1 << at,
++                     Some(at) => on |= group(READS[at].tier),
+```
+
+---
+
 ## Out of scope
 
 The counts below are read off `docs/PLAN.md` by hand, and nothing re-derives
@@ -1332,17 +1364,17 @@ an entry here like any other, and both figures move.
 
 ### out/stages-7-to-9
 
-- out-of-scope: not swept. Stages 7 to 9 are the MCP server, the installer and
-  the live proofs; the coverage figure is summed over Stages 3 to 6 and does
-  not reach them, and the last of them needs a running game rather than a
-  runner. Stages 7 and 8 are built in full, so what keeps the one row below
-  here is the figure's scope and not an absence of code to mutate.
-- controls: 1
-- breakdown: T52 one, 1. Every Stage 7 and Stage 8 row is built, and its
-  mutations are entries above, counted there rather than here. Stage 9's
-  remaining rows name no mutation
-  and are owed none. Only T52 keeps this group alive: it is Stage 9's, and it
-  needs a running game rather than a runner.
+- out-of-scope: nothing. Every mutation a Stage 7 to 9 row names is an entry
+  above and counted in scope there, so this group stands for none; it stays
+  so that the figure every run prints says where Stages 7 to 9 went rather
+  than leaving it to be assumed.
+- controls: 0
+- breakdown: none, 0. Every Stage 7 and Stage 8 row is built, and its
+  mutations are entries above. In Stage 9, T52's one mutation is
+  `verify/stray-prefix-aimed-at-the-wrong-project` and T62, Stage 9's one
+  developer-only row, has entries of its own; all are counted in scope.
+  Stage 9's other rows need a running game, name no mutation and are owed
+  none.
 
 ### out/the-runner-itself
 
