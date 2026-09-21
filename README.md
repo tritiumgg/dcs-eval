@@ -174,17 +174,17 @@ measured safe yet. Ask with `reads` on the tool or `--reads` on the
 says so, `unknown (tier 2 off)` or `unknown (suspect reads off)`, and every
 read no summary is made of is printed on a line of its own.
 
-`dcs_eval_file` reads only what lies under a directory you allow it, and
-refuses the `Config\` of every DCS write directory it is told about, and the
-DCS install, whatever else is allowed — the first holds your account
-credentials, the second holds nothing a chunk needs. Finding the `DCS*`
-siblings of the write directory you configure, so a second variant's
-credentials are refused too, is *not built*; nor is how the roots are
-configured on the command line. Until a root can be allowed, the allowed list
-is empty — and an empty list admits nothing rather than everything, so
-`dcs_eval_file` refuses every path you give it by that same rule. Use
-`dcs_eval` meanwhile. `eval --file` on the command line is refused for the
-same reason, and will be until a root can be allowed.
+`dcs_eval_file` reads any file this server can read, wherever it lies — much
+as a chunk could open it with `io.open` in the `hook` state — and
+`eval --file` on the command line is the same. Where the file lies is never
+judged; the one limit is size: a file whose bytes and the request's own
+headers together come to more than the ceiling the executor published is
+refused before a byte of it is read, naming the limit and the file's size,
+and nothing is ever cut to fit. A path that is not there, a directory, a
+name too long and a path with a character past ASCII are refused too,
+because none of them can be sent at all. A
+compile error comes back as Lua wrote it, and that quotes the file — which is
+the point of reading your own.
 
 ## Use it from a terminal
 
@@ -286,14 +286,13 @@ milliseconds and the tick.
 
 For a file, it also carries the resolved path, the chunk name and the SHA-256
 of the bytes that were read — the same hash the answer's own last line shows,
-because both come from the reader that opened the file. No root can be allowed
-yet, so nothing you can run today produces such a line — *not built*, the same
-sentence as for `eval --file` above. A chunk given on the line has no path and
-no hash: nothing read it, so there is nothing to attest.
+because both come from the reader that opened the file. A chunk given on the
+line has no path and no hash: nothing read it, so there is nothing to attest.
 
-A file evaluation refused **before** the file is read — a path outside the
-allowed roots, a name too long, anything judged before it is opened — writes
-no line at all. An absent line means nothing ran.
+A file evaluation refused **before** the file is read — a file too big for one
+request, a path that is not there or is a directory, a name too long, a
+path with a character past ASCII, anything judged before it is opened — writes no line at all. An absent line
+means nothing ran.
 
 Nothing reads this file back. It is a record for you, and for whoever asks
 afterwards what a result came from.

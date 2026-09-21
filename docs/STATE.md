@@ -28,9 +28,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **Any path for a file eval** — `dcs_eval_file` and `eval --file` lost the roots, the `Config\` refusal and the install refusal (ADR 0026, superseding ADR 0014); the ceiling, judged on the stat before a byte is read, is the one refusal left.
 - **T47, T48 and T50's reads: the live instrument** — `dcs-mcp live`: `dormant`, `rtt` and `read` append to `live.jsonl`, and `live report` prints all 47 Stage 9 rows, an unmeasured one with its reason (ADR 0025 for the dormant method; `reads::alone` sends a read with nothing beside it). Proved off DCS only.
 - **T63** — `dcs-mcp install`, `verify` and `uninstall` are verbs of the binary: `Saved Games` from the known folder or `--saved-games`, several variants refused and named until `--variant` says which, never picked or prompted for (ADR 0024). Proved on fixtures; the real `Saved Games` is T52's.
-- **T62** — the seven opt-in reads, tier 2's four and the three from the crashing batch, off by default and asked for by group or by key through `game-state --reads` and `dcs_game_state`'s `reads`; nothing is refused by name any more (ADR 0023).
 
 *The last three at most, one line each. Git log holds the rest.*
 
