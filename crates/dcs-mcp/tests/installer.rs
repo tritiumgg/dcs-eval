@@ -154,9 +154,9 @@ fn installer_the_binary_installs_verifies_and_uninstalls() {
 
     // A session DCS would have published once it loaded the hook: this
     // process's pid, which is certainly running, and the host's own temp
-    // directory, which is what `lfs.tempdir()` gives inside the game. Kept
-    // alive until `verify` has answered; dropped, it takes the session with
-    // it.
+    // directory, which `lfs.tempdir()` inside the game is or lies under
+    // (ADR 0029). Kept alive until `verify` has answered; dropped, it takes
+    // the session with it.
     let output = fs::canonicalize(&variant)
         .expect("the variant resolves")
         .join("Logs/DcsEval/hook");

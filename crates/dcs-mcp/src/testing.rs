@@ -141,9 +141,9 @@ pub(crate) fn a_live_session(output: &Path) -> Standin {
     ex.pid = std::process::id();
     ex.handshake().expect("the handshake is published");
     // The stand-in names a temp directory of its own under the output,
-    // which no real executor would: `lfs.tempdir()` inside DCS gives
-    // the host's. Said the stand-in's way, every healthy fixture here
-    // would carry a temp-directory disagreement nothing asked for.
+    // which no real executor would: `lfs.tempdir()` inside DCS gives the
+    // host's, or a folder under it (ADR 0029). The host's own keeps every
+    // healthy fixture here off wherever the sandbox happens to sit.
     reheader(
         &output.join("executor.txt"),
         "lfs_tempdir",

@@ -721,8 +721,8 @@ mod tests {
     ///
     /// The stand-in names a temp directory of its own under the output,
     /// which no real executor would: `lfs.tempdir()` inside DCS gives the
-    /// host's. The fixture says the host's, so a report of a healthy
-    /// session carries nothing a test did not ask for and a disagreement
+    /// host's, or a folder under it (ADR 0029). The fixture says the
+    /// host's, so a report of a healthy session carries nothing a test did not ask for and a disagreement
     /// has to be published on purpose to appear.
     fn published(b: &Sandbox, pid: u32) -> Standin {
         let mut s = Standin::open(&b.join("out"), "hook").expect("the session opens");
