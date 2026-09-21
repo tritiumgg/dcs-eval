@@ -835,6 +835,46 @@ pub fn gather(
     })
 }
 
+/// One read, published as the only request in its window: no ping, no
+/// tier-1 read and no probe beside it.
+///
+/// This is not what `gather` means by alone, where the opt-in read is the
+/// only one of its kind in a window the five tier-1 reads also ride. A live
+/// run that sends one read per DCS session to learn whether it is safe
+/// wants nothing else on the disk that session could be blamed on, so this
+/// sends the one chunk and nothing more. It is the same chunk under the
+/// same chunkname, and it goes out through the same vetted seam.
+///
+/// # Errors
+///
+/// [`Refused::Unlisted`] where `key` names no read `tiers` admits. Nothing
+/// is published then.
+pub fn alone(h: &Handshake, key: &str, tiers: Tiers, upto: Duration) -> Result<Answer, Refused> {
+    let Some(read) = listed(tiers).into_iter().find(|r| r.key() == key) else {
+        return Err(Refused::Unlisted {
+            name: key.to_owned(),
+        });
+    };
+    let name = chunkname(read.callee());
+    let spec = Spec::new(
+        &[
+            ("op", "eval"),
+            ("for", h.stamp.as_str()),
+            ("state", "hook"),
+            ("chunkname", name.as_str()),
+        ],
+        &chunk(read.callee()),
+    );
+    let specs = vec![spec];
+    let mut items = publish_reads(h, specs, 1, upto)?.into_iter();
+    Ok(items.next().map_or(
+        Answer::Unanswered {
+            why: Unanswered::Unyielded,
+        },
+        answer_of,
+    ))
+}
+
 /// Why an unselected read of `tier` was not sent: the group it sits in.
 fn off_reason(tier: Tier) -> NotSent {
     match tier {
@@ -2171,5 +2211,65 @@ mod game_reads {
                 r.key
             );
         }
+    }
+
+    /// One read sent alone against a stand-in that answers it on the tick
+    /// after it reaches the disk.
+    fn sent_alone(s: &mut Standin, h: &Handshake, key: &str) -> Answer {
+        let tiers = Tiers::from_words([key]).expect("a key is a word");
+        std::thread::scope(|scope| {
+            let ticker = scope.spawn(|| {
+                until(s.req(), ".req", 1, UPTO);
+                s.tick();
+            });
+            let answer = alone(h, key, tiers, UPTO);
+            ticker.join().expect("the ticker finishes");
+            answer
+        })
+        .expect("the read is listed")
+    }
+
+    #[test]
+    fn alone_publishes_the_one_read_and_nothing_beside_it() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        sent_alone(&mut s, &h, "mission_loaded");
+        assert_eq!(
+            s.seen().len(),
+            1,
+            "one read alone, and the ledger holds {} requests",
+            s.seen().len()
+        );
+        assert_eq!(carrying(&s, &chunkname("DCS.getMissionLoaded")), 1);
+        assert_eq!(carrying(&s, "op: ping"), 0, "a ping rode beside the read");
+    }
+
+    #[test]
+    fn alone_answers_the_reads_value() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        s.script("DCS.isMultiplayer", "ok", "string", b"boolean\tfalse");
+        assert_eq!(
+            sent_alone(&mut s, &h, "multiplayer"),
+            Answer::Value {
+                lua_type: "boolean".to_owned(),
+                value: Some("false".to_owned()),
+            }
+        );
+    }
+
+    #[test]
+    fn alone_refuses_a_key_the_switch_does_not_list() {
+        let b = Sandbox::new();
+        let (mut s, h) = ticking(&b);
+        let got = alone(&h, "server", Tiers::default(), UPTO);
+        assert_eq!(
+            got,
+            Err(Refused::Unlisted {
+                name: "server".to_owned(),
+            })
+        );
+        s.tick();
+        assert_eq!(s.seen().len(), 0, "a refused read reached the disk");
     }
 }
