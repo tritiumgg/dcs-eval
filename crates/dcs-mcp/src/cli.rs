@@ -344,7 +344,7 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
     let answered = match parsed.verb {
         Verb::Status => tools::status(&serve, None),
         Verb::Ping => tools::ping(&serve, None, upto),
-        Verb::GameState => tools::game_state(&serve, None, upto),
+        Verb::GameState => tools::game_state(&serve, None, &[], upto),
         Verb::Eval => match &parsed.file {
             Some(path) => tools::eval_file(
                 &serve,

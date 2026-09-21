@@ -1328,6 +1328,21 @@ swept like any other.
 +                     Some(at) => on |= group(READS[at].tier),
 ```
 
+### tools/reads-argument-dropped
+
+- task: T62
+- command: `mise exec -- cargo test -p dcs-mcp opt_in`
+- reddens: `tools_listed_opt_in_reads_argument_reaches_the_gather`
+- note: `tools_listed_opt_in_reads_argument_refuses_a_word_as_bad_argument`
+  goes red beside it, because a word that never reaches the parser is never
+  refused either. The mutant compiles clean, because the derived
+  deserializer still reads the field; the assertion is what reddens it.
+
+```sweep-edit crates/dcs-mcp/src/tools.rs
+-             args.reads.as_deref().unwrap_or_default(),
++             &[],
+```
+
 ---
 
 ## Out of scope
