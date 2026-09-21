@@ -559,19 +559,19 @@ mod tests {
 
     /// Every expectation compares resolved paths, never the spelling that
     /// made them: the host's temp directory is usually spelled short.
-    fn real(path: &Path) -> Real {
+    pub(super) fn real(path: &Path) -> Real {
         paths::resolve(path).expect("the path resolves")
     }
 
     /// A file with known bytes, and whatever directories it needs.
-    fn put(path: &Path, bytes: &[u8]) {
+    pub(super) fn put(path: &Path, bytes: &[u8]) {
         fs::create_dir_all(path.parent().expect("a file has a parent"))
             .expect("the directories are made");
         fs::write(path, bytes).expect("the file is written");
     }
 
     /// One instant, used wherever the test does not care which.
-    fn an_instant() -> SystemTime {
+    pub(super) fn an_instant() -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(1_760_000_000)
     }
 
@@ -582,7 +582,7 @@ mod tests {
     /// current" are both reachable. The embedded list carries older releases'
     /// hashes and not their bytes, which makes an older release unreachable
     /// through it.
-    fn a_release() -> (Executor<'static>, String, String) {
+    pub(super) fn a_release() -> (Executor<'static>, String, String) {
         let older = Box::leak(hex(&digest(OLDER)).into_boxed_str());
         let current = Box::leak(hex(&digest(CURRENT)).into_boxed_str());
         let shipped: &'static [&'static str] =
@@ -609,7 +609,7 @@ mod tests {
     /// The layout a real call meets: one variant under a `Saved Games`, and
     /// the output directory where the options would compose it — inside the
     /// variant, which is what makes the clean-tree assertion mean something.
-    fn fixture() -> (Sandbox, Real, PathBuf) {
+    pub(super) fn fixture() -> (Sandbox, Real, PathBuf) {
         let b = Sandbox::new();
         b.dir("saved");
         let variant = real(&b.dir("saved/DCS.openbeta"));
@@ -623,7 +623,14 @@ mod tests {
     /// way: our current release at the hook's name, the line in an
     /// `Export.lua` that holds somebody else's lines too, the policy gate,
     /// and a published handshake naming a process that is running.
-    fn installed(variant: &Real, output: &Path) -> Standin {
+    pub(super) fn installed(variant: &Real, output: &Path) -> Standin {
+        install_files(variant);
+        a_live_session(output)
+    }
+
+    /// The files `installed` puts down, and no session: the state straight
+    /// after `install`, before DCS has started.
+    pub(super) fn install_files(variant: &Real) {
         let hooks = variant.as_path().join("Scripts").join("Hooks");
         put(&hooks.join("DcsEvalExecutor.lua"), CURRENT);
         put(
@@ -638,7 +645,6 @@ mod tests {
             &variant.as_path().join("Config").join("autoexec.cfg"),
             AUTOEXEC,
         );
-        a_live_session(output)
     }
 
     /// The whole report as a user would read it.

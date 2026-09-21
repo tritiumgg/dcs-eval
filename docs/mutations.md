@@ -2016,7 +2016,7 @@ not cover is printed by the sweep itself rather than left to be assumed.
   is the verdict assertion's own,
   `a build that differs from the one measured is a difference, not a
   refusal`. The `Display` assertion in the same test — that the rendered
-  report still ends `verified` — would go red with it, but the verdict is
+  report still opens `verified:` — would go red with it, but the verdict is
   asserted first and is what was seen.
 
 ```sweep-edit crates/dcs-mcp/src/verify.rs
@@ -2045,7 +2045,8 @@ not cover is printed by the sweep itself rather than left to be assumed.
   `[&str; 1]` either way. `a_healthy_install_verifies` stays green, because a
   fixture with no second copy in it has nothing for either prefix to match —
   which is the pair saying the control watches what is named and not merely
-  that something is.
+  that something is. `every_install_finding_is_a_row_with_its_fix` reddens
+  beside it, its summary missing the second copy's row (ADR 0032).
 
 ```sweep-edit crates/dcs-mcp/src/verify.rs
 - const STRAY_PREFIXES: [&str; 1] = ["dcseval"];
@@ -2060,11 +2061,63 @@ not cover is printed by the sweep itself rather than left to be assumed.
 - note: the mutation is `status`'s, because `verify` prints the report
   `status` makes. It is here so that the verb that failed live on
   2026-09-21 has a control of its own: with no leftover recognised, the
-  fixture ends `not verified: 2 found`, as the live run did (ADR 0030).
+  fixture reports two problems and `not verified`, as the live run did (ADR
+  0030).
 
 ```sweep-edit crates/dcs-eval/src/status.rs
 -     beat.stamp != h.stamp && published.is_some_and(|at| beat.modified < at)
 +     false
+```
+
+### verify/summary-verdict-ignores-problems
+
+- task: T46
+- command: `mise exec -- cargo test -p dcs-mcp verify`
+- reddens: `nothing_installed_says_so_and_names_the_one_command`
+- note: the verdict line decided without asking `verified()`, so every
+  report opens `verified:` whatever its rows say (ADR 0032). The exit code
+  still asks `verified()`, so only the text lies, which is the defect for a
+  person who reads the first line and stops. Observed red is every test that
+  pins a not-verified first line: the not-installed, not-started and exited
+  summaries, and `installer::tests::verify_exits_one_when_anything_is_found`,
+  whose name the filter also matches. The mutant compiles clean.
+
+```sweep-edit crates/dcs-mcp/src/verify/render.rs
+-     let verified = report.verified();
++     let verified = true;
+```
+
+### verify/waiting-counted-as-verified
+
+- task: T46
+- command: `mise exec -- cargo test -p dcs-mcp verify`
+- reddens: `installed_but_not_started_is_waiting_and_not_verified`
+- note: a session DCS has not loaded yet worded `ok`, the natural slip for
+  the state straight after `install`, which is normal and so looks healthy.
+  The verdict and the exit code still say not verified; the row under them
+  says all is well, and a person reads the row. Observed red is two tests,
+  this one and `nothing_installed_says_so_and_names_the_one_command`, whose
+  DCS row is the same line. The mutant compiles clean.
+
+```sweep-edit crates/dcs-mcp/src/verify/render.rs
+-                 let loaded = Row::new(Word::Waiting, "DCS", "has not loaded the executor yet");
++                 let loaded = Row::new(Word::Ok, "DCS", "has not loaded the executor yet");
+```
+
+### verify/details-drop-a-fact
+
+- task: T46
+- command: `mise exec -- cargo test -p dcs-mcp verify`
+- reddens: `full_report_carries_every_session_fact`
+- note: the session's transport left out of `details`, which is what a
+  tidy-up of the full report looks like. The field is still taken apart, so
+  it compiles, warning only that `transport` is unused, and the heartbeat's
+  transport line names the same path, so a
+  check that looked for the path anywhere in the text would stay green; the
+  test matches whole `key  value` lines for that reason.
+
+```sweep-edit crates/dcs-mcp/src/verify/render.rs
+-     facts.push(("transport", transport.to_string()));
 ```
 
 ---

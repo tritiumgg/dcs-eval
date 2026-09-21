@@ -682,3 +682,493 @@ fn written(value: &Option<String>) -> String {
         None => "not set in the file".to_owned(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use dcs_eval::paths::Real;
+    use dcs_eval::standin::Standin;
+
+    use crate::export_line;
+    use crate::testing::Sandbox;
+    use crate::verify::tests::{
+        a_release, an_instant, fixture, install_files, installed, put, real,
+    };
+    use crate::verify::verify_at;
+
+    /// The report of a fixture as it stands, against the test release.
+    fn report_of(variant: &Real, output: &Path) -> Report {
+        let (release, _older, _current) = a_release();
+        verify_at(variant, output, &release, None, an_instant())
+    }
+
+    fn summary(report: &Report) -> String {
+        render(report, Detail::Summary)
+    }
+
+    /// The rows every healthy fixture shares under the verdict: our release,
+    /// the one line, and the two policy keys as the fixture writes them.
+    const HOOK_OK: &str =
+        "  ok       hook          Scripts\\Hooks\\DcsEvalExecutor.lua, this release";
+    const LINE_OK: &str = "  ok       Export.lua    loads the executor once";
+    const GATE: &str = "  note     autoexec.cfg  net.allow_unsafe_api = true\n  \
+                        note     autoexec.cfg  net.allow_dostring_in = {\"mission\", \"server\"}";
+    const VERSION: &str = "  note     DCS version   2.9.10.1234";
+    const VERBOSE: &str = "run dcs-mcp verify --verbose for the exact findings";
+
+    #[test]
+    fn a_healthy_install_is_verified_on_the_first_line_and_a_row_per_part() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+
+        let report = report_of(&variant, &output);
+
+        assert_eq!(
+            summary(&report),
+            format!(
+                "verified: {}\n\n{HOOK_OK}\n{LINE_OK}\n  ok       DCS           running \
+                 (process {}), not used yet since it started\n{VERSION}\n{GATE}",
+                variant.as_path().display(),
+                std::process::id()
+            )
+        );
+    }
+
+    #[test]
+    fn nothing_installed_says_so_and_names_the_one_command() {
+        let (_b, variant, output) = fixture();
+
+        let report = report_of(&variant, &output);
+
+        let want = [
+            format!(
+                "not verified: dcs-eval is not installed in {}",
+                variant.as_path().display()
+            ),
+            String::new(),
+            "  PROBLEM  hook          Scripts\\Hooks\\DcsEvalExecutor.lua is missing".to_owned(),
+            "  PROBLEM  Export.lua    Scripts\\Export.lua is missing".to_owned(),
+            "           fix: dcs-mcp install --variant DCS.openbeta".to_owned(),
+            "  waiting  DCS           has not loaded the executor yet".to_owned(),
+            "  note     autoexec.cfg  not there (normal: DCS writes it only when an option \
+             changes)"
+                .to_owned(),
+            String::new(),
+            VERBOSE.to_owned(),
+        ];
+        assert_eq!(summary(&report), want.join("\n"));
+    }
+
+    /// The state straight after `install`: not verified, and exit 1, but
+    /// `waiting` and not a problem, with the one thing to do.
+    #[test]
+    fn installed_but_not_started_is_waiting_and_not_verified() {
+        let (_b, variant, output) = fixture();
+        install_files(&variant);
+
+        let report = report_of(&variant, &output);
+
+        assert!(!report.verified());
+        let want = [
+            format!(
+                "not verified: installed in {}, and DCS has not loaded it yet",
+                variant.as_path().display()
+            ),
+            String::new(),
+            HOOK_OK.to_owned(),
+            LINE_OK.to_owned(),
+            "  waiting  DCS           has not loaded the executor yet".to_owned(),
+            "           fix: start DCS, then run dcs-mcp verify again".to_owned(),
+            GATE.to_owned(),
+            String::new(),
+            VERBOSE.to_owned(),
+        ];
+        assert_eq!(summary(&report), want.join("\n"));
+    }
+
+    #[test]
+    fn a_dcs_that_has_exited_is_waiting_on_a_restart() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let mut report = report_of(&variant, &output);
+        let session = report.session.session.as_mut().expect("a session");
+        session.process = Process::Exited;
+        let pid = session.pid;
+        report.session.problems = vec![status::Problem::ProcessGone { pid }];
+
+        let summary = summary(&report);
+
+        assert!(
+            summary.starts_with(&format!(
+                "not verified: installed in {}, and DCS is not running\n",
+                variant.as_path().display()
+            )),
+            "{summary}"
+        );
+        assert!(
+            summary.contains(&format!(
+                "  waiting  DCS           not running (it last ran as process {pid})\n           \
+                 fix: start DCS, then run dcs-mcp verify again\n"
+            )),
+            "{summary}"
+        );
+    }
+
+    #[test]
+    fn a_session_in_use_says_what_the_game_is_doing_and_never_that_quiet_is_dead() {
+        let (_b, variant, output) = fixture();
+        let mut ex = installed(&variant, &output);
+        ex.armed = true;
+        ex.phase = "sim".to_owned();
+        ex.beat(an_instant()).expect("the heartbeat is published");
+        let mut report = report_of(&variant, &output);
+        let pid = std::process::id();
+
+        let active = summary(&report);
+        assert!(
+            active.contains(&format!(
+                "  ok       DCS           running (process {pid}), active in a mission\n"
+            )),
+            "{active}"
+        );
+
+        let beat = report
+            .session
+            .session
+            .as_mut()
+            .and_then(|s| s.beat.as_mut())
+            .expect("the heartbeat is read");
+        beat.phase = "menu".to_owned();
+        beat.age = Age::Dormant(Duration::from_secs(856));
+        let idle = summary(&report);
+        assert!(
+            idle.contains(&format!(
+                "  ok       DCS           running (process {pid}), idle; last used 14 min ago \
+                 outside a mission\n"
+            )),
+            "{idle}"
+        );
+    }
+
+    /// Three install findings at once, each a row with the command that
+    /// clears it and no hash in sight.
+    #[test]
+    fn every_install_finding_is_a_row_with_its_fix() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let hooks = variant.as_path().join("Scripts").join("Hooks");
+        put(&hooks.join("DcsEvalExecutor.lua"), b"-- somebody else's\n");
+        put(
+            &hooks.join("DcsEvalExecutor.old.lua"),
+            b"-- a copy left behind\n",
+        );
+        put(
+            &export_line::path(&variant),
+            format!("{}\n{}\n", export_line::LINE, export_line::LINE).as_bytes(),
+        );
+
+        let summary = summary(&report_of(&variant, &output));
+
+        let want = [
+            format!(
+                "not verified: 3 problems in {}",
+                variant.as_path().display()
+            ),
+            String::new(),
+            "  PROBLEM  hook          Scripts\\Hooks\\DcsEvalExecutor.lua is not a file dcs-eval \
+             shipped"
+                .to_owned(),
+            "           fix: dcs-mcp install --replace --variant DCS.openbeta  (moves it aside \
+             first)"
+                .to_owned(),
+            "  PROBLEM  hook          Scripts\\Hooks\\DcsEvalExecutor.old.lua is a second copy of \
+             the executor, and DCS loads both"
+                .to_owned(),
+            "           fix: delete Scripts\\Hooks\\DcsEvalExecutor.old.lua".to_owned(),
+            "  PROBLEM  Export.lua    loads the executor 2 times".to_owned(),
+            "           fix: delete all but one of those lines from Scripts\\Export.lua".to_owned(),
+            "  ok       DCS           ".to_owned(),
+        ];
+        assert!(summary.starts_with(&want.join("\n")), "{summary}");
+        assert!(!summary.contains("sha256"), "{summary}");
+    }
+
+    #[test]
+    fn an_older_release_of_ours_is_a_problem_with_install_as_its_fix() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let hook = variant
+            .as_path()
+            .join("Scripts")
+            .join("Hooks")
+            .join("DcsEvalExecutor.lua");
+        put(&hook, b"-- an older release\n");
+
+        let summary = summary(&report_of(&variant, &output));
+
+        assert!(
+            summary.contains(
+                "  PROBLEM  hook          Scripts\\Hooks\\DcsEvalExecutor.lua is an older \
+                 dcs-eval release\n           fix: dcs-mcp install --variant DCS.openbeta\n"
+            ),
+            "{summary}"
+        );
+    }
+
+    /// A second writer leaves up to three marks, and they are one cause: one
+    /// row, and every exact sentence still under the full report.
+    #[test]
+    fn two_writers_are_one_row_and_every_exact_sentence() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let mut report = report_of(&variant, &output);
+        let here = real(variant.as_path());
+        report.session.problems = vec![
+            status::Problem::ForeignStamp {
+                saw: "1790020166-15404".to_owned(),
+                wanted: "1790027086-25924".to_owned(),
+            },
+            status::Problem::ForeignTransport {
+                saw: here.clone(),
+                wanted: here,
+            },
+        ];
+
+        let summary = summary(&report);
+        assert_eq!(
+            summary.matches("another copy of the executor").count(),
+            1,
+            "{summary}"
+        );
+        let full = render(&report, Detail::Full);
+        for problem in &report.session.problems {
+            assert!(
+                full.contains(&format!("\n  problem: {problem}\n")),
+                "{full}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_temp_folder_outside_this_users_is_a_problem_with_no_fix() {
+        let (b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let mut report = report_of(&variant, &output);
+        let executor = real(&b.dir("elsewhere"));
+        let client = real(&std::env::temp_dir());
+        report.session.problems = vec![status::Problem::TempdirDisagrees {
+            executor: executor.clone(),
+            client: client.clone(),
+        }];
+
+        let summary = summary(&report);
+
+        assert!(
+            summary.contains(&format!(
+                "  PROBLEM  DCS           uses the temp folder {executor}, which is not this \
+                 user's ({client}); replies may not reach dcs-mcp\n"
+            )),
+            "{summary}"
+        );
+        assert!(!summary.contains("fix:"), "{summary}");
+    }
+
+    #[test]
+    fn a_key_the_file_does_not_set_is_a_row_saying_so() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        put(
+            &variant.as_path().join("Config").join("autoexec.cfg"),
+            b"net.allow_unsafe_api = true\n",
+        );
+
+        let summary = summary(&report_of(&variant, &output));
+
+        assert!(
+            summary.ends_with(
+                "  note     autoexec.cfg  net.allow_unsafe_api = true\n  \
+                 note     autoexec.cfg  net.allow_dostring_in is not set"
+            ),
+            "{summary}"
+        );
+    }
+
+    /// The full report is the summary with more under it: the same first
+    /// lines, every problem's sentence as it was always worded and in the
+    /// order found, then the facts.
+    #[test]
+    fn the_full_report_is_the_summary_then_every_exact_sentence_then_details() {
+        let (_b, variant, output) = fixture();
+
+        let report = report_of(&variant, &output);
+        let full = render(&report, Detail::Full);
+        let summary = summary(&report);
+
+        let rows = summary
+            .strip_suffix(&format!("\n\n{VERBOSE}"))
+            .expect("a report not verified ends in the pointer to --verbose");
+        assert!(full.starts_with(rows), "{full}");
+        let exact: Vec<String> = report
+            .problems
+            .iter()
+            .map(ToString::to_string)
+            .chain(report.session.problems.iter().map(ToString::to_string))
+            .map(|sentence| format!("  problem: {sentence}"))
+            .collect();
+        assert_eq!(exact.len(), 3);
+        assert!(
+            full.contains(&format!(
+                "\n\nproblems (exact)\n{}\n\ndetails\n",
+                exact.join("\n")
+            )),
+            "{full}"
+        );
+        assert!(!full.contains("--verbose"), "{full}");
+    }
+
+    /// Every fact the report carries is a line of `details`. The session and
+    /// its heartbeat are taken apart field by field, so a field added to
+    /// either fails to compile here until it is given a line.
+    #[test]
+    fn full_report_carries_every_session_fact() {
+        let (_b, variant, output) = fixture();
+        let mut ex = installed(&variant, &output);
+        ex.armed = true;
+        ex.phase = "sim".to_owned();
+        ex.last_callback = "onSimulationFrame".to_owned();
+        ex.callbacks = vec![
+            "onSimulationStart".to_owned(),
+            "onSimulationFrame".to_owned(),
+        ];
+        ex.tick = 5065;
+        ex.beat(an_instant()).expect("the heartbeat is published");
+
+        let report = report_of(&variant, &output);
+        let full = render(&report, Detail::Full);
+        let line = |key: &str, value: &str| {
+            assert!(
+                full.lines().any(|l| l == detail_line(key, value)),
+                "no `{key}` line reading {value}:\n{full}"
+            );
+        };
+
+        line("release", &report.release);
+        line("variant", &report.variant.display().to_string());
+        let Hook::Ours { sha256, .. } = &report.hook else {
+            panic!("{:?}", report.hook)
+        };
+        line(
+            "hook",
+            &format!(
+                "{}, ours, sha256 {sha256}, the release this binary carries",
+                report.hook_path.display()
+            ),
+        );
+        line(
+            "Export.lua",
+            &format!(
+                "{}, one line loading the executor",
+                report.export_path.display()
+            ),
+        );
+        line(
+            "autoexec.cfg",
+            &format!("{}, read", report.gate.path.display()),
+        );
+        line("net.allow_unsafe_api", "true, as written");
+        line(
+            "net.allow_dostring_in",
+            "{\"mission\", \"server\"}, as written",
+        );
+
+        let status::Status {
+            output: out,
+            session,
+            problems,
+        } = &report.session;
+        line("output", &out.display().to_string());
+        assert!(problems.is_empty(), "{problems:?}");
+        let SessionStatus {
+            host,
+            stamp,
+            pid,
+            started,
+            process,
+            transport,
+            eval,
+            arm_file,
+            app_version,
+            tempdir,
+            beat,
+            leftover,
+        } = session.as_ref().expect("a session");
+        line("session", &format!("{stamp}, started {started}"));
+        line("host", host);
+        line("process", &format!("{pid}, {process}"));
+        line("transport", &transport.to_string());
+        line("eval", if *eval { "on" } else { "off" });
+        line("arm file", &arm_file.to_string());
+        assert_eq!(
+            app_version, &report.app_version,
+            "one check, measured the same"
+        );
+        line("app_version", &app_version.to_string());
+        line("temp folder", &tempdir.to_string());
+        assert_eq!(
+            leftover, &None,
+            "the relaunch test holds the leftover's line"
+        );
+
+        let BeatStatus {
+            belongs,
+            host: beat_host,
+            transport: beat_transport,
+            phase,
+            armed,
+            since,
+            ticks,
+            last_callback,
+            callbacks,
+            age,
+        } = beat.as_ref().expect("the heartbeat is read");
+        assert!(*belongs && *armed);
+        assert_eq!((*ticks, callbacks.len()), (5065, 2), "the fixture's own");
+        line(
+            "heartbeat",
+            &format!(
+                "phase {phase}, armed since {since}, {age}, {ticks} ticks, last callback {}, \
+                 callbacks {}, this session's",
+                last_callback.as_deref().expect("a last callback"),
+                callbacks.join(",")
+            ),
+        );
+        line("heartbeat host", beat_host);
+        line("heartbeat transport", &beat_transport.to_string());
+    }
+
+    /// `status` over an install it could not look at still words the
+    /// session the one way, with no Debug syntax in it.
+    #[test]
+    fn the_session_alone_renders_its_rows_problems_and_facts() {
+        let b = Sandbox::new();
+        let output = b.dir("out");
+        let _ex = Standin::open(&output, "hook").expect("the stand-in opens");
+        let session = status::status_at(&output, an_instant());
+
+        let rendered = render_session(&session);
+
+        assert!(
+            rendered.contains(&detail_line("output", &output.display().to_string())),
+            "{rendered}"
+        );
+        let exact: Vec<String> = session
+            .problems
+            .iter()
+            .map(|p| format!("  problem: {p}"))
+            .collect();
+        assert!(!exact.is_empty(), "nothing published a handshake");
+        assert!(rendered.contains(&exact.join("\n")), "{rendered}");
+        assert!(!rendered.contains("Some("), "{rendered}");
+    }
+}
