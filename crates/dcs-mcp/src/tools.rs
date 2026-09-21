@@ -296,9 +296,8 @@ pub(crate) fn status(serve: &Serve, host: Option<&str>) -> Answered {
         Ok(host) => host,
         Err(no) => return Answered::plain(no),
     };
-    // The session in full sits under the report, rendered through `Debug` on
-    // purpose and for now: the summary above is what a reader needs first,
-    // and a second wording of the rest would be inventing one twice.
+    // The full report: the summary a person reads first, then every problem
+    // as it is exactly worded and every fact of the session (ADR 0032).
     Answered::plain(say(
         "status",
         match writedirs(serve).into_iter().next() {
@@ -308,8 +307,7 @@ pub(crate) fn status(serve: &Serve, host: Option<&str>) -> Answered {
                 // spelt it.
                 let output = output_in(variant.as_path(), host);
                 let report = verify::verify(&variant, &output);
-                let session = format!("{:#?}", report.session);
-                vec![report.to_string(), session]
+                vec![verify::render(&report, verify::Detail::Full)]
             }
             // The install is not on the disk, so there is nothing of it to
             // look at — and the session half is still printed, since a
@@ -324,10 +322,7 @@ pub(crate) fn status(serve: &Serve, host: Option<&str>) -> Answered {
                         .join(&serve.options().variant)
                         .display()
                 ),
-                format!(
-                    "{:#?}",
-                    status::status(&serve.options().at_host(host).output())
-                ),
+                verify::render_session(&status::status(&serve.options().at_host(host).output())),
             ],
         },
     ))
@@ -845,6 +840,14 @@ mod tests {
         assert!(
             rendered.contains("DcsEvalExecutor.lua"),
             "and it names the file that is missing: {rendered}"
+        );
+        assert!(
+            rendered.starts_with("status\nnot verified: ") && rendered.contains("\ndetails\n"),
+            "the verdict under the head word, and the facts under the rows: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Status {") && !rendered.contains("\\\\"),
+            "no Debug dump of the session: {rendered}"
         );
 
         client.cancel().await.expect("the client hangs up");
