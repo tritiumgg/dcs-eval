@@ -263,7 +263,7 @@ does *not* cover. A task that builds a control adds its entry there.
 - `docs/STATE.md` — what was just done and what is next. Read it first.
 - `docs/mutations.md` — every control, the mutation that must redden it, and
   what was observed when it did.
-- `docs/PLAN.md` — build order, 62 tasks in 10 stages.
+- `docs/PLAN.md` — build order, 63 tasks in 10 stages.
 - `docs/specs/` — the two frozen specifications the build starts from. They are
   not maintained and the build drifts from them by design.
 - `docs/decisions/` — where the build went somewhere the specifications did

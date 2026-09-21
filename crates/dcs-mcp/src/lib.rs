@@ -44,6 +44,10 @@ pub mod uninstall;
 // line in `Export.lua`, the policy gate, the session — and no write at all.
 pub mod verify;
 
+// The installer's three verbs from a terminal: where `Saved Games` and the
+// variant are, the steps in order, and what each one did, in words.
+pub mod installer;
+
 // The MCP server itself: the options it is started with, the client it builds
 // per call, and the stdio transport it speaks over.
 pub mod serve;

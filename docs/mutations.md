@@ -1297,8 +1297,8 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 ## Stage 9 — proven live
 
-T62 is the one developer-only row here: the switch T50 turns. Its controls are
-swept like any other.
+T62 and T63 are the developer-only rows here: the switch T50 turns, and the
+installer verbs T52 starts from. Their controls are swept like any other.
 
 ### reads/opt-in-sent-while-off
 
@@ -1354,6 +1354,42 @@ swept like any other.
 +             &[],
 ```
 
+### installer/ambiguity-picked
+
+- task: T63
+- command: `mise exec -- cargo test -p dcs-mcp installer`
+- reddens: `installer::tests::three_variants_are_refused_every_one_named_and_nothing_written`
+- note: an unnamed variant defaults to the plain `DCS` folder, the guess a
+  machine with three variants and only `DCS` in use invites. The mutant
+  installs into `DCS` and exits 0, so the check reddens at the exit code
+  before its snapshot. `one_variant_needs_no_name` reddens beside it: a lone
+  `DCS.openbeta` with the default `DCS` is refused as a variant not there,
+  the same defect from the other side. Every other test names its variant
+  and stays green, and so does `locate/ambiguity-picked`: `locate` is
+  unchanged, and this watches the verb handing it an answer nobody gave.
+
+```sweep-edit crates/dcs-mcp/src/installer.rs
+-         .target(parsed.variant.as_deref(), None)
++         .target(parsed.variant.as_deref().or(Some("DCS")), None)
+```
+
+### installer/replace-assumed
+
+- task: T63
+- command: `mise exec -- cargo test -p dcs-mcp installer`
+- reddens: `installer::tests::a_foreign_hook_is_refused_without_replace_and_nothing_written`
+- note: the flag read and then dropped between the command line and the
+  placement. `install/foreign-hash-replaced-without-replace` watches the
+  library's guard; this watches the wire to it.
+  `replace_parks_the_foreign_hook_and_installs` stays green. The mutant
+  warns that `replace` is a field never read; the warning is not the red,
+  the assertion is.
+
+```sweep-edit crates/dcs-mcp/src/installer.rs
+-     let replace = parsed.replace;
++     let replace = true;
+```
+
 ---
 
 ## Out of scope
@@ -1400,8 +1436,9 @@ an entry here like any other, and both figures move.
 - controls: 0
 - breakdown: none, 0. Every Stage 7 and Stage 8 row is built, and its
   mutations are entries above. In Stage 9, T52's one mutation is
-  `verify/stray-prefix-aimed-at-the-wrong-project` and T62, Stage 9's one
-  developer-only row, has entries of its own; all are counted in scope.
+  `verify/stray-prefix-aimed-at-the-wrong-project`, and T62 and T63, Stage
+  9's two developer-only rows, have entries of their own; all are counted in
+  scope.
   Stage 9's other rows need a running game, name no mutation and are owed
   none.
 

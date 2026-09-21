@@ -53,6 +53,13 @@ impl SavedGames {
         })
     }
 
+    /// The root, as it resolved. What a `serve` line naming this install
+    /// should carry, rather than a variant's parent, which a junction can
+    /// move.
+    pub fn root(&self) -> &Real {
+        &self.root
+    }
+
     /// Every `DCS*` directory directly under the root, sorted by folded
     /// name so that a refusal naming them prints the same order twice.
     ///

@@ -18,7 +18,7 @@ citations below point into documents that still say "bridge".
 
 ## Granularity
 
-This plan carries **62 tasks across 10 stages**. The count is driven by the four right-sizing
+This plan carries **63 tasks across 10 stages**. The count is driven by the four right-sizing
 tests, and the splits fall at interfaces rather than at steps: each Lua carrier (`hook` local,
 `net.dostring_in`, `a_do_script`) is one task because changing how one crosses a state
 boundary must not rewrite the others; the client and the server are separate crates and separate
@@ -356,6 +356,7 @@ stays as it closed.
 
 | id | task | done when | needs | runs on |
 |---|---|---|---|---|
+| T63 | The installer's three verbs on the binary: `dcs-mcp install`, `verify` and `uninstall` over what T43–T46, T60 and T61 built — `Saved Games` from the known folder unless `--saved-games`, two variants or more refused with every name and `--variant` in the refusal, never picked and never prompted for (ADR 0024), `--replace` the one yes, and `install` printing what happens next, the `verify` line and the MCP registration snippet | `cargo test -p dcs-mcp installer` shows three variants refused with each named and nothing written, a named one installed with its siblings byte-identical, a foreign hook refused without `--replace`, `verify` exiting 1 on a problem and 0 on `verified`, and the real binary installing into a fixture, printing `verified` against a stand-in session and uninstalling back to the bytes it started from; mutations: an unnamed variant defaulting to `DCS` reddens the three-variant check; `--replace` assumed rather than read reddens the foreign-hook check; `verify` exiting 0 whatever it found reddens the exit check; the verbs left out of the binary's dispatch reddens the real-binary check | T43,T44,T45,T46,T60,T61 | developer-only |
 | T52 | The cutover from `dcs-api-bridge`, by hand and unassisted: its hook deleted and its `Export.lua` line removed before this executor installs (ADR 0022) | on a real machine: `DcsApiEval.lua` gone from `Scripts\Hooks\` and its `dofile` line gone from `Export.lua`, then `dcs-mcp install` and `dcs-mcp verify` green; no code checks any of it, and the refusal that once did is removed; mutation: pointing `verify`'s one stray prefix at `dcsapi` instead of `dcseval` must redden — a report that stops naming a second copy of our own executor and starts naming the project this one replaces has undone the narrowing in both directions at once | Milestone C | DCS + human |
 | T47 | The first live run: round-trip p50/p95 with the event-driven wait, `cpu_ms`/reply, replies/tick at W=8, seven-state generation wall time | the run script prints all four rows per state against the recorded baselines (30 ms p50, 465 s/generation); a run that prints none has not measured the change | Milestone C | DCS + human |
 | T48 | The dormant frame-time three-way comparison in DCS (hook absent / installed-dormant / armed-idle) | the script prints the three frame-time figures; the dormant figure is at or below the 0.098 ms baseline, which is the incumbent measured on one machine, DCS 2.9.28.26385, one session, so a figure that disagrees on other hardware is a new measurement rather than a regression; a higher figure here reopens `bridge.md` §2 and is reported as such | Milestone C | DCS + human |
