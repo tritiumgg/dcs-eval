@@ -28,13 +28,15 @@ cargo test --workspace
 # cargo's own view of the workspace; the four commands above stay green. So
 # the manifest is read as written. Both crates are named on purpose: the
 # library so that a Rust consumer other than the binary can link it, the
-# binary because it is what a user downloads.
+# binary because it is what a user downloads. The refusal leads with `FAIL  `
+# because that is the dialect the mutation sweep reads a red in; without it the
+# sweep would take a dropped member for a build that broke.
 members=$(grep -E '^members[[:space:]]*=' Cargo.toml)
 for crate in dcs-eval dcs-mcp; do
     case "$members" in
         *"\"crates/$crate\""*) ;;
         *)
-            echo "workspace: crates/$crate is not in Cargo.toml's members" >&2
+            echo "FAIL  workspace: crates/$crate is not in Cargo.toml's members" >&2
             exit 1
             ;;
     esac
