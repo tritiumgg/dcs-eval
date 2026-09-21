@@ -625,7 +625,7 @@ mod tests {
     use dcs_eval::paths;
     use dcs_eval::standin::Standin;
 
-    use crate::testing::{Sandbox, a_live_session, reheader, snapshot};
+    use crate::testing::{Sandbox, a_live_session, ran, reheader, snapshot, ticking};
 
     /// Every expectation compares resolved paths, never the spelling that
     /// made them: the host's temp directory is usually spelled short.
@@ -1255,6 +1255,53 @@ mod tests {
             rendered(&report)
         );
         assert!(report.verified(), "{}", rendered(&report));
+    }
+
+    /// The first live load: DCS handed its process a folder of its own
+    /// inside the user's temp directory (ADR 0029). The install verifies,
+    /// and the round trip the handshake addresses answers.
+    #[test]
+    fn a_dcs_temp_folder_under_this_clients_verifies_and_answers_a_ping() {
+        let (b, variant, output) = fixture();
+        let mut ex = installed(&variant, &output);
+        let (release, _older, _current) = a_release();
+        ticking(&mut ex);
+        let client = real(&std::env::temp_dir());
+        let dcs = client.as_path().join("DCS");
+        reheader(
+            &output.join("executor.txt"),
+            "lfs_tempdir",
+            &dcs.display().to_string(),
+        );
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+        assert!(report.verified(), "{}", rendered(&report));
+        assert_eq!(
+            report.session.session.as_ref().map(|s| &s.tempdir),
+            Some(&status::Agreement::Within {
+                executor: real(&dcs),
+                client,
+            }),
+            "{}",
+            rendered(&report)
+        );
+
+        let line = [
+            "ping",
+            "--wait-seconds",
+            "10",
+            "--saved-games",
+            &b.join("saved").display().to_string(),
+            "--variant",
+            "DCS.openbeta",
+            "--data-dir",
+            &b.join("data").display().to_string(),
+        ]
+        .map(str::to_owned)
+        .to_vec();
+        let (code, shown) = ran(&mut ex, line);
+        assert_eq!(code, 0, "{shown}");
+        assert!(shown.contains("pong"), "{shown}");
     }
 
     #[test]
