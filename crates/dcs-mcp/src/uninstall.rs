@@ -309,8 +309,8 @@ mod tests {
     const STRANGER: &[u8] = b"-- somebody else's hook\n";
 
     /// A release with two shipped hashes, so that "ours, older" and "ours,
-    /// current" are both reachable. The embedded list has one entry, which
-    /// makes the pair unreachable through it.
+    /// current" are both reachable. The embedded list carries older releases'
+    /// hashes and not their bytes, which makes the pair unreachable through it.
     fn a_release() -> (Executor<'static>, String) {
         // Leaked so the `Executor` can be `'static` and the hashes can
         // still be computed rather than written down; the process is a

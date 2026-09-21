@@ -322,11 +322,11 @@ fn written(value: &Option<String>) -> String {
 /// `output`, against `release` and the DCS build `measured`.
 ///
 /// The release and the measured build are parameters for the reason the
-/// placement's release is one: the shipped list has a single entry today
-/// and [`status::MEASURED_ON`] is `None`, so "ours but an older release"
-/// and "the running build differs" are both unreachable through the real
-/// constants — and a control that watches a difference it cannot produce
-/// watches nothing.
+/// placement's release is one: the shipped list holds older releases' hashes
+/// and not their bytes, and [`status::MEASURED_ON`] is `None`, so neither "ours
+/// but an older release" nor "the running build differs" can be produced from
+/// the real constants — and a control that watches a difference it cannot
+/// produce watches nothing.
 pub fn verify_at(
     variant: &Real,
     output: &Path,
@@ -649,8 +649,9 @@ mod tests {
     const CURRENT: &[u8] = b"-- this release\n";
 
     /// A release with two shipped hashes, so that "ours, older" and "ours,
-    /// current" are both reachable. The embedded list has one entry, which
-    /// makes an older release unreachable through it.
+    /// current" are both reachable. The embedded list carries older releases'
+    /// hashes and not their bytes, which makes an older release unreachable
+    /// through it.
     fn a_release() -> (Executor<'static>, String, String) {
         let older = Box::leak(hex(&digest(OLDER)).into_boxed_str());
         let current = Box::leak(hex(&digest(CURRENT)).into_boxed_str());

@@ -35,10 +35,10 @@ use crate::register::{Action, DataDir, RegisterError};
 ///
 /// The release is a parameter and not read off `embed` inside the placement,
 /// for the same reason `register::mint` takes its limit rather than reading
-/// the constant: the real shipped list has one entry today, so an upgrade
-/// whose old bytes genuinely differ from the new is unreachable without a
-/// second release to upgrade from. Handing the release in is what makes that
-/// case testable at all.
+/// the constant: the real shipped list names every older release by its hash
+/// alone, so an upgrade from bytes that genuinely differ from the new needs
+/// those bytes, and only a test can hand them in. Handing the release in is
+/// what makes that case testable at all.
 pub struct Executor<'a> {
     pub name: &'a str,
     pub bytes: &'a [u8],
@@ -310,8 +310,9 @@ mod tests {
     const CURRENT: &[u8] = b"-- this release\n";
 
     /// A release with two shipped hashes, so that "ours, older" and "ours,
-    /// current" are both reachable. The embedded list has one entry, which
-    /// makes an upgrade from genuinely different bytes unreachable through it.
+    /// current" are both reachable. The embedded list carries older releases'
+    /// hashes and not their bytes, which makes an upgrade from genuinely
+    /// different bytes unreachable through it.
     fn a_release() -> (Executor<'static>, String, String) {
         // Leaked so the `Executor` can be `'static` and the hashes can still
         // be computed rather than written down; the process is a test binary
