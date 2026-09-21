@@ -28,23 +28,22 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T47, T48 and T50's reads: the live instrument** — `dcs-mcp live`: `dormant`, `rtt` and `read` append to `live.jsonl`, and `live report` prints all 47 Stage 9 rows, an unmeasured one with its reason (ADR 0025 for the dormant method; `reads::alone` sends a read with nothing beside it). Proved off DCS only.
 - **T63** — `dcs-mcp install`, `verify` and `uninstall` are verbs of the binary: `Saved Games` from the known folder or `--saved-games`, several variants refused and named until `--variant` says which, never picked or prompted for (ADR 0024). Proved on fixtures; the real `Saved Games` is T52's.
 - **T62** — the seven opt-in reads, tier 2's four and the three from the crashing batch, off by default and asked for by group or by key through `game-state --reads` and `dcs_game_state`'s `reads`; nothing is refused by name any more (ADR 0023).
-- **T52's code half** — the installer's incumbent refusal and `verify`'s `dcsapi` stray prefix are gone (ADR 0022): `install` reads one leaf name in `Scripts\Hooks\` and `verify` reports only a second copy of our own executor. What remains of T52 is live and manual.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**Stage 9**, the live proofs. It is the critical path, it cannot be shortened by
-parallel effort, and **only the maintainer can verify any of it**, at a running
-install. Everything provable off DCS is now proved.
-T50 can now send each of the seven opt-in reads alone, one per session, with T62's switch.
+**Stage 9**, the live proofs; **only the maintainer can verify any of it**, at a running
+install. The instrument is `dcs-mcp live` (README, "Measuring a live install"), proved off DCS only: whether it measures DCS correctly is the first session's to see.
+At the menu: `live dormant`, `live rtt`; in a mission: `live rtt` again (`missionscripting`, `export`) and `live rtt --host export`. Each opt-in read is `live read <key>`, one per DCS launch, seven launches. `live report` prints all 47 rows.
+Not built, rows printing `unmeasured: not built`: `live scene` (T50's `sim_mode` per scene, editor-vs-menu, `mission_name` at the menu, callbacks), a follow-up branch; and the s17 fixture (T49).
 T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
 
-The MCP registration still points at `dcs-api-bridge`; the swap was parked on
-Milestone C, which has now closed, and strands a session mid-task. That is the
-maintainer's call to make (ADR 0001); `install` now prints the snippet.
+The MCP registration still points at `dcs-api-bridge`; the swap strands a session
+mid-task and is the maintainer's call (ADR 0001); `install` prints the snippet.
 
 ## After that
 
