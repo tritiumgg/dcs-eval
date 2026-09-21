@@ -1423,6 +1423,37 @@ installer verbs T52 starts from. Their controls are swept like any other.
 +     word.is_empty()
 ```
 
+### installer/verify-host-ignored
+
+- task: T63
+- command: `mise exec -- cargo test -p dcs-mcp installer`
+- reddens: `installer::tests::verify_reads_the_session_of_the_host_it_is_given`
+- note: `--host` parsed and then dropped, so `verify --host export` reports
+  the hook's session, which is not there, and exits 1. Every other test
+  leaves `--host` out and stays green. The mutant compiles clean.
+
+```sweep-edit crates/dcs-mcp/src/installer.rs
+-         host: host.unwrap_or(Host::Hook),
++         host: { let _ = host; Host::Hook },
+```
+
+### installer/data-dir-always-named
+
+- task: T63
+- command: `mise exec -- cargo test -p dcs-mcp installer`
+- reddens: `installer::tests::the_snippet_names_a_data_directory_only_when_the_line_did`
+- note: the snippet spells the known data directory into the client's
+  config though the line never named one. Every test that runs `install`
+  passes `--data-dir`, so none of them can tell; the check calls the
+  choice directly, since an `install` without `--data-dir` would reach the
+  real `%LOCALAPPDATA%`. The mutant warns that `parsed` is unused; the
+  warning is not the red, the assertion is.
+
+```sweep-edit crates/dcs-mcp/src/installer.rs
+-     parsed.data_dir.as_ref().map(|_| data.path())
++     Some(data.path())
+```
+
 ---
 
 ## Out of scope
