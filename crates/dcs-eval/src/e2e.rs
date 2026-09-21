@@ -33,7 +33,10 @@
 //! handshake now names and answer `superseded`. The first session's
 //! process is one that has exited, as the old game's is after a restart,
 //! so a wait that stopped reading the stamp answers `dead` instead, and the
-//! check goes red at once rather than at its deadline.
+//! check goes red at once rather than at its deadline. A second restart
+//! keeps the pid, live, as a relaunch handed the old one back would, so the
+//! stamps differ in their time alone and a wait that compared pids rather
+//! than stamps answers `pending` instead.
 //!
 //! The request is sent before the restart and waited on after it, never
 //! across it. A wait in flight holds a watch on the first session's reply
@@ -312,19 +315,15 @@ fn a_ping_the_client_sends_is_answered_by_the_shipped_executor() {
     );
 }
 
-#[test]
-fn a_request_to_a_session_that_restarted_is_read_as_superseded() {
-    // The old game is gone after a restart. The child is held so that its
-    // pid is not handed to another process while the test runs.
-    let (_gone, old) = a_pid_that_has_exited();
-    let new = std::process::id();
+/// A request sent to a first session under `old`, a second session loaded
+/// over the same box under `new`, and the client's `wait` on the first,
+/// which must answer `superseded`. The two handshakes come back, the
+/// first's and the one the verdict re-read, for the caller's own checks.
+fn restarted(old: u32, new: u32) -> (Handshake, Handshake) {
     let mut live = start(Some((old, new)));
     let first = Handshake::read(&live.handshake_path)
         .expect("the client reads the first session's handshake");
-    assert_eq!(
-        first.pid, old,
-        "the first session runs under the pid that exited"
-    );
+    assert_eq!(first.pid, old, "the first session runs under the first pid");
     let session = Session::addressed(&first);
 
     let sent = send(
@@ -362,10 +361,36 @@ fn a_request_to_a_session_that_restarted_is_read_as_superseded() {
     );
     assert_eq!(
         second.pid, new,
-        "the second session runs under the live pid"
+        "the second session runs under the second pid"
     );
     assert!(
         !live.req.join(format!("{ID}.req")).exists(),
         "the request went with the first session's directory"
+    );
+    (first, second)
+}
+
+#[test]
+fn a_request_to_a_session_that_restarted_is_read_as_superseded() {
+    // The old game is gone after a restart. The child is held so that its
+    // pid is not handed to another process while the test runs.
+    let (_gone, old) = a_pid_that_has_exited();
+    restarted(old, std::process::id());
+}
+
+#[test]
+fn a_relaunch_handed_the_old_pid_back_is_read_as_superseded() {
+    // Windows may hand a relaunched game the pid the old one had, and then
+    // the stamp differs in its time alone. The pid is this process's, so
+    // it is live throughout: a wait that compared pids rather than stamps
+    // would see nothing changed and answer `pending` at its deadline.
+    let pid = std::process::id();
+    let (first, second) = restarted(pid, pid);
+    let tail = format!("-{pid}");
+    assert!(
+        first.stamp.ends_with(&tail) && second.stamp.ends_with(&tail),
+        "both stamps carry the one pid: {} and {}",
+        first.stamp,
+        second.stamp
     );
 }

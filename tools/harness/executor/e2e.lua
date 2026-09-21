@@ -29,15 +29,15 @@
 -- first session loads under the first pid and is never ticked; once the
 -- client has sent and dropped `restart` at the box's root, a second
 -- session loads in a state of its own over the same box, under the second
--- pid, as a DCS launched again would. It sweeps the first session's
--- directory, the request and the arm file with it, and publishes its own
--- handshake under the one name a client re-reads. Then it ticks a few
--- frames to show it was handed nothing. The client's `wait` on the first
--- session runs after this suite has ended, and its verdict is the Rust
--- side's claim. The sentinel, rather than the request's own name, is what
--- the suite waits for, because `send` ensures the arm file after the
--- request lands, and a sweep in that gap races the client for the
--- directory.
+-- pid, as a DCS launched again would; the two pids may be one. It sweeps
+-- the first session's directory, the request and the arm file with it,
+-- and publishes its own handshake under the one name a client re-reads.
+-- Then it ticks a few frames to show it was handed nothing. The client's
+-- `wait` on the first session runs after this suite has ended, and its
+-- verdict is the Rust side's claim. The sentinel, rather than the
+-- request's own name, is what the suite waits for, because `send` ensures
+-- the arm file after the request lands, and a sweep in that gap races the
+-- client for the directory.
 --
 -- The deadline is wall-clock seconds from after the load, counted with
 -- `os.time`, whose granularity is nothing against the budget. It is shorter
@@ -143,6 +143,14 @@ if restart then
 
   local host2 = { writedir = host.writedir, tempdir = host.tempdir, pid = tonumber(new) }
   local env2 = t.state("hook", host2)
+  -- The second launch reads a clock a second on from the runner's, so its
+  -- stamp differs from the first's even when both loads fall in one second
+  -- under one pid: a DCS launched again is always later, and a relaunch
+  -- handed the old pid back differs from the first in the time alone.
+  local clock = env2.os.time
+  env2.os.time = function()
+    return clock() + 1
+  end
   t.load_executor(env2)()
   local B = rawget(env2, NAME)
   t.eq(type(B), "table", "restart: the second session loaded over the same box")
