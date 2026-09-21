@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-20
+**Last updated:** 2026-09-21
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -28,9 +28,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T62** — the seven opt-in reads, tier 2's four and the three from the crashing batch, off by default and asked for by group or by key through `game-state --reads` and `dcs_game_state`'s `reads`; nothing is refused by name any more (ADR 0023).
 - **T52's code half** — the installer's incumbent refusal and `verify`'s `dcsapi` stray prefix are gone (ADR 0022): `install` reads one leaf name in `Scripts\Hooks\` and `verify` reports only a second copy of our own executor. What remains of T52 is live and manual.
 - **T40, T45, T46** — the read-and-eval CLI verbs with `--out`/`--capture` worded by the one renderer; `uninstall` removing its own `dofile` line by whole-line equality and restoring what it parked; `verify` reading everything and writing nothing. **Stage 8 is closed.**
-- **T58, T59** — the run record takes the reader's own digest, never a recomputed one, and a file eval refused before it read a byte writes no line (ADR 0021); sixty seconds of silence wake nothing, measured on the runtime's own paused clock rather than by sleeping. **Stage 7 is closed.**
 
 *The last three at most, one line each. Git log holds the rest.*
 
@@ -39,6 +39,7 @@ broken. Empty this when the task closes.*
 **Stage 9**, the live proofs. It is the critical path, it cannot be shortened by
 parallel effort, and **only the maintainer can verify any of it**, at a running
 install. Everything provable off DCS is now proved.
+T50 can now send each of the seven opt-in reads alone, one per session, with T62's switch.
 
 The MCP registration still points at `dcs-api-bridge`; the swap was parked on
 Milestone C, which has now closed. That is the maintainer's call to make.

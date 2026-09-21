@@ -18,7 +18,7 @@ citations below point into documents that still say "bridge".
 
 ## Granularity
 
-This plan carries **61 tasks across 10 stages**. The count is driven by the four right-sizing
+This plan carries **62 tasks across 10 stages**. The count is driven by the four right-sizing
 tests, and the splits fall at interfaces rather than at steps: each Lua carrier (`hook` local,
 `net.dostring_in`, `a_do_script`) is one task because changing how one crosses a state
 boundary must not rewrite the others; the client and the server are separate crates and separate
@@ -72,7 +72,8 @@ names a count, a diff, or a test that reddens under a stated mutation.
    and by T48 as a frame-time measurement; a dormant figure above the baseline reopens `bridge.md`
    §2 (§2.3).
 5. **Every task is marked `developer-only` or `DCS + human` and sequenced on it.** The DCS tasks are
-   Stage 9, last, because they are wall-clock-bound and cannot be parallelised by adding effort.
+   Stage 9, last, because they are wall-clock-bound and cannot be parallelised by adding effort —
+   with one developer-only row, T62, filed there because it is T50's switch.
 
 **Decision records** (this plan makes two; each carries a revisit condition):
 
@@ -98,12 +99,12 @@ gets done — no task with no honest terminal state):
 - **Consumer walkers, record grammars, drivers, cursors.** `bridge.md` §7.0 moved `census` and
   `reflect` out of the protocol. This project ships the two ops and the wrapper; a consumer ships
   the chunk it evaluates and decides what to walk. `mcp.md` keeps no catalogue of reads beyond the
-  tier-1/tier-2 constant list (T35).
+  tier-1 list and its seven opt-in reads (T35, T62).
 
 **Spikes** (open questions with exit conditions, folded into the live tasks rather than left as
 rows): editor-vs-menu detection (T50; exit: one of three candidates measured, else `menu-or-editor`
-stands); tier-2 read safety from a hook (T50; exit: each read measured alone under the supervisor
-before it is enabled). Neither blocks Milestones A–C.
+stands); whether the seven opt-in reads are safe from a hook (T50; exit: each sent alone under the
+supervisor, one per session, and the result recorded). Neither blocks Milestones A–C.
 
 ---
 
@@ -133,10 +134,10 @@ before it is enabled). Neither blocks Milestones A–C.
   row and the permanent-install acceptance (T51) passes; the dormant frame-time is at or below the
   baseline. Covers Stage 9.
 
-The critical path runs through Stage 9: those six tasks need DCS running with a person to set the
-scene, are wall-clock-bound, and cannot be shortened by parallel effort — so every off-DCS control
-that *can* be built and harness-proven earlier is, and Stage 9 inherits only what genuinely needs a
-real frame.
+The critical path runs through Stage 9: its six DCS + human tasks need DCS running with a person to
+set the scene, are wall-clock-bound, and cannot be shortened by parallel effort — so every off-DCS
+control that *can* be built and harness-proven earlier is, and Stage 9 inherits only what genuinely
+needs a real frame, and T62, the switch T50 turns.
 
 ---
 
@@ -273,7 +274,7 @@ fallback and the watch lands on top of it. ADR 0011 is why none of this brings i
 | T34 | What `evalFile` refuses before a byte is read: containment against the roots, `Config\`, the install, and the ceiling taken off the stat against the handshake's `max_request_bytes`, never assumed | `cargo test -p dcs-eval file_refusals` prints its count, showing a path outside every root, a `Config\` path and an install path each refused naming the rule and no content, and a file one byte over the ceiling refused naming the limit and the size; mutations: opening the file before the containment check reddens the guard, whose fixture is a path the process could not read anyway so that a late refusal cannot pass for an early one; the ceiling check dropped, so an oversize file is admitted, reddens the limit | T30,T31 | developer-only |
 | T55 | The file-source reader (`evalFile`): SHA-256 (ADR 0011), BOM strip, shebang blank, CRLF passthrough, `chunkname: @<resolved path>`, and the provenance record | `cargo test -p dcs-eval file_source` shows a BOM+`#`+CRLF file raising on its line 47 and the run record carrying `bom: stripped`, `shebang: blanked`, the byte count and the SHA-256, with the raise asserted against the abbreviated tail Lua prints for a chunkname over 60 bytes, and a file exactly at the ceiling sent whole; mutations: a shebang line removed rather than blanked reddens the line-47 check; a `\r\n` converted on the way in reddens the byte-for-byte check | T34 | developer-only |
 | T56 | The event-driven reply watch (`ReadDirectoryChangesW`, declared under ADR 0011), with the poll kept as the fallback `bridge.md` §3.2 requires for a watch that reports nothing | `cargo test -p dcs-eval watch` shows a reply woken on rather than polled for, a watch reporting nothing still answered by the poll, and no handle held once `wait` returns; mutation: a watch left open across a `wait` reddens the handle check | T54 | developer-only |
-| T35 | Game-state reads: the tier-1 chunks (one `pcall` each), the constant read-list with tier 2 built and left off until T50, never-send-unlisted | `cargo test -p dcs-eval game_reads` shows each read as its own request under one `pcall` and `getMissionLoaded`, `getPlayerUnitType` and `getMissionTheatre` absent by construction; mutation: sending a `DCS.*` name not in the constant list reddens the never-send check | T33 | developer-only |
+| T35 | Game-state reads: the tier-1 chunks (one `pcall` each), the constant read-list with its opt-in reads built and left off (T62 adds the switch), never-send-unlisted | `cargo test -p dcs-eval game_reads` shows each read as its own request under one `pcall` and every opt-in read absent from a default gather; mutation: sending a `DCS.*` name not in the constant list reddens the never-send check | T33 | developer-only |
 | T36 | Game-state derivation: the axes, `unknown` as a value, no default arm | `cargo test -p dcs-eval game_state` shows `loading` with no round trip, `paused (read)` noting a disagreeing callback phase, `session: client` on a `refused` `gui` probe, `unknown: <error>` on an errored axis alone, `unknown (tier 2 off)` when off; mutation: any axis filled from another's evidence reddens a no-default-arm check | T35,T31 | developer-only |
 | T57 | The mutation sweep, scripted: one runner that applies each control's named mutation to a copy, runs the one command that must redden, restores, and reports | `sh tools/sweep.sh` prints one row per control — the mutation, the command, the tests that failed — and exits non-zero if any control stayed green or any file did not come back identical; mutations: a control whose mutation no longer applies must be reported as unperformed rather than skipped silently, and a runner that restores with `git checkout` rather than from its own copy reddens the tree-clean check | T36,T53 | developer-only |
 
@@ -349,7 +350,9 @@ verify`.  **Milestone C acceptance:** Stages 7–8 commands green; `dcs-mcp inst
 
 The wall-clock-bound tasks that need DCS running and a person to set the scene. Each fills a blank
 the documents left on purpose or confirms a number the harness cannot produce. This is the critical
-path; nothing here is parallelisable by adding developer effort.
+path; nothing here is parallelisable by adding developer effort. T62 is the exception: it is T50's
+developer-only half, the switch T50 turns, and it is here rather than in Stage 7 so that Milestone C
+stays as it closed.
 
 | id | task | done when | needs | runs on |
 |---|---|---|---|---|
@@ -358,8 +361,8 @@ path; nothing here is parallelisable by adding developer effort.
 | T48 | The dormant frame-time three-way comparison in DCS (hook absent / installed-dormant / armed-idle) | the script prints the three frame-time figures; the dormant figure is at or below the 0.098 ms baseline, which is the incumbent measured on one machine, DCS 2.9.28.26385, one session, so a figure that disagrees on other hardware is a new measurement rather than a regression; a higher figure here reopens `bridge.md` §2 and is reported as such | Milestone C | DCS + human |
 | T49 | `missionscripting` through `a_do_script` live with a mission loaded, and the s17 flag-agreement fixture | `dcs-mcp eval missionscripting …` returns through `a_do_script` with a mission loaded, and the ported s17 fixture shows a 16-bit flag crossing agreeing with a `DO SCRIPT` action; a disagreement is reported, not read as an empty walk | Milestone C | DCS + human |
 | T62 | The opt-in reads' switch: the four tier-2 reads and the three from the crashing batch (ADR 0023), off by default and asked for by group (`extra`, `suspect`) or one read at a time by key, through `game-state --reads` and `dcs_game_state`'s `reads`, and every read no axis is made of printed a line each | `cargo test --workspace opt_in` shows a default gather publishing none of the seven, each key alone publishing its read and no other opt-in one, an unasked read answering `unknown (tier 2 off)` or `unknown (suspect reads off)`, and the flag and the argument each reaching the gather; mutations: a suspect read sent by default reddens the default-gather check; a key that turns on its whole group reddens the one-read check; the flag dropped between the command line and the gather reddens the flag check; the argument dropped between the tool and the gather reddens the argument check | T35,T36,T38,T40 | developer-only |
-| T50 | Tier-2 reads (each sent alone under the supervisor, one per session), editor-vs-menu detection, `mission_name` at the menu, the callback vocabulary | the script prints a row per tier-2 read (enabled or not, with its result), records `getSimulatorMode` raw per state, and notes which offered callbacks were seen; an unmeasured axis stays `unknown`/`menu-or-editor` and says so | Milestone C | DCS + human |
+| T50 | The seven opt-in reads — the four tier-2 and the three from the crashing batch (ADR 0023) — each sent alone with T62's switch under the supervisor, one per session; editor-vs-menu detection, `mission_name` at the menu, the callback vocabulary | the script prints a row per opt-in read (sent alone, with its result or the crash that named it), records `getSimulatorMode` raw per state, and notes which offered callbacks were seen; an unmeasured axis stays `unknown`/`menu-or-editor` and says so | T62, Milestone C | DCS + human |
 | T51 | Permanent-installation acceptance: install, fly with the executor dormant, survive a DCS update, `verify` still green | on a real machine: `dcs-mcp install`; a play session with the executor dormant and no noticeable frame impact; a DCS update leaving `Saved Games` untouched; `dcs-mcp eval` in every reachable state; `dcs-mcp game-state` reporting the state; `dcs-mcp verify` green afterward — the project's done-condition | T52,T47,T48,T49,T50 | DCS + human |
 
-**Stage command:** the live-run script printing every row above.  **Milestone D acceptance:** T51
+**Stage command:** the live-run script printing every DCS + human row above.  **Milestone D acceptance:** T51
 passes and the dormant frame-time (T48) is at or below baseline.
