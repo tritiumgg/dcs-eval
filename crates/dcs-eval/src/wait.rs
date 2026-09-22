@@ -1090,13 +1090,25 @@ mod tests {
         );
 
         // And the whole wait survives one, which is the panic the caller
-        // would otherwise have met. A terminal outcome so the test does
-        // not sit here for the rest of the clock.
+        // would otherwise have met. A terminal outcome so the wait does
+        // not sit there for the rest of the clock, and a thread with a
+        // bound on it so that a wait which never sees that outcome fails
+        // this test rather than hanging the suite: an unbounded wait on a
+        // session that stays pending is the design, not a fault, so nothing
+        // inside it will ever give up.
         let b = Sandbox::new();
         let (mut s, session) = ticking(&b);
         s.stamp = format!("{}-restarted", s.stamp);
         s.handshake().expect("the new session's handshake");
-        let got = wait(&session, &just_sent(), Duration::MAX).expect("the wait reads");
+        let (tx, rx) = std::sync::mpsc::channel();
+        let sent = just_sent();
+        std::thread::spawn(move || {
+            let _ = tx.send(wait(&session, &sent, Duration::MAX));
+        });
+        let got = rx
+            .recv_timeout(Duration::from_secs(30))
+            .expect("a changed stamp ends an unbounded wait at once, not never")
+            .expect("the wait reads");
         assert!(matches!(got, Outcome::Superseded { .. }), "{got:?}");
     }
 
