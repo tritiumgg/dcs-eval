@@ -1653,12 +1653,27 @@ pub fn game_state(
             detail: err.kind.to_string(),
         },
     };
-    let Found::Read(h) = &handshake else {
+    let Found::Read(h) = handshake else {
         return Ok(derive(&Evidence {
             handshake,
             ..Evidence::nothing()
         }));
     };
+    game_state_of(output, &h, upto)
+}
+
+/// [`game_state`] against a handshake already read, which is published
+/// into as it stands and never read again.
+///
+/// A caller that judged a handshake before any write passes that same one
+/// here, so an executor that rewrites `executor.txt` in between cannot
+/// move the ping and the reads into a transport nobody judged.
+pub fn game_state_of(
+    output: &std::path::Path,
+    h: &crate::readers::Handshake,
+    upto: std::time::Duration,
+) -> Result<GameState, crate::reads::Refused> {
+    let handshake = Found::Read(Box::new(h.clone()));
     let host = Host::named(&h.host);
     let (beat, word) = match crate::readers::Heartbeat::read(&output.join("heartbeat.txt")) {
         Ok(hb) => {

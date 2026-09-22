@@ -347,14 +347,16 @@ pub(crate) fn game_state(serve: &Serve, host: Option<&str>, upto: Duration) -> A
         Ok(client) => client,
         Err(no) => return Answered::plain(no),
     };
-    Answered::plain(match game::game_state(client.output().as_path(), upto) {
-        Ok(state) => {
-            let mut lines = vec![state.to_string()];
-            lines.extend(state.recorded_lines());
-            say("game-state", lines)
-        }
-        Err(why) => refuse("refused", vec![why.to_string()]),
-    })
+    Answered::plain(
+        match game::game_state_of(client.output().as_path(), client.handshake(), upto) {
+            Ok(state) => {
+                let mut lines = vec![state.to_string()];
+                lines.extend(state.recorded_lines());
+                say("game-state", lines)
+            }
+            Err(why) => refuse("refused", vec![why.to_string()]),
+        },
+    )
 }
 
 /// What `dcs_eval` and the `eval` verb both do.

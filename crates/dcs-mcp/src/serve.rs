@@ -215,6 +215,12 @@ impl Client {
         let output = paths::resolve(&wanted).map_err(|why| NoSession::at(&wanted, why))?;
         let handshake = Handshake::read(&output.as_path().join("executor.txt"))
             .map_err(|why| NoSession::at(&wanted, why))?;
+        // Every call that publishes comes through here, so a transport this
+        // client must not write into is refused before anything is written.
+        let writedir = paths::resolve(&opts.saved_games.join(&opts.variant)).ok();
+        if let Some(why) = handshake.unwritable(writedir.as_ref()) {
+            return Err(NoSession::at(&wanted, why));
+        }
         let session = Session::addressed(&handshake);
         Ok(Client {
             output,
@@ -422,6 +428,43 @@ mod tests {
             restarted,
             "the second call read the handshake again rather than answering out of the first"
         );
+    }
+
+    /// A handshake naming a transport in the variant's `Config` is refused
+    /// before a call publishes anything there, and the refusal says which
+    /// path and why.
+    #[test]
+    fn a_transport_outside_logs_is_refused_before_anything_is_written() {
+        let box_ = Sandbox::new();
+        let opts = opts(&box_, Host::Hook);
+        let serve = Serve::new(opts.clone());
+        let ex = Standin::open(&opts.output(), "hook").expect("the stand-in opens");
+        ex.handshake().expect("the handshake is published");
+        let config = box_.join("DCS.openbeta").join("Config").join("rpc");
+        for dir in ["req", "res"] {
+            std::fs::create_dir_all(config.join(dir)).expect("somewhere a write would land");
+        }
+        let handshake = opts.output().join("executor.txt");
+        crate::testing::reheader(&handshake, "transport", &config.display().to_string());
+        for name in ["req", "res", "arm"] {
+            let value = config.join(name).display().to_string();
+            crate::testing::reheader(&handshake, name, &value);
+        }
+
+        let why = serve
+            .client()
+            .expect_err("the transport is refused")
+            .to_string();
+        assert!(why.contains("transport: "), "{why}");
+        assert!(why.contains("not under its Logs"), "{why}");
+
+        let answered = crate::tools::ping(&serve, None, std::time::Duration::from_millis(50));
+        assert_eq!(answered.answer.is_error, Some(true), "a ping is refused");
+        for dir in ["req", "res"] {
+            let left = std::fs::read_dir(config.join(dir)).expect("listed").count();
+            assert_eq!(left, 0, "nothing was written into {dir}");
+        }
+        assert!(!config.join("arm").exists(), "and nothing armed");
     }
 
     #[test]
