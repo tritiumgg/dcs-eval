@@ -36,7 +36,7 @@ mid-task is recorded here in the same commit that resolves it.
 
 | Subject | The question | Where it is settled |
 |---|---|---|
-| A path with a byte past ASCII | `bridge.md` §7.1: "Header values are ASCII and **may not contain CR or LF**; a writer refuses one rather than escaping it". The handshake carries five paths under `Saved Games`, and a Windows user name past ASCII puts such a byte in every one. Neither document says what the wire does with one. | Not settled. The executor refuses the handshake and stops the load with the header named in `dcs.log`, a visible failure rather than a file the client's parser would refuse. Where the answer lands is the client's parser (T13) or a decision record; `docs/STATE.md` carries it. |
+| A path with a byte past ASCII | `bridge.md` §7.1: "Header values are ASCII and **may not contain CR or LF**; a writer refuses one rather than escaping it". The handshake carries five paths under `Saved Games`, and a Windows user name past ASCII puts such a byte in every one. Neither document says what the wire does with one. | ADR 0036: a shipped limit. The executor refuses the handshake and stops the load with the header named in `dcs.log`, the client parses a header as the executor does (T13), and no spelling for such a path is built. |
 | How the install is named in the environment | `mcp.md` §4.2 spells it `DCS_INSTALL`; `bridge.md` §8 spells the same thing `DCS_API_DCS_INSTALL`, the prior project's name. | Not settled, and nothing turns on it: the file evaluation no longer judges a path against the install at all (ADR 0026, superseding ADR 0014), and nothing in the build reads either variable. |
 
 ## What each document says it could not determine
@@ -49,4 +49,6 @@ purpose, and the plan folds them into Stage 9 rather than guessing.
 
 `tools/spec.sh read BRIDGE 11` and `tools/spec.sh read MCP 8` retrieve them.
 A Stage 9 measurement that answers one is a decision record
-(`docs/conventions/decision-records.md`: a probe answer is a record).
+(`docs/conventions/decision-records.md`: a probe answer is a record). Stage 9
+is over: ADR 0035 says which rows a record answered, and which shipped as
+blanks and why.
