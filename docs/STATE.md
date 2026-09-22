@@ -25,7 +25,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **The client refuses a transport it must not write into**: a handshake naming one inside the install its `install_guard` names, or in the variant's Saved Games outside `Logs`, refuses every publishing call and is a `status`/`verify` problem; relative was already refused. Six controls under T31, T32, T37, T46; the live `%TEMP%` and `Logs` shapes pass on fixtures.
+- **The client refuses a transport it must not write into**: a handshake naming one inside the install its own `install_guard` names (ADR 0034), or in the variant's Saved Games outside `Logs`, refuses every publishing call and is a `status`/`verify` problem; relative was already refused. Six controls under T31, T32, T37, T46; the live `%TEMP%` and `Logs` shapes pass on fixtures.
 - **One `uninstall` removes the executor (ADR 0033)**: `install` replaces a release of ours in place and parks only a stranger's file; `uninstall` never restores a park of ours, an older binary's included, and leaves it in the store. Closes the install-twice carry-forward; two controls under T44 and T45, proved on fixtures; one run clearing the maintainer's own twice-installed `DCS` is theirs to see.
 - **`dcs-mcp live` left the binary**, the maintainer's call once ADR 0031 held its figures: its module, the dormant probe suite, `reads::alone` and its eight controls, closing that carry-forward. PLAN's T47 to T50 now point at ADR 0031.
 

@@ -428,10 +428,11 @@ impl Handshake {
     ///
     /// The install is the one the executor says it guarded its writes
     /// against, where that resolved: the client is given no install of its
-    /// own to judge by. `writedir` is the variant's Saved Games tree the
-    /// client was pointed at, inside which only its `Logs` may be written,
-    /// so `Logs\..\Config` is refused once resolved. Where it is not known,
-    /// that half is not judged.
+    /// own to judge by, so this catches a handshake that contradicts itself
+    /// and not one corrupted in both fields (ADR 0034). `writedir` is the
+    /// variant's Saved Games tree the client was pointed at, inside which
+    /// only its `Logs` may be written, so `Logs\..\Config` is refused once
+    /// resolved. Where it is not known, that half is not judged.
     pub fn unwritable(&self, writedir: Option<&Real>) -> Option<Unwritable> {
         let install = self.install_guard.real();
         let logs = writedir.and_then(|w| paths::resolve(&w.as_path().join("Logs")).ok());
