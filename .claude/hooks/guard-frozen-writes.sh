@@ -83,17 +83,26 @@ case "$under_specs" in
                 { i = index(tolower($0), "/docs/specs/")
                   print i ? substr($0, i + 1) : $0 }
             ')
-            if git -C "$root" rev-parse --verify --quiet main >/dev/null 2>&1; then
+            # A local main where there is one, the remote's where a checkout
+            # has fetched no branch of its own — which is how CI arrives.
+            trunk=""
+            for ref in main origin/main; do
+                if git -C "$root" rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
+                    trunk=$ref
+                    break
+                fi
+            done
+            if [ -n "$trunk" ]; then
                 # Asked of the tree rather than by path, and matched without
                 # case: git is case-sensitive and the filesystem under it is
                 # not, so `main:DOCS/SPECS/MCP.MD` is a miss on a file that
                 # opens perfectly well.
-                git -C "$root" ls-tree -r --name-only main -- docs/specs |
+                git -C "$root" ls-tree -r --name-only "$trunk" -- docs/specs |
                     awk -v want="$(fold "$rel")" '
                         tolower($0) == want { found = 1 }
                         END { exit found ? 0 : 1 }
                     ' &&
-                    why="a frozen specification: main carries it"
+                    why="a frozen specification: $trunk carries it"
             else
                 why="a frozen specification (no main here to ask, so every one of them is)"
             fi

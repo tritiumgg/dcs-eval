@@ -18,7 +18,12 @@ jobs:
       run:
         shell: bash
     steps:
+      # Every branch, not just this ref: the frozen-write guard asks whether
+      # main carries a document, and tools/hooktest.sh drives that question.
+      # A checkout with no main to ask would prove the fallback instead.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Hold docs/STATE.md to its budget
         run: sh tools/statecheck.sh
       - name: Keep specification citations and task IDs out of the code
@@ -46,7 +51,11 @@ jobs:
       run:
         shell: bash
     steps:
+      # As in preflight: `mise run check` runs the hook tests, which ask what
+      # main carries.
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: jdx/mise-action@v2
         with:
