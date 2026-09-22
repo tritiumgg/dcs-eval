@@ -148,7 +148,7 @@ pub fn uninstall(
     }
 
     let line = remove_line(now, variant, &register)?;
-    let restored = restore_parked(now, variant, data, &register)?;
+    let restored = restore_parked(now, variant, data, &register, release)?;
 
     Ok(Removed {
         hook,
@@ -207,12 +207,14 @@ fn remove_line(
 /// moved out from one that was only copied aside. Decision record 0020
 /// holds that argument. The absence is read per row at the moment the row
 /// is reached rather than once at the start, so a row whose file another
-/// row has just restored sees it there and leaves it alone.
+/// row has just restored sees it there and leaves it alone. A park holding
+/// a release of ours is paired the same way and left where it is.
 fn restore_parked(
     now: SystemTime,
     variant: &Real,
     data: &DataDir,
     register: &crate::register::Register<'_>,
+    release: &Executor<'_>,
 ) -> Result<Vec<PathBuf>, RegisterError> {
     let mut restored = Vec::new();
     for row in data.rows()? {
@@ -247,6 +249,15 @@ fn restore_parked(
             }
             let candidate = dir.join(relative);
             if candidate.is_file() {
+                // A release of ours is never put back, whoever parked it: an
+                // older binary parked the copy it replaced, and restoring one
+                // leaves the executor loaded after the uninstall meant to
+                // remove it. It stays in the store, and the row is answered
+                // as a restore would answer it (ADR 0033).
+                let bytes = fs::read(&candidate).map_err(|why| disk(&candidate, why))?;
+                if release.shipped.contains(&hex(&digest(&bytes)).as_str()) {
+                    break;
+                }
                 register.restore(now, &candidate, &destination)?;
                 restored.push(destination.into_path_buf());
                 break;
@@ -501,6 +512,57 @@ mod tests {
             "the minted directory stays — nothing under the data directory is deleted"
         );
         assert_eq!(removed.restored, vec![real(&hook).into_path_buf()]);
+    }
+
+    #[test]
+    fn one_uninstall_removes_the_executor_however_many_times_it_was_installed() {
+        let (_b, variant, data, hooks) = fixture();
+        let (release, _current) = a_release();
+        for _ in 0..3 {
+            place_hook(an_instant(), &variant, &data, &release, false).expect("it goes in");
+        }
+
+        uninstall(an_instant(), &variant, &data, &release).expect("it comes out");
+
+        assert!(
+            leaves(&hooks).is_empty(),
+            "one uninstall left the executor loaded: {:?}",
+            leaves(&hooks)
+        );
+    }
+
+    #[test]
+    fn a_release_of_ours_an_older_binary_parked_is_left_in_the_store() {
+        let (_b, variant, data, hooks) = fixture();
+        let (release, _current) = a_release();
+        let hook = hooks.join("DcsEvalExecutor.lua");
+        put(&hook, OLDER);
+        // What a binary that parked its own upgrades left behind: the older
+        // release moved aside under an install row, then the new one placed.
+        let park = data
+            .register(Action::Install)
+            .park(an_instant(), &variant, &hook)
+            .expect("the older binary parks its own copy");
+        place_hook(an_instant(), &variant, &data, &release, false).expect("it goes in");
+
+        let removed = uninstall(an_instant(), &variant, &data, &release).expect("it comes out");
+
+        assert!(
+            leaves(&hooks).is_empty(),
+            "the parked copy of ours was put back, so the executor outlives the uninstall: {:?}",
+            leaves(&hooks)
+        );
+        assert!(removed.restored.is_empty(), "{:?}", removed.restored);
+        assert_eq!(
+            fs::read(
+                park.join("Scripts")
+                    .join("Hooks")
+                    .join("DcsEvalExecutor.lua")
+            )
+            .expect("the store still holds it"),
+            OLDER,
+            "nothing under the data directory is deleted"
+        );
     }
 
     #[test]

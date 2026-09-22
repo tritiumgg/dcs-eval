@@ -1994,6 +1994,28 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +                 })
 ```
 
+### uninstall/own-release-restored
+
+- task: T45
+- command: `mise exec -- cargo test -p dcs-mcp uninstall`
+- reddens: `uninstall::tests::a_release_of_ours_an_older_binary_parked_is_left_in_the_store`
+- note: the shipped-hash test on a park hashes none of its bytes, so no park
+  is ever ours and every one is restored, a copy of ours included — the
+  defect ADR 0033 closed for machines an older binary already parked on. The
+  mutant reads both `release` and `bytes` and compiles clean; the hash of
+  nothing is in no shipped list. The red is `the parked copy of ours was put
+  back, so the executor outlives the uninstall: ["DcsEvalExecutor.lua"]`.
+  `one_uninstall_removes_the_executor_however_many_times_it_was_installed`
+  stays green, because the install no longer parks ours for anything to put
+  back, and `a_parked_file_is_restored_to_its_original_path_and_the_park_is_emptied`
+  stays green, which says the control watches which park is restored and not
+  whether restoring works.
+
+```sweep-edit crates/dcs-mcp/src/uninstall.rs
+-                 if release.shipped.contains(&hex(&digest(&bytes)).as_str()) {
++                 if release.shipped.contains(&hex(&digest(&bytes[..0])).as_str()) {
+```
+
 ### verify/a-write-during-verify
 
 - task: T46

@@ -25,9 +25,9 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **One `uninstall` removes the executor (ADR 0033)**: `install` replaces a release of ours in place and parks only a stranger's file; `uninstall` never restores a park of ours, an older binary's included, and leaves it in the store. Closes the install-twice carry-forward; two controls under T44 and T45, proved on fixtures; one run clearing the maintainer's own twice-installed `DCS` is theirs to see.
 - **`dcs-mcp live` left the binary**, the maintainer's call once ADR 0031 held its figures: its module, the dormant probe suite, `reads::alone` and its eight controls, closing that carry-forward. PLAN's T47 to T50 now point at ADR 0031.
 - **`verify` reads at a glance (ADR 0032)**: the verdict first, a row per part worded `ok`, `PROBLEM`, `waiting` or `note` with a `fix:`; `--verbose`, `status` and `dcs_status` add the exact problems and a `details` block where the Debug dump was. A reply's body follows a blank line. Three controls under T46; how it reads in conhost is the maintainer's to see.
-- **Stage 9's live run recorded (ADR 0031)**: dormant 0.0011 ms/frame, round trips p50 ~13.9 ms. Six reads answered and are sent by every game-state, `getMissionLoaded` crashed DCS twice and left the list, `--reads` and `reads` are gone, the editor is read from `MapWindow.getVisible()` in `gui`, a `tempMission` name gives way to the file; s17 dropped. Nine controls under T50, proved off DCS; how they read a live game is the maintainer's to see.
 
 *The last three at most, one line each. Git log holds the rest.*
 
@@ -85,6 +85,3 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A `Minter` has no owner.** The window mints from whatever it was handed; who
   holds one across tool calls, so two do not restart at seq 1, is Stage 7's.
   `Minter::seeded_at` resumes a counter.
-- **`install` over a copy of ours, then `uninstall`, leaves one in place.** Same
-  release or older: `install` parks ours, `uninstall` restores it (T45's); after an
-  upgrade it takes two runs. Maintainer's: restore a park we shipped? A row of its own.

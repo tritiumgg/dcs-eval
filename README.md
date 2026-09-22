@@ -117,9 +117,10 @@ shipped — and our one line out of
 name that we did not ship is left where it is and named. If `install` created
 `Export.lua`, `uninstall` leaves it empty rather than deleting a file nothing
 recorded it creating. Give `uninstall` the same `--data-dir` you gave
-`install`, if you gave one: the register it restores from lives there. After
-`install` has run over a copy of ours, whether the same release or an older
-one, `uninstall` puts that copy back; run `uninstall` again to take it out.
+`install`, if you gave one: the register it restores from lives there. One
+`uninstall` is enough however many times you installed: a copy of ours is
+never put back, including one an earlier `dcs-mcp` moved aside, which stays
+in the store.
 
 All three take `--saved-games` and `--variant`, and exit 0 when done (for
 `verify`: when `verified`), 1 when refused or not verified, and 2 for a
