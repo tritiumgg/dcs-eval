@@ -25,15 +25,15 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **`game-state` says a nil once and the menu plainly**: a nil read prints `player_unit_type: nil`, and the session axis outside a mission prints `unknown: not in a mission (activity said menu)`; the last carry, deleted.
 - **Milestone D closed (ADR 0035)**: T52's cutover and T51's permanent-install acceptance done by hand on 2026-09-22; the "what only Stage 9 sees" list and the handshake's declared-before-served fact moved into the record; five resolved carries deleted: three into it, and two stale ones of Stage 7's closed with Milestone C (the held handle by T41's `watching` controls, the `Minter` by a fresh tag per tool call).
 - **A path past ASCII is a shipped limit (ADR 0036)**: no wire spelling is built; the README says a user name past ASCII is unsupported and `docs/audit.md` points at the record.
-- **The wait suite fails instead of hanging on a pid-for-stamp `decide`**: its unbounded-wait test runs on a thread with a 30 s bound, so `cargo test -p dcs-eval wait` reddens `wait/pid-for-stamp` (T54).
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-The one carry below, then a release: every plan task is done and every milestone closed, but no workflow builds or publishes `dcs-mcp.exe` and the README's Install says to download it. The tag and the workflow are the maintainer's.
+A release: every plan task is done and every milestone closed, but no workflow builds or publishes `dcs-mcp.exe` and the README's Install says to download it. The tag and the workflow are the maintainer's.
 
 The MCP registration is swapped (2026-09-22): `dcs-eval` replaces `dcs-api-bridge` in
 Claude Desktop's config and Claude Code's user scope, running a copy of the binary at
@@ -53,6 +53,4 @@ resolved, and say where. Mark an entry only the maintainer can settle. Ten
 entries at most: an eleventh means something here is finished, or belongs in
 `docs/decisions/` or `CLAUDE.md` instead.
 
-- **`game-state` wording, two rough edges.** A nil read prints `player_unit_type: nil nil`
-  (type and value both); the pause axis at the menu heads the answer with `unknown: activity
-  said menu, and this is answered only in a mission`. Plain words for both. Maintainer's, 2026-09-22.
+None.

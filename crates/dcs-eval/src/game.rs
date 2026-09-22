@@ -272,6 +272,10 @@ impl fmt::Display for Why {
                 body.len()
             ),
             Self::WrongType { lua_type, value } => match value {
+                // A nil is the whole of its own value: the read grammar
+                // carries `nil` as its text too, and printing both says
+                // `nil nil`.
+                _ if lua_type == "nil" => f.write_str("unknown: the read answered nil"),
                 Some(value) => write!(f, "unknown: the read answered the {lua_type} {value}"),
                 None => write!(f, "unknown: the read answered a {lua_type}"),
             },
@@ -307,10 +311,13 @@ impl fmt::Display for Why {
                 "unknown: no read is possible on the {host} host, where DCS is nil"
             ),
             Self::GateUnknown { gate } => write!(f, "unknown: {gate} is itself unknown"),
-            Self::OutsideMission { gate, said } => write!(
-                f,
-                "unknown: {gate} said {said}, and this is answered only in a mission"
-            ),
+            // The value first and the basis in brackets after it, as
+            // `single player (read)` and `at the main menu (read)` say
+            // theirs: the headline joins its axes with commas, so a reason
+            // with a comma of its own reads as two axes.
+            Self::OutsideMission { gate, said } => {
+                write!(f, "unknown: not in a mission ({gate} said {said})")
+            }
             Self::NotProbed => f.write_str("unknown: the process id was never probed"),
             Self::Undecided { detail } => {
                 write!(f, "unknown: the process id would not read, {detail}")
@@ -1545,8 +1552,8 @@ impl fmt::Display for GameState {
 
 impl GameState {
     /// One line per read no axis is made of, in table order:
-    /// `<key>: <lua type> <value>` where it answered, and otherwise the
-    /// reason an axis would print.
+    /// `<key>: <lua type> <value>` where it answered, `<key>: nil` where
+    /// it answered nil, and otherwise the reason an axis would print.
     ///
     /// It walks what was gathered and invents nothing: where no window was
     /// opened, because there was no handshake to open one against, there
@@ -1556,6 +1563,10 @@ impl GameState {
         self.recorded
             .iter()
             .map(|(read, answer)| match why_of(answer) {
+                // A nil is the whole of its own value, and the grammar
+                // carries `nil` as its text too: `nil nil` would say the
+                // type and then repeat it.
+                Ok((lua_type, _)) if lua_type == "nil" => format!("{}: nil", read.key()),
                 Ok((lua_type, Some(value))) => format!("{}: {lua_type} {value}", read.key()),
                 Ok((lua_type, None)) => format!("{}: a {lua_type}", read.key()),
                 Err(why) => format!("{}: {why}", read.key()),
@@ -2553,11 +2564,15 @@ mod game_state {
         // the gate, which is the only thing these arms looked at.
         assert_eq!(
             all[0].to_string(),
-            "unknown: activity said loading, and this is answered only in a mission"
+            "unknown: not in a mission (activity said loading)"
+        );
+        assert_eq!(
+            all[1].to_string(),
+            "unknown: not in a mission (activity said menu-or-editor)"
         );
         for one in &all {
             assert!(
-                !one.to_string().contains("loading)"),
+                !one.to_string().contains("(the session is loading)"),
                 "the probe answered and the reason says it was never sent: {one}"
             );
         }
@@ -3925,6 +3940,30 @@ mod game_state {
                 "no line reads `{want}`: {lines:#?}"
             );
         }
+    }
+
+    #[test]
+    fn a_read_that_answers_nil_renders_nil_once() {
+        // The chunk stringifies a nil as `nil` after the tag, so the grammar
+        // carries the type and the same word again as the value. The line
+        // says it once, and so does a typed read that was answered a nil.
+        let b = Sandbox::new();
+        let mut s = ticking(&b, "sim");
+        s.script("DCS.getPlayerUnitType", "ok", "string", b"nil\tnil");
+        let lines = derived(&mut s, 14).recorded_lines();
+        assert!(
+            lines.iter().any(|line| line == "player_unit_type: nil"),
+            "no line reads `player_unit_type: nil`: {lines:#?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("nil nil")),
+            "a nil rendered as its type and its text: {lines:#?}"
+        );
+        let typed = Why::WrongType {
+            lua_type: "nil".to_owned(),
+            value: Some("nil".to_owned()),
+        };
+        assert_eq!(typed.to_string(), "unknown: the read answered nil");
     }
 
     #[test]
