@@ -86,3 +86,6 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A `Minter` has no owner.** The window mints from whatever it was handed; who
   holds one across tool calls, so two do not restart at seq 1, is Stage 7's.
   `Minter::seeded_at` resumes a counter.
+- **`game-state` wording, two rough edges.** A nil read prints `player_unit_type: nil nil`
+  (type and value both); the pause axis at the menu heads the answer with `unknown: activity
+  said menu, and this is answered only in a mission`. Plain words for both. Maintainer's, 2026-09-22.
