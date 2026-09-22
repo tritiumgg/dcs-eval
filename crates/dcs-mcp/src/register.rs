@@ -150,15 +150,6 @@ impl DataDir {
         self.root.as_path().join("runs.jsonl")
     }
 
-    /// The live ledger: one line per row a live measurement took.
-    ///
-    /// Beside the run record and not inside it. A live run sends hundreds of
-    /// measurement requests, and a line each would bury the user's own
-    /// record of what ran under figures that are this build's own.
-    pub fn live_path(&self) -> PathBuf {
-        self.root.as_path().join("live.jsonl")
-    }
-
     /// The register, to write one action's rows through.
     pub fn register(&self, action: Action) -> Register<'_> {
         Register { data: self, action }

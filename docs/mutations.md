@@ -27,9 +27,11 @@ refused: they closed before this runner existed and stood in the figure as one
 hand-counted group, so an entry under one of their rows would have been
 counted twice. Each of their mutations now has an entry of its own, and the
 hand count went with the reason for the refusal. Stage 9's rows are live
-proofs and owe nothing; the five that name a mutation of something that runs
-off DCS — T47, T48, T50, T52 and T63 — have their entries above all the
-same, written as their code landed, and counted in scope.
+proofs and owe nothing; the three that name a mutation of something that runs
+off DCS — T50, T52 and T63 — have their entries above all the same, written
+as their code landed, and counted in scope. T47's and T48's went with the
+temporary `dcs-mcp live` their controls watched, once ADR 0031 held its
+figures.
 
 **`reddens:` is what was observed, not what was predicted.** Where the red a
 mutation produced is not the red its plan cell named, the entry says so in a
@@ -2127,9 +2129,9 @@ not cover is printed by the sweep itself rather than left to be assumed.
 T63 is the developer-only row here: the installer verbs T52 starts from. Its
 controls are swept like any other. T62's switch went when the reads it
 selected went on by default (ADR 0031), and its four controls with it.
-T47, T48 and T50 need a running game for their figures, but the instrument
-that takes them, `dcs-mcp live`, runs off DCS, so its controls are entries
-here too, and so are the ones for what T50's figures decided.
+The temporary instrument that took T47's to T50's figures, `dcs-mcp live`,
+left the binary once ADR 0031 held them, and its controls with it. What
+T50's figures decided runs off DCS, so its controls are entries here.
 
 ### installer/ambiguity-picked
 
@@ -2229,102 +2231,6 @@ here too, and so are the ones for what T50's figures decided.
 ```sweep-edit crates/dcs-mcp/src/installer.rs
 -     parsed.data_dir.as_ref().map(|_| data.path())
 +     Some(data.path())
-```
-
-### live/row-without-a-figure-dropped
-
-- task: T47
-- command: `mise exec -- cargo test -p dcs-mcp live::report`
-- reddens: `every_row_prints_over_an_empty_ledger`
-
-```sweep-edit crates/dcs-mcp/src/live/report.rs
--             None => writeln!(out, "{}", unmeasured(row))?,
-+             None => continue,
-```
-
-### live/dormant-stat-on-the-armed-arm-file
-
-- task: T48
-- command: `mise exec -- lua5.1 tools/harness.lua live/dormant-probe`
-- reddens: `the dormant stat is of a path that does not exist`
-
-```sweep-edit crates/dcs-mcp/src/live/dormant.lua
-- local absent = E.arm .. ".absent"
-+ local absent = E.arm
-```
-
-### live/second-read-in-one-session
-
-- task: T50
-- command: `mise exec -- cargo test -p dcs-mcp live::read`
-- reddens: `a_second_opt_in_read_in_one_session_is_refused`
-- note: the hunk deletes the line. `stamp` is then left unused, which warns
-  and does not stop `cargo test`; the assertion is the red. The function it
-  called is still read by `run_all`, which checks the session its own way,
-  so `all_is_refused_in_a_session_that_already_had_a_read` stays green:
-  this control watches the single read's refusal alone.
-
-```sweep-edit crates/dcs-mcp/src/live/read.rs
--     refuse_a_second(&rows, stamp)?;
-```
-
-### live/all-sends-past-a-read-that-did-not-answer
-
-- task: T50
-- command: `mise exec -- cargo test -p dcs-mcp live::read`
-- reddens: `all_stops_at_the_first_read_that_does_not_answer`
-- note: the hunk deletes the return, so the run prints that it stopped and
-  then sends the next read anyway, into a session that has just failed to
-  answer — the one thing ADR 0028's sequence is not allowed to do. It
-  compiles clean. The red is the exit code, 0 where 1 is asserted, printed
-  before the ledger check that would also fail.
-
-```sweep-edit crates/dcs-mcp/src/live/read.rs
--             return Ok(1);
-```
-
-### live/all-skips-a-read-tested-in-another-scene
-
-- task: T50
-- command: `mise exec -- cargo test -p dcs-mcp live::read`
-- reddens: `all_runs_again_in_a_scene_it_has_not_been_run_in`
-- note: the hunk drops the scene from the skip, so a read with a result at
-  the menu is never sent in a mission — the one test the maintainer runs the
-  reads twice for. `scene` is then unused, which warns and does not stop
-  `cargo test`; the red is the second pass's request count, 0 where 6 is
-  asserted.
-
-```sweep-edit crates/dcs-mcp/src/live/read.rs
--             && e.scene.as_deref() == scene
-```
-
-### live/read-row-hides-a-scene
-
-- task: T50
-- command: `mise exec -- cargo test -p dcs-mcp live::report`
-- reddens: `an_opt_in_read_prints_its_latest_in_every_scene`
-- note: the hunk turns the per-scene arm off, so an opt-in read's row prints
-  its newest entry alone and a result at the menu vanishes behind one taken
-  in a mission. It compiles clean.
-
-```sweep-edit crates/dcs-mcp/src/live/report.rs
--             Some(_) if row.key.starts_with("read.") => {
-+             Some(_) if false => {
-```
-
-### live/read-recorded-only-after-its-answer
-
-- task: T50
-- command: `mise exec -- cargo test -p dcs-mcp live::read`
-- reddens: `the_read_is_on_the_ledger_before_it_is_on_the_disk`
-- note: the hunk skips the entry that says the read was sent, which is the
-  ledger as it was when the outcome was the only write. The other
-  `live::read` tests that count entries go red beside it, the `all_` ones
-  among them, since `live read all` sends through the same line.
-
-```sweep-edit crates/dcs-mcp/src/live/read.rs
--     ledger::append(data, &Entry::new("read", &row, session, SENT)).map_err(|why| {
-+     let _ = SENT; Ok::<(), std::io::Error>(()).map_err(|why| {
 ```
 
 ### live/read-sent-beside-a-ping

@@ -64,10 +64,6 @@ pub mod runs;
 // function its tool is a line over, so the two cannot word a reply apart.
 pub mod cli;
 
-// The live-run instrument: the figures only a running game gives, one phase
-// at a time, appended to a ledger of their own and printed row by row.
-pub mod live;
-
 // The Win32 calls this crate makes, declared here and nowhere else. The
 // client crate declares its own; decision record 0019 is why the two sets
 // are not one file.

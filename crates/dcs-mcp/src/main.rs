@@ -9,17 +9,16 @@
 //! This file is a shell. The work lives in the crate's own library half, where
 //! a test can reach it; here there is only the order things happen in.
 
-use dcs_mcp::{cli, installer, live, serve};
+use dcs_mcp::{cli, installer, serve};
 
 /// Every word this binary answers to. Anything else is a usage line rather
 /// than a silence.
 fn usage() -> String {
     format!(
         "usage: dcs-mcp serve --saved-games <dir> --variant <name> \
-         [--host hook|export]\n       [--data-dir <dir>]\n{}\n{}\n{}",
+         [--host hook|export]\n       [--data-dir <dir>]\n{}\n{}",
         cli::USAGE,
-        installer::USAGE,
-        live::USAGE
+        installer::USAGE
     )
 }
 
@@ -35,7 +34,7 @@ fn main() {
             .and_then(|opts| serve::run(opts).map_err(|why| why.to_string()))
             .map(|()| 0),
         // The verbs print to stdout and answer with an exit code of their
-        // own, so this branch and the two below are the only ones that leave
+        // own, so this branch and the one below are the only ones that leave
         // with anything but nought or the usage code.
         Some(word) if cli::takes(word) => {
             cli::run(args, &mut std::io::stdout()).map_err(|why| format!("{why}\n{}", usage()))
@@ -46,11 +45,6 @@ fn main() {
             let exe = std::env::current_exe().unwrap_or_else(|_| "dcs-mcp.exe".into());
             installer::run(args, &mut std::io::stdout(), &exe)
                 .map_err(|why| format!("{why}\n{}", usage()))
-        }
-        // The live-run instrument: phases of one verb, each an exit code of
-        // its own like the verbs above.
-        Some("live") => {
-            live::run(args, &mut std::io::stdout()).map_err(|why| format!("{why}\n{}", usage()))
         }
         Some(other) => Err(format!("dcs-mcp does not take {other}\n{}", usage())),
         None => Err(usage()),
