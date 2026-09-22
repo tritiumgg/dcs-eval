@@ -26,10 +26,12 @@ CLAUDE.md              this file: durable facts about the project
 README.md              what a user downloads, installs, configures and runs
 docs/
   STATE.md             the handoff between sessions. Read it first
-  PLAN.md              build order, 64 tasks in 10 stages. Not frozen
+  PLAN.md              the current plan: the screenshot capability, 7 tasks
+                       in 2 stages. Not frozen
+  PLAN-SHIPPED.md      the plan that built everything else, finished 2026-09-22
   audit.md             what the documents disagree about
   mutations.md         every control, its mutation, and the red it produced
-  specs/               frozen: bridge.md and mcp.md. Never edited
+  specs/               frozen: bridge.md, mcp.md and screenshot.md
   decisions/           where the build goes somewhere the specs did not
   conventions/         how a decision record is written
 crates/dcs-eval        the client library: the executor's protocol, from outside DCS
@@ -81,9 +83,19 @@ Stage 9 measurements land there. A change with one obvious answer needs no
 record, and neither does one whose reasoning already sits in the code, this
 file or the plan.
 
+A capability none of the frozen documents considered gets a document of its
+own, written before it is built — `screenshot.md` is the first. **Frozen means
+landed:** a document `main` does not carry yet is being written, and is
+reviewed and corrected on its branch like any other work; from the merge
+onwards the guard refuses every write to it, by every spelling, including one
+that walks out of `docs/specs/` and back in.
+
 `docs/PLAN.md` is not frozen. It states build order; edit it when the order
-changes. Everything under `docs/specs/` is frozen and nothing else is, which is
-the whole rule the two guards enforce.
+changes. A plan that finishes is retired beside it rather than deleted —
+`PLAN-SHIPPED.md` — because `docs/mutations.md` files every control under the
+plan row it came from, and `tools/sweep-cover.sh` reads both. Task IDs carry on
+across plans and are never reused. Everything under `docs/specs/` is frozen and
+nothing else is, which is the whole rule the two guards enforce.
 
 **A task ID never appears in the code.** Tasks are ephemeral; the plan retires
 when the build ships and a comment naming one then points at nothing. Neither
