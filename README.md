@@ -70,9 +70,10 @@ folder of your choosing instead.
 It places the executor in `Scripts\Hooks\` and appends one line to
 `Scripts\Export.lua`, creating the file if there is none. It never writes to
 the DCS install itself, and nothing already in `Saved Games` is deleted or
-overwritten — a file in the way is registered and moved aside, and `uninstall`
-puts it back. A file already at the executor's name that this project did not
-ship is refused and named; `--replace` moves it aside and installs anyway.
+overwritten except an earlier copy of the executor, which is replaced. A file in
+the way is registered and moved aside, and `uninstall` puts it back. A file
+already at the executor's name that this project did not ship is refused and
+named; `--replace` moves it aside and installs anyway.
 Nothing else in `Scripts\Hooks\` is looked at. The register and the copies
 live in `%LOCALAPPDATA%\dcs-mcp\` (or `--data-dir <dir>`), outside both DCS
 folders so that removing either leaves them standing, and nothing under there

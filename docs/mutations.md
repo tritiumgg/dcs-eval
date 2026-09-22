@@ -1899,6 +1899,26 @@ not cover is printed by the sweep itself rather than left to be assumed.
 -     }
 ```
 
+### install/own-release-parked
+
+- task: T44
+- command: `mise exec -- cargo test -p dcs-mcp install::`
+- reddens: `install::tests::placing_twice_leaves_one_hook_file`
+- note: every file found at our name is parked again, a release of ours
+  included, which is the defect ADR 0033 closed: the park is what `uninstall`
+  would put back, so the executor outlives one uninstall. The mutant compiles
+  clean — `disposition` is still read by the refusal and returned. Three checks
+  go red, each on the assertion that nothing was parked:
+  `a_hook_this_project_shipped_is_replaced_in_place_and_nothing_parked` and
+  `our_own_hook_is_recognised_whatever_case_it_is_spelled_in` with it.
+  `a_foreign_hook_is_parked_when_replace_answers_for_it` stays green, which says
+  the control watches which file is parked and not whether parking works.
+
+```sweep-edit crates/dcs-mcp/src/install.rs
+-     if let (Some(hook), Disposition::Foreign { .. }) = (&ours, &disposition) {
++     if let Some(hook) = &ours {
+```
+
 ### uninstall/neighbouring-line-removed
 
 - task: T45

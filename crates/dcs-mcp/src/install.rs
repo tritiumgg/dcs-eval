@@ -65,7 +65,7 @@ pub enum Disposition {
     /// Nothing was there.
     Absent,
     /// A file whose hash this project has shipped: an older release, or this
-    /// one placed again.
+    /// one placed again. It is replaced in place and never parked.
     Upgrade { sha256: String },
     /// A file whose hash this project never shipped, so somebody else wrote
     /// it.
@@ -88,7 +88,7 @@ pub struct Placed {
 /// about to be moved aside. It is consulted in one place — the refusal near
 /// the top — and never again: below it, what is parked is decided by what was
 /// found and nothing else, so an upgrade of our own file needs no answer and
-/// a stranger's file cannot be parked without one.
+/// is not parked, and a stranger's file cannot be parked without one.
 pub fn place_hook(
     now: SystemTime,
     variant: &Real,
@@ -152,9 +152,13 @@ pub fn place_hook(
 
     fs::create_dir_all(&hooks).map_err(|why| disk(&hooks, why))?;
 
+    // Only a stranger's file is parked. A release of ours is replaced in
+    // place by the rename below: parked, it is what `uninstall` would put
+    // back, and the executor would outlive the uninstall meant to remove it
+    // (ADR 0033).
     let register = data.register(Action::Install);
     let mut parked = Vec::new();
-    if let Some(hook) = &ours {
+    if let (Some(hook), Disposition::Foreign { .. }) = (&ours, &disposition) {
         parked.push(register.park(now, variant, hook)?);
     }
 
@@ -425,16 +429,10 @@ mod tests {
             vec!["DcsEvalExecutor.lua".to_owned()],
             "one hook file, not two and not a leftover staging file"
         );
-        assert_eq!(again.parked.len(), 1, "the first copy was moved aside");
-        assert_eq!(
-            fs::read(
-                again.parked[0]
-                    .join("Scripts")
-                    .join("Hooks")
-                    .join("DcsEvalExecutor.lua")
-            )
-            .expect("the parked copy"),
-            CURRENT
+        assert!(
+            again.parked.is_empty() && !data.parked_root().exists(),
+            "our own copy was parked, so an uninstall would put it back: {:?}",
+            again.parked
         );
         assert_eq!(
             fs::read(hooks.join("DcsEvalExecutor.lua")).expect("the hook"),
@@ -557,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn a_hook_this_project_shipped_is_replaced_and_its_bytes_parked() {
+    fn a_hook_this_project_shipped_is_replaced_in_place_and_nothing_parked() {
         let (_b, variant, data, hooks) = fixture();
         let (release, older, current) = a_release();
         let hook = hooks.join("DcsEvalExecutor.lua");
@@ -566,34 +564,20 @@ mod tests {
         let placed = place_hook(an_instant(), &variant, &data, &release, false)
             .expect("an older release of ours needs no answer");
 
-        assert_eq!(
-            placed.disposition,
-            Disposition::Upgrade {
-                sha256: older.clone()
-            }
-        );
-        assert_eq!(placed.parked.len(), 1);
-        assert_eq!(
-            fs::read(
-                placed.parked[0]
-                    .join("Scripts")
-                    .join("Hooks")
-                    .join("DcsEvalExecutor.lua")
-            )
-            .expect("the older bytes are recoverable"),
-            OLDER
+        assert_eq!(placed.disposition, Disposition::Upgrade { sha256: older });
+        assert!(
+            placed.parked.is_empty() && !data.parked_root().exists(),
+            "an older copy of ours was parked, so an uninstall would put it back: {:?}",
+            placed.parked
         );
         assert_eq!(fs::read(&hook).expect("the new release"), CURRENT);
 
         let rows = data.rows().expect("the register reads");
-        assert_eq!(rows.len(), 2, "the park's row, then the write's");
-        assert_eq!(rows[0].sha256, older, "what was moved aside");
-        assert_eq!(rows[1].path, placed.hook);
-        assert_eq!(rows[1].sha256, current, "what was put there");
-        for row in &rows {
-            assert_eq!(row.action, "install");
-            assert_eq!(row.status, "installed");
-        }
+        assert_eq!(rows.len(), 1, "the write's row, and no park's: {rows:?}");
+        assert_eq!(rows[0].path, placed.hook);
+        assert_eq!(rows[0].sha256, current, "what was put there");
+        assert_eq!(rows[0].action, "install");
+        assert_eq!(rows[0].status, "installed");
     }
 
     #[test]
@@ -636,16 +620,19 @@ mod tests {
         let (_b, variant, data, hooks) = fixture();
         let (release, older, _current) = a_release();
         // Reached by `join` rather than by folding, a hook written back under
-        // another spelling would look absent: nothing would be parked, the
-        // disposition would say there had been nothing there, and the rename
-        // would land beside a file DCS also loads.
+        // another spelling would look absent: the disposition would say there
+        // had been nothing there, and the rename would land beside a file DCS
+        // also loads.
         put(&hooks.join("dcsevalexecutor.lua"), OLDER);
 
         let placed = place_hook(an_instant(), &variant, &data, &release, false)
             .expect("an older release of ours, shouted or not");
 
         assert_eq!(placed.disposition, Disposition::Upgrade { sha256: older });
-        assert_eq!(placed.parked.len(), 1, "the old copy was moved aside");
+        assert!(
+            placed.parked.is_empty(),
+            "the old copy was replaced in place"
+        );
         assert_eq!(
             leaves(&hooks).len(),
             1,

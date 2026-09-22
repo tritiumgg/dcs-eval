@@ -352,8 +352,7 @@ fn said_hook(placed: &Placed) -> String {
     match &placed.disposition {
         Disposition::Absent => format!("hook: {hook}: placed; nothing was there"),
         Disposition::Upgrade { sha256 } => format!(
-            "hook: {hook}: placed over sha256 {sha256}, a release of ours, parked in {}",
-            listed(&placed.parked)
+            "hook: {hook}: placed over sha256 {sha256}, a release of ours, replaced in place"
         ),
         Disposition::Foreign { sha256 } => format!(
             "hook: {hook}: placed over sha256 {sha256}, never shipped by us, parked in {} \
@@ -726,7 +725,10 @@ mod tests {
             shown.contains("the line was already there; nothing written"),
             "{shown}"
         );
-        assert!(shown.contains("a release of ours"), "{shown}");
+        assert!(
+            shown.contains("a release of ours, replaced in place"),
+            "{shown}"
+        );
         let hooks: Vec<String> = fs::read_dir(scripts(&b, "DCS.openbeta").join("Hooks"))
             .expect("the hooks directory lists")
             .filter_map(Result::ok)
