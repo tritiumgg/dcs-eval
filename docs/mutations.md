@@ -999,6 +999,49 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +             armed: one_of(h, "armed", "yes", "no").unwrap_or(false),
 ```
 
+### readers/transport-in-the-install-admitted
+
+- task: T31
+- command: `mise exec -- cargo test -p dcs-eval readers`
+- reddens: `a_transport_inside_the_install_is_refused_naming_it`
+- note: the install the handshake's own `install_guard` names is dropped, so a
+  transport inside it, spelt long or short, is written into. The single-header
+  check reddens beside it.
+
+```sweep-edit crates/dcs-eval/src/readers.rs
+-         let install = self.install_guard.real();
++         let install: Option<&Real> = None;
+```
+
+### readers/transport-in-saved-games-outside-logs-admitted
+
+- task: T31
+- command: `mise exec -- cargo test -p dcs-eval readers`
+- reddens: `a_transport_in_saved_games_outside_logs_is_refused`
+- note: the Saved Games half never matches, so `Config`, the write directory
+  itself, `Logs\..\Config` and `LogsX` are all written into. The laundering
+  junction under `Logs` reddens beside it.
+
+```sweep-edit crates/dcs-eval/src/readers.rs
+-             } else if let Some(root) = writedir.filter(|root| root.contains(path))
++             } else if let Some(root) = writedir.filter(|_| false)
+```
+
+### readers/logs-not-exempted
+
+- task: T31
+- command: `mise exec -- cargo test -p dcs-eval readers`
+- reddens: `the_fallback_transport_under_logs_is_written_into`
+- note: everything inside the write directory refused, `Logs` included, which
+  would refuse the executor's own fallback transport. The single-header install
+  check reddens beside it, because its fixture leaves the other three headers
+  on the fallback and the transport is judged first.
+
+```sweep-edit crates/dcs-eval/src/readers.rs
+-                 && !logs.as_ref().is_some_and(|logs| logs.contains(path))
++                 && logs.is_some()
+```
+
 ### wait/dormant-age-as-staleness
 
 - task: T54
@@ -1043,6 +1086,16 @@ not cover is printed by the sweep itself rather than left to be assumed.
 ```sweep-edit crates/dcs-eval/src/wait.rs
 -     if handshake.stamp != s.stamp {
 +     if handshake.pid != s.pid {
+```
+
+### status/unwritable-transport-not-reported
+
+- task: T32
+- command: `mise exec -- cargo test -p dcs-eval status`
+- reddens: `a_transport_the_client_will_not_write_into_is_a_problem`
+
+```sweep-edit crates/dcs-eval/src/status.rs
+-     problems.extend(handshake.unwritable(writedir).map(Problem::Unwritable));
 ```
 
 ### status/round-trip-issued
@@ -1276,6 +1329,21 @@ not cover is printed by the sweep itself rather than left to be assumed.
 ```sweep-edit crates/dcs-mcp/src/diag.rs
 -         .with_writer(std::io::stderr)
 +         .with_writer(std::io::stdout)
+```
+
+### serve/unwritable-transport-written-into
+
+- task: T37
+- command: `mise exec -- cargo test -p dcs-mcp serve`
+- reddens: `a_transport_outside_logs_is_refused_before_anything_is_written`
+- note: the client judged with no write directory, so a handshake naming the
+  variant's `Config` is addressed and a call would publish there. The red is
+  the refusal the test expects first; the empty-directory assertions after it
+  are what the refusal protects.
+
+```sweep-edit crates/dcs-mcp/src/serve.rs
+-         if let Some(why) = handshake.unwritable(writedir.as_ref()) {
++         if let Some(why) = handshake.unwritable(None) {
 ```
 
 ### serve/client-resolved-once
@@ -2095,6 +2163,19 @@ not cover is printed by the sweep itself rather than left to be assumed.
 ```sweep-edit crates/dcs-mcp/src/verify.rs
 - const STRAY_PREFIXES: [&str; 1] = ["dcseval"];
 + const STRAY_PREFIXES: [&str; 1] = ["dcsapi"];
+```
+
+### verify/unwritable-transport-not-reported
+
+- task: T46
+- command: `mise exec -- cargo test -p dcs-mcp verify`
+- reddens: `verify::tests::a_transport_in_the_variants_config_is_a_problem`
+- note: `verify` hands `status` no write directory, so a transport in the
+  variant's `Config` verifies.
+
+```sweep-edit crates/dcs-mcp/src/verify.rs
+-     let session = status::status_in(output, Some(variant), now);
++     let session = status::status_in(output, None, now);
 ```
 
 ### verify/relaunch-leftover-heartbeat-not-verified
