@@ -25,16 +25,15 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **`dcs-mcp live` left the binary**, the maintainer's call once ADR 0031 held its figures: its module, the dormant probe suite, `reads::alone` and its eight controls, closing that carry-forward. PLAN's T47 to T50 now point at ADR 0031.
 - **`verify` reads at a glance (ADR 0032)**: the verdict first, a row per part worded `ok`, `PROBLEM`, `waiting` or `note` with a `fix:`; `--verbose`, `status` and `dcs_status` add the exact problems and a `details` block where the Debug dump was. A reply's body follows a blank line. Three controls under T46; how it reads in conhost is the maintainer's to see.
 - **Stage 9's live run recorded (ADR 0031)**: dormant 0.0011 ms/frame, round trips p50 ~13.9 ms. Six reads answered and are sent by every game-state, `getMissionLoaded` crashed DCS twice and left the list, `--reads` and `reads` are gone, the editor is read from `MapWindow.getVisible()` in `gui`, a `tempMission` name gives way to the file; s17 dropped. Nine controls under T50, proved off DCS; how they read a live game is the maintainer's to see.
-- **`verify` failed straight after every relaunch**: the executor writes no heartbeat at load, so the last session's file read as two problems; one written before the handshake is now a leftover and no problem, one since still one (ADR 0030). Client-only, no reinstall; four controls under T32 and T46.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-**`live` leaves the binary**, with its tests and its `live/` controls, now its figures are in ADR 0031: the maintainer's call, 2026-09-21. Agent-verifiable: `mise run check` and a sweep of the groups it touches.
-Then T52 and T51, **the maintainer's at a running install**. T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
+T52 and T51, **the maintainer's at a running install**. T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
 
 The MCP registration still points at `dcs-api-bridge`; the swap strands a session
 mid-task and is the maintainer's call (ADR 0001); `install` prints the snippet.
@@ -86,8 +85,6 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **A `Minter` has no owner.** The window mints from whatever it was handed; who
   holds one across tool calls, so two do not restart at seq 1, is Stage 7's.
   `Minter::seeded_at` resumes a counter.
-- **`dcs-mcp live` is temporary.** Once Stage 9's figures are in a decision record,
-  it leaves the binary with its tests and `live/` entries: the maintainer's call, 2026-09-21.
 - **`install` over a copy of ours, then `uninstall`, leaves one in place.** Same
   release or older: `install` parks ours, `uninstall` restores it (T45's); after an
   upgrade it takes two runs. Maintainer's: restore a park we shipped? A row of its own.
