@@ -14,15 +14,24 @@ too, never a silent skip.
 
 **A task that builds a control adds its entry here, in the same pull request.**
 That is the only way the file stays honest. `tools/sweep-cover.sh` checks that
-every Stage 0–8 plan row naming a mutation has an entry here, but it checks
-presence per task, not per mutation, so a second control added to a row that
-already has an entry can still go unwritten if nobody writes it.
+a plan row naming a mutation has an entry here, but it checks presence per
+task, not per mutation, so a second control added to a row that already has an
+entry can still go unwritten if nobody writes it.
 
-**Which rows owe an entry, and which may hold one.** Every row from Stage 0 to
-Stage 8 — every stage that is built — whose done-condition names a mutation
-owes one, and an entry filed under any row from Stage 0 upward is accepted,
-because a task past Stage 8 that builds a control writes its entry in the same
-pull request like every other. Stages 0–2 were once the one place an entry was
+**Which rows owe an entry, and which may hold one.** In a retired plan — one
+that is finished, so every row in it is done — every row from Stage 0 to Stage
+8, every stage that is built, whose done-condition names a mutation owes one.
+In the plan being built, `docs/PLAN.md`, a row owes one once the plan marks it
+done, because its rows are written before their code and a gate demanding an
+entry for a row nobody has started would fail every run until the last one
+landed. An entry filed under any row either plan *names a mutation for* is
+accepted, because a task builds its control and writes its entry in one pull
+request, and the mark goes on in the same one; an entry under a row naming no
+mutation is a stray wherever it sits. The mark is typed by hand, so a row that
+lands unmarked owes nothing and nothing notices — which is why every run also
+prints how many rows are waiting for one.
+
+Stages 0–2 were once the one place an entry was
 refused: they closed before this runner existed and stood in the figure as one
 hand-counted group, so an entry under one of their rows would have been
 counted twice. Each of their mutations now has an entry of its own, and the

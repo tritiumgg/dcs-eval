@@ -20,7 +20,7 @@ cd "$root"
 
 # Every case below must be reached; the count is asserted rather than
 # reported. Raise this when a case is added.
-CASES=39
+CASES=47
 
 sandbox=$(mktemp -d)
 trap 'rm -rf "$sandbox"' EXIT INT TERM
@@ -762,14 +762,20 @@ cover="$sandbox/cover"
 mkdir -p "$cover/docs" "$cover/tools"
 cp tools/sweep-cover.sh "$cover/tools/sweep-cover.sh"
 
-# A six-row fixture plan. The stage heading is what the gate reads the stage
-# off. The second row names no mutation, so it is owed no entry; the third sits
-# outside the window presence is owed in, so it is owed no entry either — but
-# an entry written for it early is not a stray; the fourth sits before Stage 3,
-# which is owed an entry like any other built stage. The last two sit on the
-# window's two edges, Stage 0 and Stage 8, so narrowing it at either end drops
-# a row that is owed an entry.
-cat > "$cover/docs/PLAN.md" <<EOF
+# A six-row fixture plan, retired: every row of a retired plan is done by the
+# fact of its retirement, so the built window is what decides which of them owe
+# an entry. The stage heading is what the gate reads the stage off. The second
+# row names no mutation, so it is owed no entry; the third sits outside the
+# window presence is owed in, so it is owed no entry either — but an entry
+# written for it early is not a stray; the fourth sits before Stage 3, which is
+# owed an entry like any other built stage. The last two sit on the window's two
+# edges, Stage 0 and Stage 8, so narrowing it at either end drops a row that is
+# owed an entry.
+#
+# The current plan is a heading and nothing else here: the gate requires the
+# file, and the cases for what a current plan owes are further down.
+printf '# a fixture plan with no rows yet\n' > "$cover/docs/PLAN.md"
+cat > "$cover/docs/PLAN-SHIPPED.md" <<EOF
 ## Stage 0 — the fixture's floor
 
 | id | task | done when | needs | runs on |
@@ -862,7 +868,7 @@ check 'a Stage 8 row is owed an entry' \
 # a real entry a stray the day a stage passed it. A row above the first stage
 # heading belongs to no stage at all, and is read by neither direction rather
 # than falling into the lowest one.
-cat > "$cover/docs/PLAN.md" <<EOF
+cat > "$cover/docs/PLAN-SHIPPED.md" <<EOF
 | $four | a row filed under no stage | it holds; mutation: break it | — | developer-only |
 
 ## Stage 100 — a fixture stage far ahead of any ceiling
@@ -881,6 +887,108 @@ covered "$four"
 out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
 check 'an entry for a row filed under no stage is a stray' \
     1 "$got" "files a control under $four" "$out"
+
+# --- what the plan being built owes, and when -------------------------------
+#
+# The built window stood in for "already built" only because this gate was
+# written at the end of the plan it was written for. A plan still being built
+# writes its rows before their code, so the current plan owes an entry for a
+# row it marks done and for no other — and an entry written under a row that
+# is not marked done yet is still not a stray, because a control lands in the
+# same pull request as the row's code and the mark goes on in it too.
+rm -f "$cover/docs/PLAN-SHIPPED.md"
+cat > "$cover/docs/PLAN.md" <<EOF
+## Stage 0 — the plan being built
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $one | a row that landed. **Done** | it holds; mutation: break it and it does not | — | developer-only |
+| $two | a row nobody has started | it holds; mutation: break it and it does not | — | developer-only |
+EOF
+
+covered "$one"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'a row not marked done is owed no entry yet' \
+    0 "$got" "1 plan rows name a mutation" "$out"
+
+covered "$two"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'a row marked done is owed its entry' \
+    1 "$got" "the plan names a mutation for $one and the inventory has no entry" "$out"
+
+covered "$one" "$two"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'an entry under a row not yet marked done is not a stray' \
+    0 "$got" "1 plan rows name a mutation" "$out"
+
+# The mark is typed by hand, so the count of rows still waiting for one is the
+# only thing that would look odd if a row landed unmarked. A run that stopped
+# printing it would take that with it.
+check 'the run says how many rows are waiting to be marked done' \
+    0 "$got" "1 more rows in the current plan name a mutation and are not marked done" "$out"
+
+# The mark is read from the task cell, not from anywhere in the row. Read from
+# the whole row, a done-condition opening "**Done when**" would mark itself.
+cat > "$cover/docs/PLAN.md" <<EOF
+## Stage 0 — the plan being built
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $one | a row nobody has started | **Done when** it holds; mutation: break it | — | developer-only |
+EOF
+
+covered
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'a done-condition saying Done does not mark the row' \
+    0 "$got" "0 plan rows name a mutation" "$out"
+
+# Two retired plans, each read from its own first line. The second opens with a
+# row above any heading, which belongs to no stage and is read by neither
+# direction — so an entry for it is a stray. Read as one long document instead,
+# that row would inherit the first plan's Stage 100 and the stray would pass.
+cat > "$cover/docs/PLAN-FIRST.md" <<EOF
+## Stage 100 — a retired plan that ran long
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $three | a far later fixture | it holds; mutation: break it | — | developer-only |
+EOF
+cat > "$cover/docs/PLAN-SECOND.md" <<EOF
+| $four | a row above this plan's first heading | it holds; mutation: break it | — | developer-only |
+
+## Stage 0 — another retired plan, numbering from its own zero
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $floor | an early fixture | it holds; mutation: break it | — | developer-only |
+EOF
+
+covered "$floor" "$four"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'each plan is read from its own first line, not as one document' \
+    1 "$got" "files a control under $four" "$out"
+
+covered "$three"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'a second retired plan owes its Stage 0 entry like any other' \
+    1 "$got" "the plan names a mutation for $floor and the inventory has no entry" "$out"
+
+# An ID two plans both carry would file one row's controls under the other's
+# entries and read as covered.
+cat > "$cover/docs/PLAN-SECOND.md" <<EOF
+## Stage 0 — another retired plan, reusing an ID
+
+| id | task | done when | needs | runs on |
+|---|---|---|---|---|
+| $three | a row reusing an ID | it holds; mutation: break it | — | developer-only |
+EOF
+
+covered "$three"
+out=$(sh "$cover/tools/sweep-cover.sh" --root "$cover" 2>&1) && got=0 || got=$?
+check 'an ID two plans both carry is refused' \
+    1 "$got" "$three is carried by more than one row" "$out"
+
+rm -f "$cover/docs/PLAN-FIRST.md" "$cover/docs/PLAN-SECOND.md"
 
 
 # --- the tally --------------------------------------------------------------
