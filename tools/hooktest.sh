@@ -52,6 +52,24 @@ case_ guard-frozen-writes.sh 2 "write to a spec"         "$(write_payload docs/s
 case_ guard-frozen-writes.sh 2 "write to .gitattributes" "$(write_payload .gitattributes)"
 case_ guard-frozen-writes.sh 0 "write to STATE.md"       "$(write_payload docs/STATE.md)"
 case_ guard-frozen-writes.sh 0 "write to a decision"     "$(write_payload docs/decisions/0006-x.md)"
+# Frozen is never edited, not never written: a document main does not carry is
+# being written, and one main carries is refused every write.
+case_ guard-frozen-writes.sh 0 "a spec not on main yet"  "$(write_payload docs/specs/not-yet.md)"
+# A spelling that walks out of docs/specs/ and back in resolves to the frozen
+# file it names, and is refused as one. Unresolvable is refused too: a guard
+# that puzzles over an unfamiliar spelling and lets it through is not a guard.
+case_ guard-frozen-writes.sh 2 "a spec reached through .." "$(write_payload docs/specs/nope/../mcp.md)"
+case_ guard-frozen-writes.sh 2 "a backslash spelling"    "$(write_payload 'docs\\\\specs\\\\mcp.md')"
+case_ guard-frozen-writes.sh 2 "an extended-length path" "$(write_payload '\\\\\\\\?\\\\C:\\\\docs\\\\specs\\\\mcp.md')"
+case_ guard-frozen-writes.sh 2 "a UNC path"              "$(write_payload '\\\\\\\\host\\\\C$\\\\docs\\\\specs\\\\mcp.md')"
+# NTFS opens DOCS/SPECS/MCP.MD as the file this guards, and drops a trailing
+# dot or space from a name. Every spelling the filesystem accepts is the file.
+case_ guard-frozen-writes.sh 2 "an upper-case spelling" "$(write_payload DOCS/SPECS/MCP.MD)"
+case_ guard-frozen-writes.sh 2 "a mixed-case name"      "$(write_payload docs/specs/MCP.md)"
+case_ guard-frozen-writes.sh 2 "a trailing dot"         "$(write_payload docs/specs/mcp.md.)"
+case_ guard-frozen-writes.sh 0 "case on an unlanded one" "$(write_payload docs/specs/NOT-YET.md)"
+# The settings matcher names NotebookEdit, whose payload carries no file_path.
+case_ guard-frozen-writes.sh 2 "a notebook path"         '{"tool_name":"NotebookEdit","tool_input":{"notebook_path":"docs/specs/mcp.md"}}'
 
 # --- the shell guard: refusals ----------------------------------------------
 case_ guard-bash.sh 2 "bare cargo"            "$(bash_payload 'cargo test')"
