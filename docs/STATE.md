@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. Milestone D closed on 2026-09-22: T52 and T51 passed by hand at the maintainer's install, ADR 0035 holds what shipped unmeasured, ADR 0036 closes the non-ASCII path.
+Nothing. Milestone D closed on 2026-09-22: T52 and T51 passed by hand at the maintainer's install, ADR 0035 holds what shipped unmeasured, ADR 0036 closes the non-ASCII path, ADR 0037 the `--out` path.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -33,7 +33,7 @@ broken. Empty this when the task closes.*
 
 ## Next
 
-The two carries below, then nothing: every plan task is done and every milestone closed. A release tag is the maintainer's, and `release.yml` fires on it.
+The one carry below, then nothing: every plan task is done and every milestone closed. A release tag is the maintainer's, and `release.yml` fires on it.
 
 The MCP registration is swapped (2026-09-22): `dcs-eval` replaces `dcs-api-bridge` in
 Claude Desktop's config and Claude Code's user scope, running a copy of the binary at
@@ -56,6 +56,3 @@ entries at most: an eleventh means something here is finished, or belongs in
 - **`game-state` wording, two rough edges.** A nil read prints `player_unit_type: nil nil`
   (type and value both); the pause axis at the menu heads the answer with `unknown: activity
   said menu, and this is answered only in a mission`. Plain words for both. Maintainer's, 2026-09-22.
-- **The README's one `--out` "not built".** `--out` is not judged against the containment rule;
-  ADR 0026 stopped judging read paths against the install, so the sentence settles as a decision
-  rather than a build: say what `--out` does and take the note out.

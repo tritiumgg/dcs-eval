@@ -260,9 +260,11 @@ A verb exits 0 for an answer or a `pending`, 1 where the answer is a refusal
 or a file you asked for could not be written, and 2 for a command line that
 would not parse.
 
-An `--out` path is not yet judged against the containment rule the install
-paths are judged by — *not built*; `--capture` is, because it goes through the
-same data directory.
+An `--out` path is written wherever you point it, and where it lies is
+never judged, for the reason `eval --file` reads by: a chunk in the `hook`
+state can write the same file with `io.open` in one line (ADR 0037).
+`--capture` is judged, because it goes through the data directory and takes
+the containment rule the install paths are judged by.
 
 ## What ran, written down
 
