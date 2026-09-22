@@ -35,8 +35,9 @@ broken. Empty this when the task closes.*
 
 T52 and T51, **the maintainer's at a running install**. T52 starts from `dcs-mcp install --variant DCS`: the maintainer's `Saved Games` holds `DCS`, `DCS_F4E` and `DCS_OH58D`, and with no `--variant` every installer verb refuses and names all three.
 
-The MCP registration still points at `dcs-api-bridge`; the swap strands a session
-mid-task and is the maintainer's call (ADR 0001); `install` prints the snippet.
+The MCP registration is swapped (2026-09-22): `dcs-eval` replaces `dcs-api-bridge` in
+Claude Desktop's config and Claude Code's user scope, running a copy of the binary at
+`%LOCALAPPDATA%\Programs\dcs-mcp\` so a rebuild is not blocked by the server's lock.
 
 ## After that
 
