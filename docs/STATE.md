@@ -25,7 +25,7 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **Milestone D closed (ADR 0035)**: T52's cutover and T51's permanent-install acceptance done by hand on 2026-09-22; the "what only Stage 9 sees" list and the handshake's declared-before-served fact moved into the record; three resolved carries deleted.
+- **Milestone D closed (ADR 0035)**: T52's cutover and T51's permanent-install acceptance done by hand on 2026-09-22; the "what only Stage 9 sees" list and the handshake's declared-before-served fact moved into the record; five resolved carries deleted: three into it, and two stale ones of Stage 7's closed with Milestone C (the held handle by T41's `watching` controls, the `Minter` by a fresh tag per tool call).
 - **A path past ASCII is a shipped limit (ADR 0036)**: no wire spelling is built; the README says a user name past ASCII is unsupported and `docs/audit.md` points at the record.
 - **The wait suite fails instead of hanging on a pid-for-stamp `decide`**: its unbounded-wait test runs on a thread with a 30 s bound, so `cargo test -p dcs-eval wait` reddens `wait/pid-for-stamp` (T54).
 
