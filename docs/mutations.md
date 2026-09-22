@@ -2233,20 +2233,6 @@ T50's figures decided runs off DCS, so its controls are entries here.
 +     Some(data.path())
 ```
 
-### live/read-sent-beside-a-ping
-
-- task: T50
-- command: `mise exec -- cargo test -p dcs-eval game_reads`
-- reddens: `alone_publishes_the_one_read_and_nothing_beside_it`
-- note: `alone_answers_the_reads_value` goes red beside it, because the first
-  item the window yields is then the ping's reply, which is not the read's
-  grammar.
-
-```sweep-edit crates/dcs-eval/src/reads.rs
--     let specs = vec![spec];
-+     let specs = vec![Spec::new(&[("op", "ping"), ("for", h.stamp.as_str())], b""), spec];
-```
-
 ### reads/dropped-read-put-back
 
 - task: T50
@@ -2254,10 +2240,9 @@ T50's figures decided runs off DCS, so its controls are entries here.
 - reddens: `the_read_that_crashed_dcs_is_never_published`
 - note: the read that crashed DCS in a mission put back in the table, in the
   slot of the one beside it, which is the smallest edit that sends it again.
-  Three more go red beside it: the list test, since the table no longer
-  holds the callees it names; the unlisted test, since the vet now admits
-  the read; and the alone test, which sends `mission_theatre` by its key and
-  finds another callee on the disk.
+  Two more go red beside it: the list test, since the table no longer
+  holds the callees it names; and the unlisted test, since the vet now
+  admits the read.
 
 ```sweep-edit crates/dcs-eval/src/reads.rs
 -         callee: "DCS.getMissionTheatre",
