@@ -33,7 +33,7 @@ broken. Empty this when the task closes.*
 
 ## Next
 
-The one carry below, then nothing: every plan task is done and every milestone closed. A release tag is the maintainer's, and `release.yml` fires on it.
+The one carry below, then a release: every plan task is done and every milestone closed, but no workflow builds or publishes `dcs-mcp.exe` and the README's Install says to download it. The tag and the workflow are the maintainer's.
 
 The MCP registration is swapped (2026-09-22): `dcs-eval` replaces `dcs-api-bridge` in
 Claude Desktop's config and Claude Code's user scope, running a copy of the binary at
