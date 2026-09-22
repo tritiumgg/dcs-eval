@@ -1053,6 +1053,21 @@ not cover is printed by the sweep itself rather than left to be assumed.
 +         Some(b) if b.armed || !b.armed => {
 ```
 
+### wait/pid-for-stamp
+
+- task: T54
+- command: `mise exec -- cargo test -p dcs-eval wait`
+- reddens: `a_deadline_past_the_end_of_the_clock_is_the_furthest_one_it_can_name`
+- note: the unit half of `e2e/pid-change-not-superseded`. The stand-in's
+  restart keeps its pid, so the unbounded wait in the reddening test never
+  sees a terminal outcome; it once hung the suite, and now fails on its own
+  30 s bound. Three table tests redden beside it.
+
+```sweep-edit crates/dcs-eval/src/wait.rs
+-     if handshake.stamp != s.stamp {
++     if handshake.pid != s.pid {
+```
+
 ### e2e/stamp-change-not-superseded
 
 - task: T54
