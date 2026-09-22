@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. Milestone D closed on 2026-09-22: T52 and T51 passed by hand at the maintainer's install, ADR 0035 holds what shipped unmeasured, ADR 0036 closes the non-ASCII path, ADR 0037 the `--out` path.
+Nothing. The screenshot capability is specified and planned; T65 is where building starts.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,15 +25,17 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
-- **`game-state` says a nil once and the menu plainly**: a nil read prints `player_unit_type: nil`, and the session axis outside a mission prints `unknown: not in a mission (activity said menu)`; the last carry, deleted.
-- **Milestone D closed (ADR 0035)**: T52's cutover and T51's permanent-install acceptance done by hand on 2026-09-22; the "what only Stage 9 sees" list and the handshake's declared-before-served fact moved into the record; five resolved carries deleted: three into it, and two stale ones of Stage 7's closed with Milestone C (the held handle by T41's `watching` controls, the `Minter` by a fresh tag per tool call).
-- **A path past ASCII is a shipped limit (ADR 0036)**: no wire spelling is built; the README says a user name past ASCII is unsupported and `docs/audit.md` points at the record.
+- **`docs/specs/screenshot.md`, frozen**: a seventh tool and a fifth verb, the DCS facts with where each came from, crop and an inline image argued out, and §4 listing what only a live install can answer.
+- **The plan is new**: the finished one is retired at `docs/PLAN-SHIPPED.md`, `docs/PLAN.md` carries seven tasks in two stages from T65, and `tools/sweep-cover.sh` reads both — the current plan owes an entry for a row it marks `**Done**` in its task cell, a retired plan across Stage 0–8, and an ID two plans share is refused.
+- **The frozen guard lets a specification be born**: a path under `docs/specs/` that does not exist passes once, and is refused every write after.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-A release: every plan task is done and every milestone closed, but no workflow builds or publishes `dcs-mcp.exe` and the README's Install says to download it. The tag and the workflow are the maintainer's.
+T65, the screenshot name: validation and the supplied default, `cargo test -p dcs-eval -- shot_name`. Developer-only, and an agent sees its own result. Then T66 and T67; T68 and T69 update the README, which still says six tools.
+
+A release is still open: every task of the retired plan is done, but no workflow builds or publishes `dcs-mcp.exe` and the README's Install says to download it. The tag and the workflow are the maintainer's.
 
 The MCP registration is swapped (2026-09-22): `dcs-eval` replaces `dcs-api-bridge` in
 Claude Desktop's config and Claude Code's user scope, running a copy of the binary at
@@ -41,10 +43,11 @@ Claude Desktop's config and Claude Code's user scope, running a copy of the bina
 
 ## After that
 
-- **Every milestone is closed.** A: the wire proven off DCS (Stages 0–2). B: the full protocol
-  and its controls (3–6). C: installable and serving, 26 controls seen red (7–8). D: measured
-  live (ADR 0031), the cutover and the permanent install by hand, what shipped unmeasured
-  written down (ADR 0035). Figures in git log and the records.
+- **Milestone E**, the capability built: Stage 0 green and an MCP session listing seven tools.
+  **Milestone F**, a capture looked at in a mission, at the menu and in the editor, and
+  `screenshot.md` §4's open questions answered.
+- **A to D are closed** — the wire, the protocol, the installer, and live in DCS. Figures in git
+  log, the records, and `docs/PLAN-SHIPPED.md`.
 
 ## Carries forward
 
@@ -53,4 +56,4 @@ resolved, and say where. Mark an entry only the maintainer can settle. Ten
 entries at most: an eleventh means something here is finished, or belongs in
 `docs/decisions/` or `CLAUDE.md` instead.
 
-None.
+- **Nothing here has ever taken a screenshot.** Every DCS fact in `docs/specs/screenshot.md` §1 comes from the install, from files on one maintainer's disk and from an earlier project. Stage 1 is where this build sees one.
