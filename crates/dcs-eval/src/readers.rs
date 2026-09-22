@@ -19,12 +19,13 @@
 //! are where a request is published and a reply is read, and one of them
 //! the filesystem will not own refuses the whole file: a client that went
 //! on would be about to write into a path nothing resolved. `lfs_tempdir`
-//! and `install_guard` are not used for anything; they are written down so
-//! a client can say what the executor saw. One of those that does not
-//! resolve is kept as a [`Diagnostic::Unresolved`], because a handshake
-//! naming such a path is exactly the finding a report of the session's
-//! problems is there to carry, and refusing the file would hide the
-//! finding behind the fault it describes.
+//! and `install_guard` are never written to or read from; they are written
+//! down so a client can say what the executor saw, and the install is also
+//! what [`Handshake::unwritable`] judges the transport against. One of
+//! those that does not resolve is kept as a [`Diagnostic::Unresolved`],
+//! because a handshake naming such a path is exactly the finding a report
+//! of the session's problems is there to carry, and refusing the file would
+//! hide the finding behind the fault it describes.
 //!
 //! Two values look like times and are not. `started` and `since` are
 //! written with `os.date` off the local wall clock, with no zone and no
@@ -333,7 +334,8 @@ pub struct Handshake {
     pub lfs_tempdir: Diagnostic,
     pub transport_source: String,
     /// The install the executor guarded its own writes against. Reported
-    /// on the same terms as `lfs_tempdir`.
+    /// on the same terms as `lfs_tempdir`, and the root a transport inside
+    /// which this client will not write.
     pub install_guard: Diagnostic,
     pub tick_budget_ms: u64,
     pub instruction_budget: u64,
@@ -413,7 +415,88 @@ impl Handshake {
             max_result_bytes: number(h, "max_result_bytes")?,
         })
     }
+
+    /// Why this client may not write into the transport this handshake
+    /// names, or nothing where it may.
+    ///
+    /// The client writes a request and the arm file into what the executor
+    /// published, so a handshake that is wrong, corrupted or not the
+    /// executor's could otherwise aim those writes anywhere. The executor
+    /// refuses the same places for its own writes; this is the client
+    /// holding the published paths to that rule rather than trusting them.
+    /// A relative path never gets here: it is refused as the file is read.
+    ///
+    /// The install is the one the executor says it guarded its writes
+    /// against, where that resolved: the client is given no install of its
+    /// own to judge by. `writedir` is the variant's Saved Games tree the
+    /// client was pointed at, inside which only its `Logs` may be written,
+    /// so `Logs\..\Config` is refused once resolved. Where it is not known,
+    /// that half is not judged.
+    pub fn unwritable(&self, writedir: Option<&Real>) -> Option<Unwritable> {
+        let install = self.install_guard.real();
+        let logs = writedir.and_then(|w| paths::resolve(&w.as_path().join("Logs")).ok());
+        let transport = [
+            ("transport", &self.transport),
+            ("req", &self.req),
+            ("res", &self.res),
+            ("arm", &self.arm),
+        ];
+        for (name, path) in transport {
+            let rule = if let Some(root) = install.filter(|root| root.contains(path)) {
+                Forbidden::Install(root.clone())
+            } else if let Some(root) = writedir.filter(|root| root.contains(path))
+                && !logs.as_ref().is_some_and(|logs| logs.contains(path))
+            {
+                Forbidden::SavedGames(root.clone())
+            } else {
+                continue;
+            };
+            return Some(Unwritable {
+                name,
+                path: path.clone(),
+                rule,
+            });
+        }
+        None
+    }
 }
+
+/// A transport path the handshake names that this client will not write
+/// into, and the rule it breaks. `Display` is one line naming both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Unwritable {
+    pub name: &'static str,
+    pub path: Real,
+    pub rule: Forbidden,
+}
+
+/// The root a refused transport path lies under.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Forbidden {
+    /// The DCS install, which is read-only to everything this project runs.
+    Install(Real),
+    /// The variant's Saved Games tree, outside its `Logs`.
+    SavedGames(Real),
+}
+
+impl fmt::Display for Unwritable {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self { name, path, rule } = self;
+        match rule {
+            Forbidden::Install(root) => write!(
+                f,
+                "{name}: {path} lies inside the DCS install {root}, which this client never writes into"
+            ),
+            Forbidden::SavedGames(root) => write!(
+                f,
+                "{name}: {path} lies inside the Saved Games tree {root} and not under its Logs, \
+                 the only part of it this client writes into"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for Unwritable {}
 
 /// `<output>\heartbeat.txt`, rewritten while the executor ticks: whether it
 /// is armed, what phase it is in, how far its tick counter has gone, and
@@ -494,7 +577,10 @@ impl Heartbeat {
 mod tests {
     use super::*;
     use crate::standin::Standin;
-    use crate::testing::{Sandbox, framed, lines, past_ascii, real, slurp, with, without};
+    use crate::testing::{
+        Sandbox, framed, junction, lines, past_ascii, real, short_name, slurp, with, without,
+    };
+    use std::fs;
 
     /// A session with its handshake published, and the bytes it wrote.
     fn published(b: &Sandbox) -> (Standin, Vec<u8>) {
@@ -1021,5 +1107,114 @@ mod tests {
                 "{why}"
             );
         }
+    }
+
+    // ---- where the client may write ---------------------------------------
+
+    /// A variant laid out as DCS lays one out, with the stand-in publishing
+    /// beside its output under `Logs`, and an install beside it: the box,
+    /// the variant's write directory, the install, and the handshake bytes
+    /// naming that install as its guard.
+    fn laid_out(b: &Sandbox) -> (Real, PathBuf, PathBuf, Vec<u8>) {
+        let writedir = b.join("Saved Games").join("DCS");
+        let install = b.join("DCS World");
+        for dir in [writedir.join("Config"), install.join("bin")] {
+            fs::create_dir_all(dir).expect("the tree");
+        }
+        let output = writedir.join("Logs").join("DcsEval").join("hook");
+        fs::create_dir_all(&output).expect("the output");
+        let s = Standin::open(&output, "hook").expect("the session opens");
+        s.handshake().expect("the handshake publishes");
+        let bytes = slurp(&s.output().join("executor.txt"));
+        let bytes = with(&bytes, "install_guard", &install.to_string_lossy());
+        (real(&writedir), writedir, install, bytes)
+    }
+
+    /// Every transport header of `bytes` moved to `dir`, the way a handshake
+    /// naming another transport would name them.
+    fn moved(bytes: &[u8], dir: &Path) -> Vec<u8> {
+        let mut out = with(bytes, "transport", &dir.to_string_lossy());
+        for name in ["req", "res"] {
+            out = with(&out, name, &dir.join(name).to_string_lossy());
+        }
+        with(&out, "arm", &dir.join("arm").to_string_lossy())
+    }
+
+    fn unwritable(bytes: &[u8], writedir: &Real) -> String {
+        at(bytes)
+            .unwritable(Some(writedir))
+            .expect("the transport is refused")
+            .to_string()
+    }
+
+    #[test]
+    fn the_fallback_transport_under_logs_is_written_into() {
+        let b = Sandbox::new();
+        let (writedir, _, _, bytes) = laid_out(&b);
+        assert_eq!(at(&bytes).unwritable(Some(&writedir)), None);
+    }
+
+    #[test]
+    fn the_temp_transport_outside_saved_games_is_written_into() {
+        // `%TEMP%\DCS\dcs-eval\<host>`, where the first live load put it.
+        let b = Sandbox::new();
+        let (writedir, _, _, bytes) = laid_out(&b);
+        let temp = b.join("Temp").join("DCS").join("dcs-eval").join("hook");
+        assert_eq!(at(&moved(&bytes, &temp)).unwritable(Some(&writedir)), None);
+    }
+
+    #[test]
+    fn a_transport_inside_the_install_is_refused_naming_it() {
+        let b = Sandbox::new();
+        let (writedir, _, install, bytes) = laid_out(&b);
+        let why = unwritable(&moved(&bytes, &install.join("bin")), &writedir);
+        assert!(why.starts_with("transport: "), "{why}");
+        assert!(why.contains("inside the DCS install"), "{why}");
+        // And spelt short, which misses the install textually.
+        let short = short_name(&install).join("bin").join("rpc");
+        let why = unwritable(&moved(&bytes, &short), &writedir);
+        assert!(why.contains("inside the DCS install"), "{why}");
+    }
+
+    #[test]
+    fn a_single_path_inside_the_install_is_refused_naming_its_header() {
+        let b = Sandbox::new();
+        let (writedir, _, install, bytes) = laid_out(&b);
+        let one = with(&bytes, "arm", &install.join("arm").to_string_lossy());
+        let why = unwritable(&one, &writedir);
+        assert!(why.starts_with("arm: "), "{why}");
+        // The install is judged with or without a write directory.
+        assert!(at(&one).unwritable(None).is_some(), "judged without one");
+    }
+
+    #[test]
+    fn a_transport_in_saved_games_outside_logs_is_refused() {
+        let b = Sandbox::new();
+        let (writedir, dir, _, bytes) = laid_out(&b);
+        let wound = dir.join("Logs").join("..").join("Config").join("rpc");
+        let sibling = dir.join("LogsX").join("rpc");
+        for place in [dir.join("Config").join("rpc"), dir.clone(), wound, sibling] {
+            let why = unwritable(&moved(&bytes, &place), &writedir);
+            assert!(why.starts_with("transport: "), "{why}");
+            assert!(why.contains("not under its Logs"), "{why}");
+        }
+    }
+
+    #[test]
+    fn a_junction_under_logs_does_not_launder_a_write_into_config() {
+        let b = Sandbox::new();
+        let (writedir, dir, _, bytes) = laid_out(&b);
+        let link = dir.join("Logs").join("link");
+        junction(&link, &dir.join("Config"));
+        let why = unwritable(&moved(&bytes, &link.join("rpc")), &writedir);
+        assert!(why.contains("not under its Logs"), "{why}");
+    }
+
+    #[test]
+    fn saved_games_is_not_judged_where_the_write_directory_is_not_known() {
+        let b = Sandbox::new();
+        let (_, dir, _, bytes) = laid_out(&b);
+        let config = moved(&bytes, &dir.join("Config").join("rpc"));
+        assert_eq!(at(&config).unwritable(None), None);
     }
 }
