@@ -67,6 +67,12 @@ It never picks one for you and never stops at a prompt: the refusal is the
 question, and the flag is the answer. `--saved-games <dir>` points it at a
 folder of your choosing instead.
 
+A Windows user name with a character past ASCII is not supported: the output
+directory the executor publishes under `Saved Games` carries the name, the
+wire carries ASCII only, and the executor refuses to load, naming the header
+in `dcs.log`. `verify` then says `waiting` for a session that never comes.
+ADR 0036.
+
 It places the executor in `Scripts\Hooks\` and appends one line to
 `Scripts\Export.lua`, creating the file if there is none. It never writes to
 the DCS install itself, and nothing already in `Saved Games` is deleted or
