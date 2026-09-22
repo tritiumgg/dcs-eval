@@ -278,7 +278,7 @@ pub fn verify_at(
     // any protocol but the one this client speaks, so a file written by a
     // executor of another protocol arrives as an unreadable handshake
     // naming the version it carried, rather than as a silent agreement.
-    let session = status::status_at(output, now);
+    let session = status::status_in(output, Some(variant), now);
     let app_version = status::measured_against(
         session
             .session
@@ -919,6 +919,34 @@ mod tests {
             "the reader names the protocol it would not speak: {said}"
         );
         assert!(!report.verified());
+    }
+
+    #[test]
+    fn a_transport_in_the_variants_config_is_a_problem() {
+        let (_b, variant, output) = fixture();
+        let _ex = installed(&variant, &output);
+        let (release, _older, _current) = a_release();
+        let config = variant.as_path().join("Config").join("rpc");
+        reheader(
+            &output.join("executor.txt"),
+            "transport",
+            &config.display().to_string(),
+        );
+
+        let report = verify_at(&variant, &output, &release, None, an_instant());
+
+        assert!(
+            report
+                .session
+                .problems
+                .iter()
+                .any(|p| matches!(p, status::Problem::Unwritable(_))),
+            "{:?}",
+            report.session.problems
+        );
+        assert!(!report.verified());
+        let shown = render(&report, Detail::Full);
+        assert!(shown.contains("not under its Logs"), "{shown}");
     }
 
     #[test]

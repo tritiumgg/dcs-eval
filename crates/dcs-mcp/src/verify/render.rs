@@ -405,6 +405,11 @@ fn dcs_rows(session: &status::Status, variant: Option<&Path>, installed: bool) -
                      replies may not reach dcs-mcp"
                 ),
             ),
+            status::Problem::Unwritable(why) => Row::new(
+                Word::Problem,
+                "DCS",
+                format!("names a folder dcs-mcp will not write requests into: {why}"),
+            ),
             status::Problem::Unresolved { name, named, why } => Row::new(
                 Word::Problem,
                 "DCS",

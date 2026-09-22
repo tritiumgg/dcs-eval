@@ -41,7 +41,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 use crate::paths::{self, Real};
-use crate::readers::{Diagnostic, Handshake, Heartbeat, ReadError, ReadErrorKind};
+use crate::readers::{Diagnostic, Handshake, Heartbeat, ReadError, ReadErrorKind, Unwritable};
 use crate::sys;
 use crate::wait::Session;
 
@@ -381,6 +381,9 @@ pub enum Problem {
     ArmUndecided { path: PathBuf, why: String },
     /// The executor's temp directory is neither this client's nor under it.
     TempdirDisagrees { executor: Real, client: Real },
+    /// The handshake names a transport this client will not write into, so
+    /// every call that would publish is refused.
+    Unwritable(Unwritable),
     /// A path the executor reported rather than used, which the filesystem
     /// would not resolve. A finding about what the session saw, not a
     /// fault in the file.
@@ -430,6 +433,7 @@ impl fmt::Display for Problem {
                 "the executor's temp directory is {executor}, which is neither this \
                  client's {client} nor under it"
             ),
+            Self::Unwritable(why) => write!(f, "{why}"),
             Self::Unresolved { name, named, why } => {
                 write!(f, "{name}: {named} would not resolve: {why}")
             }
@@ -629,6 +633,13 @@ pub fn status(output: &Path) -> Status {
 /// in — once, so every age in one report is against one reading of it and
 /// a test can fix what it is.
 pub fn status_at(output: &Path, now: SystemTime) -> Status {
+    status_in(output, None, now)
+}
+
+/// The report, with the variant's Saved Games tree the transport is judged
+/// against where the caller knows it: a transport this client would refuse
+/// to write into is one of the session's problems.
+pub fn status_in(output: &Path, writedir: Option<&Real>, now: SystemTime) -> Status {
     let mut problems = Vec::new();
     let (handshake, at) = match Handshake::read_published(&output.join("executor.txt")) {
         Ok(read) => read,
@@ -648,6 +659,7 @@ pub fn status_at(output: &Path, now: SystemTime) -> Status {
     problems.extend(gone);
     problems.extend(unresolved("lfs_tempdir", &handshake.lfs_tempdir));
     problems.extend(unresolved("install_guard", &handshake.install_guard));
+    problems.extend(handshake.unwritable(writedir).map(Problem::Unwritable));
     let tempdir = tempdir_of(&handshake.lfs_tempdir);
     // Only a disagreement between two paths that both resolved is worth
     // reporting, and one under this client's is none. Absent is the
@@ -1687,6 +1699,31 @@ mod tests {
             touched(&s),
             dirs_armed,
             "and the armed branch created and removed nothing either"
+        );
+    }
+
+    #[test]
+    fn a_transport_the_client_will_not_write_into_is_a_problem() {
+        let b = Sandbox::new();
+        let s = live(&b);
+        let unwritable = |writedir: &Real| {
+            status_in(s.output(), Some(writedir), SystemTime::now())
+                .problems
+                .into_iter()
+                .filter(|p| matches!(p, Problem::Unwritable(_)))
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+        };
+        // The box as the variant's write directory: the stand-in's
+        // transport lies inside it, and not under its `Logs`.
+        let flagged = unwritable(&real(&b.path));
+        assert_eq!(flagged.len(), 1, "{flagged:?}");
+        assert!(flagged[0].contains("not under its Logs"), "{flagged:?}");
+        // A write directory elsewhere says nothing about it.
+        fs::create_dir(b.join("elsewhere")).expect("another tree");
+        assert_eq!(
+            unwritable(&real(&b.join("elsewhere"))),
+            Vec::<String>::new()
         );
     }
 }
