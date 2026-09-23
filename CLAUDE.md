@@ -2,7 +2,7 @@
 
 Evaluate Lua inside a running DCS World. The **executor** is one Lua file DCS
 loads; `dcs-mcp` is one Rust binary that installs it, speaks its file-based
-protocol, and exposes six tools. It replaces `dcs-api-bridge`, which is
+protocol, and exposes seven tools. It replaces `dcs-api-bridge`, which is
 uninstalled before this is installed (ADR 0001).
 
 **The word is "executor", and the frozen specifications say "bridge".** They

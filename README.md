@@ -5,10 +5,10 @@ Evaluate Lua inside a running DCS World, from an MCP agent or from a terminal.
 Two halves of one product. **The executor** is a single Lua file DCS loads at
 startup; it sleeps until something asks it for anything, and answers in the
 state you name. **`dcs-mcp`** is a single Windows binary that installs the
-executor, speaks its file-based protocol, and serves six MCP tools.
+executor, speaks its file-based protocol, and serves seven MCP tools.
 
 > **Built, and proved off DCS; not yet proved in it.** The executor, the
-> client, the MCP server and its six tools, the command line and the installer
+> client, the MCP server and its seven tools, the command line and the installer
 > are built and held by tests that need no game. What remains is the live
 > proof at a running DCS install, and where a section below describes
 > something not built it says so. `docs/STATE.md` says where the work stands.
@@ -158,10 +158,10 @@ to be restarted afterwards.
 
 `--saved-games` and `--variant` must both be given to `serve`; only the
 installer finds them for you, and the line it prints names both. The server
-registers, lists and answers all six tools below; each takes an optional
+registers, lists and answers all seven tools below; each takes an optional
 `host`, which is `hook` or `export` and falls back to `--host`.
 
-## The six tools
+## The seven tools
 
 | Tool | What it says |
 |---|---|
@@ -170,6 +170,7 @@ registers, lists and answers all six tools below; each takes an optional
 | `dcs_game_state` | what the game is doing, every fact it rests on, and the basis of each value |
 | `dcs_eval` | evaluate a chunk in the state you name |
 | `dcs_eval_file` | the same from a file, with its path and content hash recorded |
+| `dcs_screenshot` | capture what DCS is showing and wait for its file, under a `name` you give or one made from the local time |
 | `dcs_collect` | pick up a reply that was still pending, by id |
 
 An answer comes back as one word on the first line and a line each after it. A
@@ -181,6 +182,21 @@ why, and is marked an error, so a refusal never reads as a call that succeeded
 and came back empty. A `pending` names the id to collect under and the phase
 the session was in, and is *not* an error: nothing failed, and the reply is
 picked up afterwards.
+
+`dcs_screenshot` asks DCS for a screenshot in the `hook` state, so only the
+hook host takes one; asked of `export` it answers `unsupported`. A `name` is
+one to sixty-four of `A-Z`, `a-z`, `0-9`, `_` and `-`, and anything else is
+refused as `bad-request` naming the character; left out, the tool names the
+file `dcs-eval-YYYYMMDD-HHMMSS-mmm`. Its `wait_seconds` covers the executor's
+reply and then the file together. `ok` gives the file's `path`, `format`,
+`bytes`, `width` and `height`. `pending` is a reply still to come, with the id,
+the directory and the name. `not-written` means the executor answered and no
+whole file under the name landed in the wait, and gives the directory and the
+name: the file may still land, and on a machine that renders nothing it never
+will. Neither of those two is an error. `empty` is a file that was still zero
+bytes when the wait ended. `dcs_collect` on a screenshot's id gives the
+directory DCS writes into, not the picture. The command-line verb is planned,
+not built.
 
 A call that names no `wait_seconds` waits 15 seconds. That is a wait and never
 a limit: when it runs out the request is still published, the answer names an
