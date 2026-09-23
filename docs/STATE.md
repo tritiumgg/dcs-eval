@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. T66 landed; T67 is next.
+Nothing. T67 landed; T68 is next.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,15 +25,15 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T67, the capture**: `dcs_eval::screenshot::capture` publishes `DCS.makeScreenShot(<name>) return lfs.writedir()` for the `hook` state, refuses the export host unpublished, and watches `ScreenShots` over what the reply leaves of one wait. New means stamped at or after a reading of the files' own clock (ADR 0038); a `pending` names its directory off the handshake (ADR 0039). Five controls, `screenshot/`, swept red.
 - **T66, the finished file**: `dcs_eval::shot_file` finds a capture under `.png`, `.jpg`, `.bmp` or the bare name, newest first, judges it whole by its format's own end, answers zero bytes `Empty`, and reads the size, walking a JPEG's segments past a thumbnail. Three controls, `shotfile/`, swept red.
 - **T65, the screenshot name**: `dcs_eval::shot_name` checks a caller's name and refuses naming the character, or supplies `dcs-eval-YYYYMMDD-HHMMSS-mmm` off `GetLocalTime`, waiting out a clock that has not moved so two back to back differ. Two controls, `shotname/`, swept red.
-- **`docs/specs/screenshot.md`, frozen**: a seventh tool and a fifth verb, the DCS facts with where each came from, crop and an inline image argued out, and §4 listing what only a live install can answer.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-T67, the capture: the chunk for the `hook` state, the export host refused, the newness test against a clock read before publishing, and one wait over both phases, `cargo test -p dcs-eval -- screenshot`. Developer-only against the stand-in, and an agent sees its own result. It joins `shot_name::resolve` to `shot_file::find` and `examine`, and owns the newness test. Then T68 and T69 update the README, which still says six tools.
+T68, `dcs_screenshot` in `dcs-mcp`: registered and listed as the seventh tool over MCP, answering `screenshot::capture` in every other tool's wording, with `pending` and `not-written` not marked errors, `cargo test -p dcs-mcp tools_listed`. Developer-only; an agent sees its own result. It words a `pending` whose directory is `None` (ADR 0039), and the README goes to seven tools. T69, the CLI verb and its README section, comes after it.
 
 A release is still open: every task of the retired plan is done, but no workflow builds or publishes `dcs-mcp.exe` and the README's Install says to download it. The tag and the workflow are the maintainer's.
 

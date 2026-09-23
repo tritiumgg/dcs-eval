@@ -2584,6 +2584,85 @@ an entry below belongs to.
 +     let (width, height) = bytes.windows(2).position(|w| w[0] == 0xFF && is_frame(w[1])).and_then(|at| frame_size(bytes.get(at + 4..)?))?;
 ```
 
+### screenshot/newness-dropped
+
+- task: T67
+- command: `mise exec -- cargo test -p dcs-eval screenshot`
+- reddens: `a_whole_file_older_than_the_request_is_not_written`
+- note: a whole file a minute old under the name is taken for the capture.
+  `a_file_written_while_the_request_is_published_counts` stays green, because
+  it asks for a file to count and any file counts under the mutation.
+
+```sweep-edit crates/dcs-eval/src/screenshot.rs
+-         let fresh = found.filter(|candidate| candidate.modified >= since);
++         let fresh = found;
+```
+
+### screenshot/wait-ends-at-the-reply
+
+- task: T67
+- command: `mise exec -- cargo test -p dcs-eval screenshot`
+- reddens: `a_file_written_late_in_the_wait_is_the_capture`
+- note: the directory is looked at once, as the reply arrives, and never
+  again. `a_file_finished_during_the_wait_is_looked_at_again` goes red beside
+  it. `a_file_still_empty_when_the_wait_ends_is_empty` stayed green when this
+  was proved: its empty file is written as the reply is, and the one look can
+  land after it.
+
+```sweep-edit crates/dcs-eval/src/screenshot.rs
+-         if Instant::now() >= deadline {
++         if true {
+```
+
+### screenshot/pending-and-not-written-swapped
+
+- task: T67
+- command: `mise exec -- cargo test -p dcs-eval screenshot`
+- reddens: `a_reply_that_never_comes_is_pending_with_its_id`
+- note: both hunks are the one swap, so the two-phase check is read from both
+  sides. `a_reply_with_no_file_is_not_written`,
+  `a_whole_file_older_than_the_request_is_not_written` and
+  `no_name_given_is_one_supplied` go red beside it, each expecting a
+  `not-written` and getting a `pending`.
+
+```sweep-edit crates/dcs-eval/src/screenshot.rs
+-         Outcome::Pending { id, phase, flag } => return Ok(pending(h, id, phase, flag, name)),
++         Outcome::Pending { .. } => return Ok(Capture::NotWritten { dir: pending_dir(h).unwrap_or_default(), name }),
+
+-     Ok(Capture::NotWritten { dir, name })
++     Ok(Capture::Pending { id: String::new(), phase: String::new(), flag: None, dir: Some(dir), name })
+```
+
+### screenshot/export-host-served
+
+- task: T67
+- command: `mise exec -- cargo test -p dcs-eval screenshot`
+- reddens: `the_export_host_is_refused_and_names_the_hook`
+- note: the request is published to the export host and nothing ticks, so
+  the answer is a `pending` where an `unsupported` was asked for.
+
+```sweep-edit crates/dcs-eval/src/screenshot.rs
+-     if h.host != HOOK {
++     if false {
+```
+
+### screenshot/newness-read-off-the-precise-clock
+
+- task: T67
+- command: `mise exec -- cargo test -p dcs-eval getsystemtimeasfiletime`
+- reddens: `getsystemtimeasfiletime_is_never_after_a_file_written_next`
+- note: the reading the newness test compares against comes from
+  `SystemTime::now()`, the precise clock, instead of the clock files are
+  stamped with. Its check is in `sys`, not `screenshot`:
+  `a_file_written_while_the_request_is_published_counts` stayed green under
+  the same swap, because publishing takes longer than a tick. ADR 0038 has the
+  measurement.
+
+```sweep-edit crates/dcs-eval/src/sys.rs
+-     std::time::UNIX_EPOCH + Duration::from_nanos(ticks.saturating_sub(FILETIME_TO_UNIX) * 100)
++     std::time::SystemTime::now()
+```
+
 ---
 
 ## Out of scope
