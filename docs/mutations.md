@@ -2501,6 +2501,44 @@ T50's figures decided runs off DCS, so its controls are entries here.
 
 ---
 
+## Screenshot Stage 0 — built off DCS
+
+The current plan, `docs/PLAN.md`, numbers its stages from zero again; its task
+IDs carry on from the retired plan's, so the `task:` line alone says which plan
+an entry below belongs to.
+
+### shotname/dot-accepted
+
+- task: T65
+- command: `mise exec -- cargo test -p dcs-eval shot_name`
+- reddens: `a_dot_is_refused_and_named`
+- note: `a_callers_name_comes_back_unchanged` goes red beside it, because it
+  asks for `a.b` to be refused too.
+
+```sweep-edit crates/dcs-eval/src/shot_name.rs
+-     character.is_ascii_alphanumeric() || character == '_' || character == '-'
++     character.is_ascii_alphanumeric() || character == '_' || character == '-' || character == '.'
+```
+
+### shotname/supplied-cut-to-the-second
+
+- task: T65
+- command: `mise exec -- cargo test -p dcs-eval shot_name`
+- reddens: `names_taken_in_immediate_succession_differ`
+- note: three more go red with it, each reading the name's shape rather than
+  its distinctness: `a_supplied_name_is_dated_to_the_millisecond`,
+  `a_supplied_name_keeps_the_callers_rule` and
+  `a_clock_that_has_not_moved_is_waited_for`. The distinctness check is the
+  one that says why the milliseconds are there: the clock's wait for a new
+  reading still runs, and the name it renders repeats anyway.
+
+```sweep-edit crates/dcs-eval/src/shot_name.rs
+-     format!("dcs-eval-{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}-{millisecond:03}")
++     format!("dcs-eval-{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}")
+```
+
+---
+
 ## Out of scope
 
 One group is left here: the runner's own two, which are the two edits T57's

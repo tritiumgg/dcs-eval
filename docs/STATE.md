@@ -1,6 +1,6 @@
 # Working state
 
-**Last updated:** 2026-09-22
+**Last updated:** 2026-09-23
 
 The handoff between sessions. Read it first; update it before a session ends,
 not only when a task finishes. Stamp the date above each time; it carries a
@@ -17,7 +17,7 @@ carry-forward is just deleted. One or two lines per entry, never paragraphs.
 
 ## In progress
 
-Nothing. The screenshot capability is specified and planned; T65 is where building starts.
+Nothing. T65 landed; T66 is next.
 
 *One task at most. Say what is done, what is not, and where to resume. Say what
 is committed and what is only in the working tree. Say what is knowingly
@@ -25,15 +25,15 @@ broken. Empty this when the task closes.*
 
 ## Just finished
 
+- **T65, the screenshot name**: `dcs_eval::shot_name` checks a caller's name and refuses naming the character, or supplies `dcs-eval-YYYYMMDD-HHMMSS-mmm` off `GetLocalTime`, waiting out a clock that has not moved so two back to back differ. Two controls, `shotname/`, swept red.
 - **`docs/specs/screenshot.md`, frozen**: a seventh tool and a fifth verb, the DCS facts with where each came from, crop and an inline image argued out, and §4 listing what only a live install can answer.
 - **The plan is new**: the finished one is retired at `docs/PLAN-SHIPPED.md`, `docs/PLAN.md` carries seven tasks in two stages from T65, and `tools/sweep-cover.sh` reads both — the current plan owes an entry for a row it marks `**Done**` in its task cell, a retired plan across Stage 0–8, and an ID two plans share is refused.
-- **The frozen guard lets a specification be born**: a path under `docs/specs/` that does not exist passes once, and is refused every write after.
 
 *The last three at most, one line each. Git log holds the rest.*
 
 ## Next
 
-T65, the screenshot name: validation and the supplied default, `cargo test -p dcs-eval -- shot_name`. Developer-only, and an agent sees its own result. Then T66 and T67; T68 and T69 update the README, which still says six tools.
+T66, the finished file: format, wholeness by the format's own end, `empty`, and the dimensions, `cargo test -p dcs-eval -- shot_file`. Developer-only against fixture files, and an agent sees its own result. Then T67; T68 and T69 update the README, which still says six tools.
 
 A release is still open: every task of the retired plan is done, but no workflow builds or publishes `dcs-mcp.exe` and the README's Install says to download it. The tag and the workflow are the maintainer's.
 
