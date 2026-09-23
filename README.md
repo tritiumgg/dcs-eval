@@ -195,8 +195,8 @@ whole file under the name landed in the wait, and gives the directory and the
 name: the file may still land, and on a machine that renders nothing it never
 will. Neither of those two is an error. `empty` is a file that was still zero
 bytes when the wait ended. `dcs_collect` on a screenshot's id gives the
-directory DCS writes into, not the picture. The command-line verb is planned,
-not built.
+directory DCS writes into, not the picture. From a terminal the same capture
+is `dcs-mcp screenshot`, below.
 
 A call that names no `wait_seconds` waits 15 seconds. That is a wait and never
 a limit: when it runs out the request is still published, the answer names an
@@ -241,7 +241,7 @@ the point of reading your own.
 
 ## Use it from a terminal
 
-Four verbs, and each one calls the same function its tool calls, so the words
+Five verbs, and each one calls the same function its tool calls, so the words
 you read here are the words the tool gives — the head word, the reply's
 headers and body, a refusal that says why, a `pending` that names its id.
 
@@ -251,6 +251,7 @@ dcs-mcp ping --saved-games ... --variant DCS.openbeta
 dcs-mcp game-state --saved-games ... --variant DCS.openbeta
 dcs-mcp eval hook "return #coalition.getGroups(2)" --saved-games ... --variant DCS.openbeta
 dcs-mcp eval missionscripting --file .\probe.lua --saved-games ... --variant DCS.openbeta
+dcs-mcp screenshot --name ramp --out .\ramp.png --saved-games ... --variant DCS.openbeta
 ```
 
 `--saved-games <dir>` and `--variant <name>` are required, the same as for
@@ -267,14 +268,23 @@ writes anything at all**, not even an empty file, because an empty file reads
 back as a reply that returned nothing. `status` and `game-state` answer without one reply off the wire, so
 they refuse both flags rather than accept them and write nothing.
 
+`screenshot` takes `--name` and `--wait-seconds` as `dcs_screenshot` takes
+`name` and `wait_seconds`, and its `--out <path>` keeps the picture rather than
+the reply, which only says where DCS writes: after an `ok` it copies the file
+DCS wrote, byte for byte, to the path. For any other answer — `pending`,
+`not-written`, `empty` or a refusal — it writes nothing at the path, leaves
+whatever was there alone, and says so on stderr. `screenshot` refuses
+`--capture`, and `--file`, `--chunkname` and `--max-instructions` with it,
+because the chunk it runs is this build's own.
+
 `--data-dir <dir>` says where that data directory is, and it is not tied to
 `--capture`: the directory holds the run record too, and every evaluation
 writes one whether or not a reply is being kept. It works for `serve` as
 well, with the same spelling.
 
-A verb exits 0 for an answer or a `pending`, 1 where the answer is a refusal
-or a file you asked for could not be written, and 2 for a command line that
-would not parse.
+A verb exits 0 for an answer, a `pending` or a screenshot's `not-written`, 1
+where the answer is a refusal or a file you asked for could not be written,
+and 2 for a command line that would not parse.
 
 An `--out` path is written wherever you point it, and where it lies is
 never judged, for the reason `eval --file` reads by: a chunk in the `hook`
