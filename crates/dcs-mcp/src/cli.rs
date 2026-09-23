@@ -1,7 +1,7 @@
 //! The read-and-eval verbs, from a terminal.
 //!
-//! Four words — `status`, `ping`, `game-state` and `eval`, the last of them
-//! over a chunk or over a file — and every one of them is a line over the
+//! Five words — `status`, `ping`, `game-state`, `eval`, over a chunk or over
+//! a file, and `screenshot` — and every one of them is a line over the
 //! same function the matching tool is a line over. Nothing here decides what
 //! an answer says; `wording` does, and this module prints what it rendered.
 //! A second formatter here would be a second vocabulary, and the two would
@@ -19,6 +19,12 @@
 //! reply that carried nothing, and a caller reading one back would take a
 //! request still in flight for a measured empty answer.
 //!
+//! `screenshot` keeps something else. Its reply is one line saying where the
+//! write directory is, which nobody wants a copy of; the thing the call went
+//! and got is the picture. So its `--out` copies the file the capture found,
+//! byte for byte, and writes nothing at all for any answer but `ok` — and its
+//! `--capture` is refused, because the reply it would keep is not the point.
+//!
 //! The install verbs are not here: they are `installer`'s, which finds
 //! `Saved Games` rather than being given it, and a word neither module knows
 //! is refused by name rather than half-answered.
@@ -35,15 +41,18 @@ pub const USAGE: &str = "usage: dcs-mcp status | ping | game-state \
      | eval <state> (<code> | --file <path>)\n       \
      --saved-games <dir> --variant <name> [--host hook|export]\n       \
      [--wait-seconds <n>] [--max-instructions <n>] [--chunkname <name>]\n       \
-     [--out <path>] [--capture] [--data-dir <dir>]";
+     [--out <path>] [--capture] [--data-dir <dir>]\n       \
+     dcs-mcp screenshot [--name <name>] [--wait-seconds <n>] [--out <path>]\n       \
+     --saved-games <dir> --variant <name> [--host hook|export]";
 
-/// What was asked for. One of four, and never a word the installer owns.
+/// What was asked for. One of five, and never a word the installer owns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Verb {
     Status,
     Ping,
     GameState,
     Eval,
+    Screenshot,
 }
 
 impl Verb {
@@ -54,6 +63,7 @@ impl Verb {
             Verb::Ping => "ping",
             Verb::GameState => "game-state",
             Verb::Eval => "eval",
+            Verb::Screenshot => "screenshot",
         }
     }
 
@@ -75,6 +85,7 @@ fn verb_of(word: &str) -> Option<Verb> {
         "ping" => Some(Verb::Ping),
         "game-state" => Some(Verb::GameState),
         "eval" => Some(Verb::Eval),
+        "screenshot" => Some(Verb::Screenshot),
         _ => None,
     }
 }
@@ -97,6 +108,9 @@ struct Parsed {
     code: String,
     /// The file the chunk is read from instead.
     file: Option<String>,
+    /// The name a screenshot is written under. Judged by the capture, which
+    /// refuses a name that breaks the rule before anything is published.
+    name: Option<String>,
     out: Option<PathBuf>,
     capture: bool,
 }
@@ -135,6 +149,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     let mut max_instructions = None;
     let mut chunkname = None;
     let mut file = None;
+    let mut name = None;
     let mut out = None;
     let mut data_dir = None;
     let mut capture = false;
@@ -176,6 +191,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
             }
             "--chunkname" => once(&mut chunkname, "--chunkname", value("--chunkname")?)?,
             "--file" => once(&mut file, "--file", value("--file")?)?,
+            "--name" => once(&mut name, "--name", value("--name")?)?,
             "--out" => once(&mut out, "--out", PathBuf::from(value("--out")?))?,
             "--data-dir" => once(
                 &mut data_dir,
@@ -195,10 +211,20 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
         }
     }
 
+    // A screenshot's `--out` keeps the picture, so the flag is its own; what
+    // it will not take is a copy of the reply, which is one line saying where
+    // the write directory is.
+    if verb == Verb::Screenshot && capture {
+        return Err(
+            "screenshot does not take --capture: its reply only says where the \
+             write directory is, and --out <path> keeps the picture"
+                .to_owned(),
+        );
+    }
     // A verb with no single reply behind it cannot keep one. Refused here
     // rather than accepted and silently writing nothing, which would read as
     // a reply that was empty.
-    if !verb.publishes() {
+    if verb != Verb::Screenshot && !verb.publishes() {
         if out.is_some() {
             return Err(format!(
                 "{} answers without one reply off the wire, so it does not take --out",
@@ -221,6 +247,9 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
     let mut code = String::new();
     match verb {
         Verb::Eval => {
+            if name.is_some() {
+                return Err("eval does not take --name".to_owned());
+            }
             let mut words = loose.into_iter();
             state = words.next().ok_or("eval wants a state to run in")?;
             match (&file, words.next()) {
@@ -243,6 +272,14 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
             }
         }
         other => {
+            // The chunk a screenshot runs is this build's own and the same
+            // every time, so there is nothing for a budget to bound.
+            if other == Verb::Screenshot && max_instructions.is_some() {
+                return Err("screenshot does not take --max-instructions".to_owned());
+            }
+            if other != Verb::Screenshot && name.is_some() {
+                return Err(format!("{} does not take --name", other.word()));
+            }
             if file.is_some() {
                 return Err(format!("{} does not take --file", other.word()));
             }
@@ -269,6 +306,7 @@ fn parse<I: IntoIterator<Item = String>>(args: I) -> Result<Parsed, String> {
         state,
         code,
         file,
+        name,
         out,
         capture,
     })
@@ -334,7 +372,8 @@ fn keep(reply: &Reply, serve: &Serve, parsed: &Parsed) -> Result<(), String> {
 
 /// Run one command line and print what it came to.
 ///
-/// The exit code: 0 for an answer or a `pending`, 1 where the answer is
+/// The exit code: 0 for an answer or a `pending` — and for a screenshot's
+/// `not-written`, which is not marked an error — 1 where the answer is
 /// marked an error or a file the caller asked for could not be written, and
 /// 2 — the caller's, from the `Err` here — for a line that would not parse.
 pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Result<i32, String> {
@@ -366,6 +405,7 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
                 upto,
             ),
         },
+        Verb::Screenshot => tools::screenshot(&serve, None, parsed.name.as_deref(), upto),
     };
 
     let mut code = i32::from(answered.answer.is_error == Some(true));
@@ -389,6 +429,31 @@ pub fn run<I: IntoIterator<Item = String>>(args: I, out: &mut dyn Write) -> Resu
             code = 1;
         }
         None => {}
+    }
+    // A screenshot's `--out`, which the step above keeps nothing for: its
+    // answer carries no reply to point at, only the file a capture found.
+    if let (Verb::Screenshot, Some(to)) = (parsed.verb, &parsed.out) {
+        match answered.shot() {
+            // Copied off the file the capture judged whole, not rebuilt from
+            // anything read out of it, so the copy is the picture DCS wrote.
+            Some(shot) => {
+                if let Err(why) = std::fs::copy(shot, to) {
+                    eprintln!(
+                        "{} could not be copied to {}: {why}",
+                        shot.display(),
+                        to.display()
+                    );
+                    code = 1;
+                }
+            }
+            // Not a failure: a `pending` or a `not-written` is an answer, and
+            // said so above. Stderr only says why the path was left alone,
+            // so an empty or stale file is never taken for this capture.
+            None => eprintln!(
+                "{} was not written: only an ok has a picture to copy",
+                to.display()
+            ),
+        }
     }
     let shown = wording::text(&answered.answer);
     writeln!(out, "{shown}").map_err(|why| why.to_string())?;
@@ -818,6 +883,309 @@ mod tests {
         assert!(!out.exists(), "a refused line wrote nothing");
     }
 
+    /// A whole picture, the one the client crate's own capture tests stage.
+    const PNG: &[u8] = include_bytes!("../../dcs-eval/fixtures/shot/picture.png");
+
+    /// The write directory the stand-in's session lies under, which is what
+    /// the capture's chunk answers with.
+    fn writedir(box_: &Sandbox) -> PathBuf {
+        box_.join("DCS.openbeta")
+    }
+
+    /// A ticking session that answers the capture's chunk with the write
+    /// directory as `lfs.writedir()` spells it, trailing separator and all,
+    /// and the `ScreenShots` directory under it made ready.
+    fn shooting(box_: &Sandbox) -> Standin {
+        let mut s = Standin::open(&opts(box_).output(), "hook").expect("the stand-in opens");
+        ticking(&mut s);
+        let answer = format!("{}\\", writedir(box_).display());
+        s.script("makeScreenShot", "ok", "string", answer.as_bytes());
+        fs::create_dir_all(writedir(box_).join("ScreenShots")).expect("ScreenShots is made");
+        s
+    }
+
+    /// One `screenshot` line run to completion. The request is answered once
+    /// it is on the disk, and where `lands` names a file, the picture is
+    /// written there straight after — so it is stamped after the request
+    /// and is this capture's, as a file DCS writes would be.
+    fn shot(s: &mut Standin, line: Vec<String>, lands: Option<&Path>) -> (i32, String) {
+        let (code, sink) = std::thread::scope(|scope| {
+            let running = scope.spawn(|| {
+                let mut sink: Vec<u8> = Vec::new();
+                let code = run(line, &mut sink).expect("the line parses");
+                (code, sink)
+            });
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            let mut answered = false;
+            while !running.is_finished() && std::time::Instant::now() < deadline {
+                let asked = fs::read_dir(s.req())
+                    .map(|listing| {
+                        listing
+                            .filter_map(Result::ok)
+                            .any(|e| e.file_name().to_string_lossy().ends_with(".req"))
+                    })
+                    .unwrap_or(false);
+                if asked && !answered {
+                    s.tick();
+                    if let Some(path) = lands {
+                        fs::write(path, PNG).expect("the picture is written");
+                    }
+                    answered = true;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            running.join().expect("the verb does not panic")
+        });
+        let shown = String::from_utf8_lossy(&sink).trim_end().to_owned();
+        (code, shown)
+    }
+
+    /// The three flags, read into the slots the verb runs on, and each one
+    /// refused when it is given a second time.
+    #[test]
+    fn screenshot_cli_flags_are_parsed_and_each_refused_twice_over() {
+        let box_ = Sandbox::new();
+        let out = box_.join("kept.png");
+        let out = out.to_string_lossy().into_owned();
+        let parsed = parse(args(
+            &box_,
+            [
+                "screenshot",
+                "--name",
+                "shot",
+                "--wait-seconds",
+                "3",
+                "--out",
+                &out,
+            ],
+        ))
+        .expect("the line parses");
+        assert_eq!(parsed.verb, Verb::Screenshot);
+        assert_eq!(parsed.name.as_deref(), Some("shot"));
+        assert_eq!(parsed.wait_seconds, Some(3));
+        assert_eq!(parsed.out, Some(PathBuf::from(&out)));
+
+        for (flag, first, second) in [
+            ("--name", "one", "two"),
+            ("--wait-seconds", "1", "2"),
+            ("--out", "a.png", "b.png"),
+        ] {
+            let why = match parse(args(&box_, ["screenshot", flag, first, flag, second])) {
+                Ok(_) => panic!("{flag} given twice is refused"),
+                Err(why) => why,
+            };
+            assert!(
+                why.contains(flag) && why.contains("twice"),
+                "the refusal names {flag} and says it came twice: {why}"
+            );
+        }
+    }
+
+    /// `--capture` refused by name, and the flags that belong to a chunk of
+    /// the caller's refused as well: the chunk a capture runs is this
+    /// build's own.
+    #[test]
+    fn screenshot_cli_capture_is_refused_by_name() {
+        let box_ = Sandbox::new();
+        let mut sink: Vec<u8> = Vec::new();
+        let why = run(args(&box_, ["screenshot", "--capture"]), &mut sink)
+            .expect_err("screenshot does not take --capture");
+        assert!(
+            why.contains("screenshot") && why.contains("--capture"),
+            "the refusal names the verb and the flag: {why}"
+        );
+        for words in [
+            &["screenshot", "--file", "x.lua"][..],
+            &["screenshot", "--chunkname", "x"],
+            &["screenshot", "--max-instructions", "5"],
+            &["screenshot", "shot"],
+            &["ping", "--name", "shot"],
+            &["eval", "hook", "return 1", "--name", "shot"],
+        ] {
+            let flag = words[words.len() - 2..]
+                .iter()
+                .find(|word| word.starts_with("--"))
+                .unwrap_or(&words[words.len() - 1]);
+            let why = run(args(&box_, words), &mut sink)
+                .expect_err("a word the verb does not take is refused");
+            assert!(
+                why.contains(flag),
+                "{words:?} is refused naming {flag}: {why}"
+            );
+        }
+        assert!(sink.is_empty(), "a refused line printed no answer");
+    }
+
+    /// `--out` after an `ok`: the file the capture found, copied byte for
+    /// byte, and the answer printed as the tool words it.
+    #[test]
+    fn screenshot_cli_out_is_the_file_byte_for_byte() {
+        let box_ = Sandbox::new();
+        let mut s = shooting(&box_);
+        let found = writedir(&box_).join("ScreenShots").join("shot.png");
+        let out = box_.join("kept.png");
+
+        let (code, shown) = shot(
+            &mut s,
+            args(
+                &box_,
+                [
+                    "screenshot",
+                    "--name",
+                    "shot",
+                    "--wait-seconds",
+                    "10",
+                    "--out",
+                    &out.to_string_lossy(),
+                ],
+            ),
+            Some(&found),
+        );
+        assert_eq!(code, 0, "an ok is not an error: {shown}");
+        assert_eq!(shown.lines().next(), Some("ok"), "{shown}");
+        assert!(
+            shown.contains(&format!("path: {}", found.display())),
+            "the answer names the file it found: {shown}"
+        );
+        // Compared whole and reported by size, so a failure does not print a
+        // picture's worth of bytes twice over.
+        let copy = fs::read(&out).expect("--out wrote the copy");
+        let picture = fs::read(&found).expect("the capture reads");
+        assert!(
+            copy == picture,
+            "the copy is the file DCS wrote, byte for byte: {} bytes against {}",
+            copy.len(),
+            picture.len()
+        );
+    }
+
+    /// `--out` after a `not-written`: the executor answered and no file came,
+    /// so the path is left exactly as it was, which here is not there.
+    #[test]
+    fn screenshot_cli_not_written_writes_nothing_at_out() {
+        let box_ = Sandbox::new();
+        let mut s = shooting(&box_);
+        let out = box_.join("never.png");
+
+        let (_, shown) = shot(
+            &mut s,
+            args(
+                &box_,
+                [
+                    "screenshot",
+                    "--name",
+                    "shot",
+                    "--wait-seconds",
+                    "1",
+                    "--out",
+                    &out.to_string_lossy(),
+                ],
+            ),
+            None,
+        );
+        assert_eq!(shown.lines().next(), Some("not-written"), "{shown}");
+        assert!(
+            !out.exists(),
+            "no picture came, so nothing was written where one would be read back"
+        );
+    }
+
+    /// The binary's exit codes, as `run` hands them back: 0 for an answer,
+    /// `pending` and `not-written` among them, whether or not `--out` was
+    /// given; 1 for a refusal and for a copy that could not be written. The
+    /// third, 2, is the binary's for a line `run` refuses to parse, and is
+    /// watched on the real process beside the installer's.
+    #[test]
+    fn screenshot_cli_exits_0_for_an_answer_and_1_for_a_refusal_or_a_failed_copy() {
+        // An `ok`, whose copy lands.
+        let box_ = Sandbox::new();
+        let mut s = shooting(&box_);
+        let found = writedir(&box_).join("ScreenShots").join("shot.png");
+        let out = box_.join("kept.png").to_string_lossy().into_owned();
+        let line = [
+            "screenshot",
+            "--name",
+            "shot",
+            "--wait-seconds",
+            "10",
+            "--out",
+            &out,
+        ];
+        let (code, shown) = shot(&mut s, args(&box_, line), Some(&found));
+        assert_eq!((code, shown.lines().next()), (0, Some("ok")), "{shown}");
+
+        // The same `ok`, with a copy that cannot land.
+        let box_ = Sandbox::new();
+        let mut s = shooting(&box_);
+        let found = writedir(&box_).join("ScreenShots").join("shot.png");
+        let out = box_.join("missing").join("kept.png");
+        let out = out.to_string_lossy().into_owned();
+        let line = [
+            "screenshot",
+            "--name",
+            "shot",
+            "--wait-seconds",
+            "10",
+            "--out",
+            &out,
+        ];
+        let (code, shown) = shot(&mut s, args(&box_, line), Some(&found));
+        assert_eq!(
+            (code, shown.lines().next()),
+            (1, Some("ok")),
+            "the capture came and the copy failed: {shown}"
+        );
+
+        // A `not-written`, with `--out`: an answer, and nothing to copy.
+        let box_ = Sandbox::new();
+        let mut s = shooting(&box_);
+        let out = box_.join("never.png").to_string_lossy().into_owned();
+        let line = [
+            "screenshot",
+            "--name",
+            "shot",
+            "--wait-seconds",
+            "1",
+            "--out",
+            &out,
+        ];
+        let (code, shown) = shot(&mut s, args(&box_, line), None);
+        assert_eq!(
+            (code, shown.lines().next()),
+            (0, Some("not-written")),
+            "a capture not written is an answer: {shown}"
+        );
+
+        // A `pending`, with `--out`: nothing ticks, so the wait runs out.
+        let box_ = Sandbox::new();
+        let _s = shooting(&box_);
+        let out = box_.join("never.png").to_string_lossy().into_owned();
+        let line = ["screenshot", "--wait-seconds", "0", "--out", &out];
+        let mut sink: Vec<u8> = Vec::new();
+        let code = run(args(&box_, line), &mut sink).expect("the line parses");
+        let shown = String::from_utf8_lossy(&sink).trim_end().to_owned();
+        assert_eq!(
+            (code, shown.lines().next()),
+            (0, Some("pending")),
+            "{shown}"
+        );
+
+        // Two refusals, neither publishing anything: a name that breaks the
+        // rule, and the host that cannot reach the capture. The session is
+        // there, so neither is a `no-session` standing in for it.
+        for (words, head) in [
+            (&["screenshot", "--name", "a.b"][..], "bad-request"),
+            (&["screenshot", "--host", "export"], "unsupported"),
+        ] {
+            let box_ = Sandbox::new();
+            let _s = shooting(&box_);
+            let mut sink: Vec<u8> = Vec::new();
+            let code = run(args(&box_, words), &mut sink).expect("the line parses");
+            let shown = String::from_utf8_lossy(&sink).trim_end().to_owned();
+            assert_eq!((code, shown.lines().next()), (1, Some(head)), "{shown}");
+        }
+    }
+
     /// The naming rule, held rather than described: the filtered command this
     /// file is proved by selects by substring, so a test here under another
     /// name would be neither run by it nor missed by it.
@@ -842,8 +1210,11 @@ mod tests {
                 .nth(1)
                 .and_then(|rest| rest.split(['(', '<']).next())
                 .expect("the declaration names the function");
+            // The screenshot verb's tests are proved by a filter of their
+            // own, and their prefix carries `cli_` inside it, so the filter
+            // the rest of this file is proved by selects them as well.
             assert!(
-                name.starts_with("cli_"),
+                name.starts_with("cli_") || name.starts_with("screenshot_cli_"),
                 "the test marked on line {} is named `{name}`, which the filtered \
                  command this file is proved by would not select",
                 number + 1

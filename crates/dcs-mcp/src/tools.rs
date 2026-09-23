@@ -137,15 +137,31 @@ pub(crate) struct Reply {
 /// `at` is `None` where there is no single reply to point at: a `pending`, a
 /// refusal raised here rather than by the executor, and the two calls that
 /// never publish anything.
+///
+/// `shot` is the picture a capture found, and `None` for every answer but a
+/// capture's `ok`. It is kept beside the words rather than read back out of
+/// them, because a path parsed off a rendered line is the wording's to
+/// change, and the file is what a copy has to be made from.
 pub(crate) struct Answered {
     pub answer: CallToolResult,
     at: Option<(String, PathBuf)>,
+    shot: Option<PathBuf>,
 }
 
 impl Answered {
     /// An answer with no reply behind it.
     fn plain(answer: CallToolResult) -> Self {
-        Self { answer, at: None }
+        Self {
+            answer,
+            at: None,
+            shot: None,
+        }
+    }
+
+    /// The file a capture found whole and new, where the answer is `ok`;
+    /// nothing for any other answer, a capture's or not.
+    pub(crate) fn shot(&self) -> Option<&Path> {
+        self.shot.as_deref()
     }
 
     /// The bytes the executor published for this answer, read off the disk
@@ -212,6 +228,7 @@ fn one(
     Answered {
         answer: answered(item),
         at,
+        shot: None,
     }
 }
 
@@ -516,11 +533,16 @@ pub(crate) fn screenshot(
         Ok(client) => client,
         Err(why) => return Answered::plain(refuse("no-session", vec![why.to_string()])),
     };
-    Answered::plain(wording::capture(screenshot::capture(
-        client.handshake(),
-        name,
-        upto,
-    )))
+    let outcome = screenshot::capture(client.handshake(), name, upto);
+    let shot = match &outcome {
+        Ok(Capture::Ok { path, .. }) => Some(path.clone()),
+        _ => None,
+    };
+    Answered {
+        answer: wording::capture(outcome),
+        at: None,
+        shot,
+    }
 }
 
 #[tool_router(vis = "pub(crate)")]
