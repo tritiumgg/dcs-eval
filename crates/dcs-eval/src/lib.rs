@@ -30,6 +30,10 @@ pub mod reads;
 // takes no crates.io dependency; decision record 0011.
 pub mod sha256;
 
+// The name a capture is asked for under: a caller's held to the rule that
+// keeps DCS from losing the picture, or one supplied from the local clock.
+pub mod shot_name;
+
 // The other half of evaluating a file: the bytes, once `file` has judged
 // the path they come from.
 pub mod source;
