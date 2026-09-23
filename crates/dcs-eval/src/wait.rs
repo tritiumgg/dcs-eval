@@ -443,7 +443,7 @@ fn this_sessions_heartbeat(s: &Session) -> Result<Option<Heartbeat>, WaitError> 
 /// fail on asking for too much of it. Halving finds the furthest
 /// representable instant in a few dozen steps, and ends at `now` — a wait
 /// of no time, which is still an outcome — if even zero would not add.
-fn latest(now: Instant, upto: Duration) -> Instant {
+pub(crate) fn latest(now: Instant, upto: Duration) -> Instant {
     let mut step = upto;
     loop {
         if let Some(at) = now.checked_add(step) {

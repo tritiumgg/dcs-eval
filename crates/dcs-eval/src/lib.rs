@@ -26,6 +26,10 @@ pub mod readers;
 // and the executor runs whatever it is given.
 pub mod reads;
 
+// The capture: one request published for the hook state, then the file it
+// leaves, watched from outside DCS within the same wait.
+pub mod screenshot;
+
 // The hash the provenance record carries. Written here because the crate
 // takes no crates.io dependency; decision record 0011.
 pub mod sha256;
