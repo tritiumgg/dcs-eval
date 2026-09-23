@@ -168,7 +168,15 @@ pub fn capture(
         let found = shot_file::find(&dir, &name).map_err(disk(&dir))?;
         let fresh = found.filter(|candidate| candidate.modified >= since);
         if let Some(candidate) = fresh {
-            match candidate.examine().map_err(disk(&candidate.path))? {
+            let finding = match candidate.examine() {
+                Ok(finding) => finding,
+                // Gone between the listing and the read: replaced or
+                // renamed under the writer, which is no finished file yet
+                // and no reason to stop watching.
+                Err(why) if why.kind() == io::ErrorKind::NotFound => Finding::Unfinished,
+                Err(why) => return Err(disk(&candidate.path)(why)),
+            };
+            match finding {
                 Finding::Whole(picture) => {
                     return Ok(Capture::Ok {
                         path: candidate.path,
