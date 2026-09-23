@@ -1,6 +1,6 @@
-//! The six tools, in one place.
+//! The tools, in one place.
 //!
-//! One impl block holds all six, and the server's listing is taken off the
+//! One impl block holds every one, and the server's listing is taken off the
 //! router that block builds. That is the whole reason for the arrangement:
 //! the set that is registered is the set that is listed, because there is no
 //! second list for one of them to fall out of. A tool added to this block is
@@ -8,13 +8,13 @@
 //! listed has nowhere to be written.
 //!
 //! Every body blocks rather than awaits. The work behind a call is a handful
-//! of small local file reads and, for the three that publish, a wait over a
+//! of small local file reads and, for those that publish, a wait over a
 //! directory — the same choice the serve module already argues for its own
 //! reads, and the reason the server runs on one current-thread runtime.
 //!
 //! **How a reply is worded is not settled here.** Every answer goes out
 //! through the one renderer in `wording`, which is what lets the wording
-//! change in one function rather than in six bodies.
+//! change in one function rather than in every body.
 //!
 //! Each body is one line over a function further down, and those functions
 //! are what the command line calls too. Two callers over one function is the
@@ -29,6 +29,7 @@ use dcs_eval::file;
 use dcs_eval::game;
 use dcs_eval::paths::{self, Real};
 use dcs_eval::pipeline::{Pipeline, Spec};
+use dcs_eval::screenshot::{self, Capture};
 use dcs_eval::wait::{self, Collected, Outcome};
 use dcs_eval::{source, status};
 use rmcp::ErrorData;
@@ -285,6 +286,21 @@ pub struct Collect {
     pub id: String,
 }
 
+/// `dcs_screenshot`'s arguments.
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub struct Screenshot {
+    /// `hook` or `export`. The capture runs in the hook's state, so only the
+    /// hook can take one.
+    pub host: Option<String>,
+    /// The name the file is written under, one to sixty-four of `A-Z`,
+    /// `a-z`, `0-9`, `_` and `-`. Left out, one is made from the local time.
+    pub name: Option<String>,
+    /// How long to wait, over the reply and then the file together. A wait,
+    /// never a limit: a reply still to come is a `pending` to collect, and a
+    /// file still to come is `not-written` and may land afterwards.
+    pub wait_seconds: Option<u64>,
+}
+
 /// What `dcs_status` and the `status` verb both do.
 ///
 /// No client is resolved, deliberately. Resolving one reads the handshake,
@@ -474,6 +490,39 @@ pub(crate) fn eval_file(
     answered
 }
 
+/// What `dcs_screenshot` does.
+///
+/// The export host is answered before any session is looked for: it cannot
+/// reach the capture whether or not it is running, and a caller told
+/// `no-session` would go and start one only to be refused. No run record is
+/// written, because the chunk is this build's own and the same every time,
+/// so there is no provenance to keep.
+pub(crate) fn screenshot(
+    serve: &Serve,
+    host: Option<&str>,
+    name: Option<&str>,
+    upto: Duration,
+) -> Answered {
+    let host = match host_for(serve, host) {
+        Ok(host) => host,
+        Err(no) => return Answered::plain(no),
+    };
+    if host == Host::Export {
+        return Answered::plain(wording::capture(Ok(Capture::Unsupported {
+            host: host.word().to_owned(),
+        })));
+    }
+    let client = match serve.client_at(host) {
+        Ok(client) => client,
+        Err(why) => return Answered::plain(refuse("no-session", vec![why.to_string()])),
+    };
+    Answered::plain(wording::capture(screenshot::capture(
+        client.handshake(),
+        name,
+        upto,
+    )))
+}
+
 #[tool_router(vis = "pub(crate)")]
 impl Serve {
     /// What is readable without asking the executor anything: the hook's
@@ -545,6 +594,26 @@ impl Serve {
         .answer)
     }
 
+    /// Take a screenshot of what DCS is showing and wait for its file. The
+    /// answer is `ok` with the file's path, format, size in bytes, width and
+    /// height; `pending` with an id to collect and the directory and name to
+    /// look for; or `not-written` with the directory and name, where the
+    /// executor answered and the file had not landed. Neither of the last two
+    /// is an error. Collecting the id gives the directory, not the picture.
+    #[tool]
+    async fn dcs_screenshot(
+        &self,
+        Parameters(args): Parameters<Screenshot>,
+    ) -> Result<CallToolResult, ErrorData> {
+        Ok(screenshot(
+            self,
+            args.host.as_deref(),
+            args.name.as_deref(),
+            waiting(args.wait_seconds),
+        )
+        .answer)
+    }
+
     /// Pick up a reply a `pending` answer left behind. One look, no waiting,
     /// and the request is not sent again. A reply is kept for about five
     /// minutes after it lands and removed after that.
@@ -601,28 +670,42 @@ mod tests {
     use rmcp::service::{RoleClient, RoleServer, RunningService};
     use std::fs;
 
-    /// The six, spelt once and sorted, which is what the listing is compared
-    /// against.
-    const SIX: [&str; 6] = [
+    /// The seven, spelt once and sorted, which is what the listing is
+    /// compared against.
+    const SEVEN: [&str; 7] = [
         "dcs_collect",
         "dcs_eval",
         "dcs_eval_file",
         "dcs_game_state",
         "dcs_ping",
+        "dcs_screenshot",
         "dcs_status",
     ];
 
     /// A server and a client joined over an in-memory pair, with a stand-in
     /// executor already published where the server will look.
-    ///
-    /// The two halves are started together rather than one after the other:
-    /// the client's own `serve` drives `initialize` and cannot finish until
-    /// the server has answered it, so awaiting either on its own deadlocks.
     async fn pair(
         box_: &Sandbox,
     ) -> (
         RunningService<RoleServer, Serve>,
         RunningService<RoleClient, ()>,
+    ) {
+        let (server, client, _) = pair_with(box_).await;
+        (server, client)
+    }
+
+    /// The same, handing back the stand-in so a test can answer the server
+    /// from another thread while a call waits.
+    ///
+    /// The two halves are started together rather than one after the other:
+    /// the client's own `serve` drives `initialize` and cannot finish until
+    /// the server has answered it, so awaiting either on its own deadlocks.
+    async fn pair_with(
+        box_: &Sandbox,
+    ) -> (
+        RunningService<RoleServer, Serve>,
+        RunningService<RoleClient, ()>,
+        Standin,
     ) {
         let opts = Options {
             saved_games: box_.path.clone(),
@@ -640,7 +723,7 @@ mod tests {
         ex.pid = std::process::id();
         ex.handshake().expect("the handshake is published");
 
-        // Roomier than the SDK's own tests use, because six tool schemas go
+        // Roomier than the SDK's own tests use, because every tool schema goes
         // down this in one frame and a writer that stalled here would look
         // from the far side like a server that hung.
         let (server_io, client_io) = tokio::io::duplex(64 * 1024);
@@ -648,16 +731,17 @@ mod tests {
         (
             server.expect("the server side comes up"),
             client.expect("the client side comes up"),
+            ex,
         )
     }
 
-    /// The row this work is proved by. Not "six calls succeeded" — a tool can
-    /// be registered and reachable while the listing leaves it out, and a
+    /// The row this work is proved by. Not "seven calls succeeded" — a tool
+    /// can be registered and reachable while the listing leaves it out, and a
     /// client that cannot see it will never call it. So the listed set is
-    /// compared whole, which catches a misspelt name, a seventh tool and a
+    /// compared whole, which catches a misspelt name, an eighth tool and a
     /// duplicate alike, and prints both lists when it fails.
     #[tokio::test]
-    async fn tools_listed_are_exactly_the_six() {
+    async fn tools_listed_are_exactly_the_seven() {
         let box_ = Sandbox::new();
         let (server, client) = pair(&box_).await;
 
@@ -670,7 +754,10 @@ mod tests {
             .map(|tool| tool.name.to_string())
             .collect();
         listed.sort();
-        assert_eq!(listed, SIX, "the listed set is the six and only the six");
+        assert_eq!(
+            listed, SEVEN,
+            "the listed set is the seven and only the seven"
+        );
 
         client.cancel().await.expect("the client hangs up");
         server.cancel().await.expect("the server comes down");
@@ -678,8 +765,8 @@ mod tests {
 
     /// Each listed name reaches a body. A tool listed but not routed answers
     /// with a protocol error saying the tool was not found, which is what the
-    /// six `Ok`s here rule out — and the seventh call, of a name that really
-    /// is not there, is what says those six are not vacuous.
+    /// seven `Ok`s here rule out — and the eighth call, of a name that really
+    /// is not there, is what says those seven are not vacuous.
     ///
     /// It goes no further than that, on purpose. What a body *says* is not
     /// read here, so a handler answering the wrong question in a well-formed
@@ -719,6 +806,10 @@ mod tests {
                 "dcs_collect",
                 serde_json::json!({ "id": "0000000001-abcd1234" }),
             ),
+            (
+                "dcs_screenshot",
+                serde_json::json!({ "name": "shot", "wait_seconds": 0 }),
+            ),
         ];
         for (name, args) in calls {
             let answer = client
@@ -739,7 +830,7 @@ mod tests {
             .await;
         assert!(
             missing.is_err(),
-            "a name that is not registered is refused, so the six above mean something"
+            "a name that is not registered is refused, so the seven above mean something"
         );
 
         client.cancel().await.expect("the client hangs up");
@@ -799,6 +890,105 @@ mod tests {
             rendered.contains("long enough to be removed"),
             "it says the reply may have been removed: {rendered}"
         );
+
+        client.cancel().await.expect("the client hangs up");
+        server.cancel().await.expect("the server comes down");
+    }
+
+    /// A capture the executor answered while no file came, driven over the
+    /// wire: headed `not-written`, naming the directory and the name it
+    /// watched, and not marked an error. The file may still land, and a
+    /// caller branching on the error flag must not be told the capture
+    /// failed.
+    #[tokio::test]
+    async fn tools_listed_screenshot_not_written_is_not_an_error() {
+        let box_ = Sandbox::new();
+        let (server, client, mut ex) = pair_with(&box_).await;
+        let writedir = box_.path.join("DCS.openbeta");
+        let answer = format!("{}\\", writedir.display());
+        ex.script("makeScreenShot", "ok", "string", answer.as_bytes());
+
+        // Answers the one request once it is on the disk. On a thread of its
+        // own, because the tool body holds the runtime while it waits.
+        let ticker = std::thread::spawn(move || {
+            let give_up = std::time::Instant::now() + std::time::Duration::from_secs(5);
+            loop {
+                let published = fs::read_dir(ex.req())
+                    .map(|listing| {
+                        listing
+                            .filter_map(Result::ok)
+                            .any(|e| e.file_name().to_string_lossy().ends_with(".req"))
+                    })
+                    .unwrap_or(false);
+                if published {
+                    ex.tick();
+                    return;
+                }
+                assert!(std::time::Instant::now() < give_up, "no request came");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        });
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("name".to_owned(), serde_json::json!("shot"));
+        arguments.insert("wait_seconds".to_owned(), serde_json::json!(1));
+        let answer = client
+            .call_tool(CallToolRequestParams::new("dcs_screenshot").with_arguments(arguments))
+            .await
+            .expect("dcs_screenshot answers");
+        ticker.join().expect("the request was answered");
+
+        let rendered = wording::text(&answer);
+        assert_eq!(
+            rendered.lines().next().unwrap_or_default(),
+            "not-written",
+            "the reply came and no file did: {rendered}"
+        );
+        assert_ne!(
+            answer.is_error,
+            Some(true),
+            "a capture not written is not an error: {rendered}"
+        );
+        assert!(
+            rendered.contains(&format!(
+                "directory: {}",
+                writedir.join("ScreenShots").display()
+            )),
+            "it names the directory it watched: {rendered}"
+        );
+        assert!(
+            rendered.contains("name: shot"),
+            "it names the name: {rendered}"
+        );
+
+        client.cancel().await.expect("the client hangs up");
+        server.cancel().await.expect("the server comes down");
+    }
+
+    /// The export host cannot reach the capture, and says so whether or not
+    /// it has a session: this sandbox publishes none for it, and the answer
+    /// is still `unsupported` naming the hook rather than `no-session`.
+    #[tokio::test]
+    async fn tools_listed_screenshot_of_the_export_host_is_unsupported() {
+        let box_ = Sandbox::new();
+        let (server, client) = pair(&box_).await;
+
+        let mut arguments = serde_json::Map::new();
+        arguments.insert("host".to_owned(), serde_json::json!("export"));
+        arguments.insert("wait_seconds".to_owned(), serde_json::json!(0));
+        let answer = client
+            .call_tool(CallToolRequestParams::new("dcs_screenshot").with_arguments(arguments))
+            .await
+            .expect("dcs_screenshot answers");
+
+        let rendered = wording::text(&answer);
+        assert_eq!(answer.is_error, Some(true), "a refusal: {rendered}");
+        assert_eq!(
+            rendered.lines().next().unwrap_or_default(),
+            "unsupported",
+            "{rendered}"
+        );
+        assert!(rendered.contains("ask host hook"), "{rendered}");
 
         client.cancel().await.expect("the client hangs up");
         server.cancel().await.expect("the server comes down");

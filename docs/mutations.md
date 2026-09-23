@@ -1404,11 +1404,11 @@ not cover is printed by the sweep itself rather than left to be assumed.
 
 - task: T38
 - command: `mise exec -- cargo test -p dcs-mcp tools_listed`
-- reddens: `tools_listed_are_exactly_the_six`
+- reddens: `tools_listed_are_exactly_the_seven`
 - note: the fault the cell names is a tool that registers and is not listed,
   and `ToolRouter::with_disabled` is the SDK's own way of producing exactly
   that: the route stays in the router's map and the listing filters it out.
-  The mutated server holds six tools and announces five. `with_disabled` needs
+  The mutated server holds seven tools and announces six. `with_disabled` needs
   no import the file does not already carry, so the mutation compiles and the
   red is the assertion rather than the type checker; the router is filled on a
   line of its own so that line is an anchor occurring once.
@@ -1421,7 +1421,7 @@ not cover is printed by the sweep itself rather than left to be assumed.
   and the SDK offers no seam that hides a route from the listing while still
   calling it, so this is as close to the cell's wording as an edit can get.
   The assertion that goes is the set comparison, which prints both lists:
-  five names came back and `dcs_collect` was the one missing.
+  six names came back and `dcs_collect` was the one missing.
 
 ```sweep-edit crates/dcs-mcp/src/serve.rs
 -             tools: Self::tool_router(),

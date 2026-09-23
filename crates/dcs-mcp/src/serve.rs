@@ -306,7 +306,8 @@ impl ServerHandler for Serve {
             "Evaluate Lua inside a running DCS World. `dcs_status` reports what \
              is readable without asking the executor anything; `dcs_ping` proves \
              it is alive; `dcs_game_state` says what the game is doing; \
-             `dcs_eval` and `dcs_eval_file` run a chunk; `dcs_collect` picks up \
+             `dcs_eval` and `dcs_eval_file` run a chunk; `dcs_screenshot` \
+             captures the screen and waits for its file; `dcs_collect` picks up \
              a reply left pending."
                 .to_owned(),
         );

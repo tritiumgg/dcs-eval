@@ -52,7 +52,7 @@ pub mod installer;
 // per call, and the stdio transport it speaks over.
 pub mod serve;
 
-// The six tools the server offers, decided in one block so that the set that
+// The tools the server offers, decided in one block so that the set that
 // is registered is the set that is listed.
 pub mod tools;
 
@@ -70,7 +70,7 @@ pub mod cli;
 pub mod sys;
 
 // How an answer is worded: the one renderer every tool body goes out through,
-// so a refusal reads as a refusal in one place rather than in six.
+// so a refusal reads as a refusal in one place rather than in every tool.
 pub mod wording;
 
 // Scaffolding the tests in this crate share. Never in the binary.
