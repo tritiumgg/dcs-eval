@@ -2663,6 +2663,42 @@ an entry below belongs to.
 +     std::time::SystemTime::now()
 ```
 
+### tools/screenshot-registered-not-listed
+
+- task: T68
+- command: `mise exec -- cargo test -p dcs-mcp tools_listed`
+- reddens: `tools_listed_are_exactly_the_seven`
+- note: the same seam as `tools/registered-not-listed`, aimed at the new
+  tool: the route stays in the router and the listing leaves it out, so six
+  names came back and `dcs_screenshot` was the one missing. Three more go red
+  beside it, each calling the disabled name and told the tool was not found:
+  `tools_listed_each_answer_a_call`,
+  `tools_listed_screenshot_not_written_is_not_an_error` and
+  `tools_listed_screenshot_of_the_export_host_is_unsupported`.
+
+```sweep-edit crates/dcs-mcp/src/serve.rs
+-             tools: Self::tool_router(),
++             tools: Self::tool_router().with_disabled("dcs_screenshot"),
+```
+
+### tools/screenshot-not-written-marked-an-error
+
+- task: T68
+- command: `mise exec -- cargo test -p dcs-mcp tools_listed`
+- reddens: `tools_listed_screenshot_not_written_is_not_an_error`
+- note: the answer is still headed `not-written` and still names the
+  directory and the name; only the error flag is set, which is the half a
+  caller branching on it would act on. It is the only test to go red,
+  driven over the wire, and the assertion that goes is `a capture not
+  written is not an error`. `wording`'s own
+  `a_capture_pending_or_not_written_is_not_an_error` watches the same arm but
+  is not selected by this command.
+
+```sweep-edit crates/dcs-mcp/src/wording.rs
+-             say("not-written", lines)
++             refuse("not-written", lines)
+```
+
 ---
 
 ## Out of scope
