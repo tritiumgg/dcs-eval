@@ -144,6 +144,70 @@ pub fn liveness(pid: u32) -> Liveness {
     }
 }
 
+// ---- the local clock -------------------------------------------------------
+
+/// `SYSTEMTIME`: the eight fields `GetLocalTime` fills, in the order the
+/// kernel writes them.
+#[repr(C)]
+#[derive(Default)]
+struct SystemTime {
+    year: u16,
+    month: u16,
+    // Written by the call and read by nothing: a name carries the date,
+    // not the weekday. It is here because the layout is the kernel's.
+    #[allow(dead_code)]
+    day_of_week: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    milliseconds: u16,
+}
+
+#[allow(non_snake_case)]
+unsafe extern "system" {
+    fn GetLocalTime(lpSystemTime: *mut SystemTime);
+}
+
+/// The wall clock as this machine's time zone and daylight rule put it,
+/// to the millisecond. The standard library keeps time as a distance from
+/// the epoch and has no notion of a zone, so a reading a person
+/// recognises as the time on the taskbar comes from Windows.
+///
+/// A reading says what the clock showed, not when it was taken: local
+/// time goes back an hour when daylight saving ends, so two readings an
+/// hour apart can be equal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalTime {
+    pub year: u16,
+    pub month: u16,
+    pub day: u16,
+    pub hour: u16,
+    pub minute: u16,
+    pub second: u16,
+    pub millisecond: u16,
+}
+
+/// The local time now. The call cannot fail; how finely the millisecond
+/// moves is the system timer's tick, which can be as coarse as fifteen
+/// milliseconds, so two readings taken back to back often agree.
+#[must_use]
+pub fn local_now() -> LocalTime {
+    let mut now = SystemTime::default();
+    // SAFETY: the pointer is to a live, writable `SYSTEMTIME` of the
+    // declared layout, which the call fills and does not keep.
+    unsafe { GetLocalTime(&raw mut now) };
+    LocalTime {
+        year: now.year,
+        month: now.month,
+        day: now.day,
+        hour: now.hour,
+        minute: now.minute,
+        second: now.second,
+        millisecond: now.milliseconds,
+    }
+}
+
 // ---- the reply watch -------------------------------------------------------
 
 /// The `OVERLAPPED` a pending directory read is tracked by. The two
@@ -711,6 +775,21 @@ fn wide(path: &Path) -> io::Result<Vec<u16>> {
 mod tests {
     use super::*;
     use crate::testing::a_pid_that_has_exited;
+
+    #[test]
+    fn getlocaltime_reads_a_date_that_could_be_today() {
+        // The layout, checked by what lands in it: a field out of order
+        // would put the weekday in the day or the second in the minute.
+        let now = local_now();
+        assert!(now.year >= 2026, "{now:?}");
+        assert!((1..=12).contains(&now.month), "{now:?}");
+        assert!((1..=31).contains(&now.day), "{now:?}");
+        assert!(
+            now.hour < 24 && now.minute < 60 && now.second < 60,
+            "{now:?}"
+        );
+        assert!(now.millisecond < 1000, "{now:?}");
+    }
 
     #[test]
     fn waitforsingleobject_times_out_on_this_process_so_it_is_running() {
