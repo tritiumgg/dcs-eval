@@ -208,6 +208,44 @@ pub fn local_now() -> LocalTime {
     }
 }
 
+// ---- the clock file times are stamped with ---------------------------------
+
+/// `FILETIME`: a count of 100-nanosecond intervals since 1601, split into
+/// two halves because that is how the kernel writes it.
+#[repr(C)]
+#[derive(Default)]
+struct FileTime {
+    low: u32,
+    high: u32,
+}
+
+#[allow(non_snake_case)]
+unsafe extern "system" {
+    fn GetSystemTimeAsFileTime(lpSystemTimeAsFileTime: *mut FileTime);
+}
+
+/// The distance from 1601, where `FILETIME` counts from, to 1970, in its
+/// own 100-nanosecond units.
+const FILETIME_TO_UNIX: u64 = 116_444_736_000_000_000;
+
+/// The system time as the filesystem reads it when it stamps a write.
+///
+/// The standard library's `SystemTime::now` is the precise clock, which
+/// moves between timer ticks; a file's modified time is taken from the
+/// coarse one, which moves only on them. A precise reading can therefore
+/// come after the stamp of a file written a moment later, and a test of
+/// "written after this reading" would call that file old. Decision record
+/// 0038 has the measurement.
+#[must_use]
+pub fn file_clock_now() -> std::time::SystemTime {
+    let mut now = FileTime::default();
+    // SAFETY: the pointer is to a live, writable `FILETIME` of the
+    // declared layout, which the call fills and does not keep.
+    unsafe { GetSystemTimeAsFileTime(&raw mut now) };
+    let ticks = (u64::from(now.high) << 32) | u64::from(now.low);
+    std::time::UNIX_EPOCH + Duration::from_nanos(ticks.saturating_sub(FILETIME_TO_UNIX) * 100)
+}
+
 // ---- the reply watch -------------------------------------------------------
 
 /// The `OVERLAPPED` a pending directory read is tracked by. The two
@@ -789,6 +827,35 @@ mod tests {
             "{now:?}"
         );
         assert!(now.millisecond < 1000, "{now:?}");
+    }
+
+    #[test]
+    fn getsystemtimeasfiletime_is_never_after_a_file_written_next() {
+        // The layout and the epoch, checked by agreement with the clock the
+        // standard library reads, and the point of the call, checked by a
+        // file written straight after never being dated before it.
+        let b = crate::testing::Sandbox::new();
+        for n in 0..200 {
+            let before = file_clock_now();
+            let path = b.join(&format!("f{n}"));
+            std::fs::write(&path, b"x").expect("the file is written");
+            let stamped = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .expect("the time reads");
+            assert!(
+                stamped >= before,
+                "a file was dated {stamped:?}, before the reading {before:?}"
+            );
+        }
+        let precise = std::time::SystemTime::now();
+        let coarse = file_clock_now();
+        let apart = precise
+            .duration_since(coarse)
+            .unwrap_or_else(|e| e.duration());
+        assert!(
+            apart < Duration::from_secs(1),
+            "{precise:?} against {coarse:?}"
+        );
     }
 
     #[test]
