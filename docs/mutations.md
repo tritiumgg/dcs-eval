@@ -2537,6 +2537,53 @@ an entry below belongs to.
 +     format!("dcs-eval-{year:04}{month:02}{day:02}-{hour:02}{minute:02}{second:02}")
 ```
 
+### shotfile/whole-by-size-alone
+
+- task: T66
+- command: `mise exec -- cargo test -p dcs-eval shot_file`
+- reddens: `a_png_cut_short_of_its_end_is_not_whole`
+- note: the judgment reads one file's bytes once and has no earlier size to
+  compare with, so a size that stopped growing cannot be written into it; the
+  mutation is what that judgment amounts to here, the terminator no longer
+  asked for, so that any file with its header in place is called whole. Every
+  cut of twenty-four bytes or more is, and nothing else goes red.
+
+```sweep-edit crates/dcs-eval/src/shot_file.rs
+-     let whole = bytes.ends_with(&PNG_END);
++     let whole = true;
+```
+
+### shotfile/empty-waited-out
+
+- task: T66
+- command: `mise exec -- cargo test -p dcs-eval shot_file`
+- reddens: `a_zero_byte_file_is_empty`
+- note: `a_zero_byte_file_on_disk_is_empty` goes red beside it, the same
+  finding reached through a file on disk. A zero-byte file judged unfinished
+  is one the wait keeps looking at and then answers as nothing written.
+
+```sweep-edit crates/dcs-eval/src/shot_file.rs
+-         return Finding::Empty;
++         return Finding::Unfinished;
+```
+
+### shotfile/thumbnail-taken-for-the-picture
+
+- task: T66
+- command: `mise exec -- cargo test -p dcs-eval shot_file`
+- reddens: `a_thumbnail_in_the_metadata_is_not_the_picture`
+- note: the segment walk is replaced by a scan for the first frame marker
+  anywhere in the file. `a_jpeg_cut_just_past_its_thumbnail_is_not_whole`
+  goes red beside it: a file cut at the thumbnail's own end marker ends the
+  way a JPEG does, and only the walk, finding no frame header of the
+  picture's yet, says it is unfinished. A JPEG without a thumbnail stays
+  whole and correctly sized under the scan.
+
+```sweep-edit crates/dcs-eval/src/shot_file.rs
+-     let (width, height) = jpeg_frame(bytes)?;
++     let (width, height) = bytes.windows(2).position(|w| w[0] == 0xFF && is_frame(w[1])).and_then(|at| frame_size(bytes.get(at + 4..)?))?;
+```
+
 ---
 
 ## Out of scope
