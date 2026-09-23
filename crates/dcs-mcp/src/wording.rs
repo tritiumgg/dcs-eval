@@ -3,8 +3,8 @@
 //! Every answer the tools give is rendered by a function here. One module
 //! rather than a paragraph in each tool body, because the questions this
 //! settles — does a refusal read as a refusal rather than as an empty
-//! result, does a `pending` name its id and its phase — are the same six
-//! times over, and six copies of an answer is five chances to word one of
+//! result, does a `pending` name its id and its phase — are the same for
+//! every tool, and a copy of an answer per tool is a chance to word one of
 //! them differently.
 //!
 //! The command line prints what these functions render, rather than what a
@@ -14,6 +14,7 @@
 
 use dcs_eval::pipeline::PipeError;
 use dcs_eval::protocol::Envelope;
+use dcs_eval::screenshot::{Capture, CaptureError};
 use dcs_eval::wait::{Flag, Outcome};
 use rmcp::model::{CallToolResult, ContentBlock};
 
@@ -177,14 +178,110 @@ pub fn answered(item: Option<Result<Outcome, PipeError>>) -> CallToolResult {
 /// it, and the reply is picked up later — so a client that branches on the
 /// error flag must not be told to give up here.
 pub fn pending(id: &str, phase: &str, flag: Option<Flag>, note: Option<&str>) -> CallToolResult {
-    let mut lines = vec![format!("id: {id}"), format!("phase: {phase}")];
-    if let Some(flag) = flag {
-        lines.push(format!("waiting on: {flag:?}"));
-    }
+    let mut lines = pending_lines(id, phase, flag);
     if let Some(note) = note {
         lines.push(note.to_owned());
     }
     say("pending", lines)
+}
+
+/// The lines every `pending` opens with, a capture's included.
+fn pending_lines(id: &str, phase: &str, flag: Option<Flag>) -> Vec<String> {
+    let mut lines = vec![format!("id: {id}"), format!("phase: {phase}")];
+    if let Some(flag) = flag {
+        lines.push(format!("waiting on: {flag:?}"));
+    }
+    lines
+}
+
+/// What one capture came to, rendered.
+///
+/// `ok` carries the file and what its header says, a line each. A refusal is
+/// headed by the word that refused it and marked an error, whether the word
+/// is this build's own or the executor's, which is passed through the reply
+/// renderer unchanged. `pending` and `not-written` are the two that are not
+/// refusals, and neither is marked one: the first is a reply still to come,
+/// the second a reply that came while the file did not, and the file may yet
+/// land. Both carry the directory and the name rather than a path, because
+/// the extension is the user's setting and nothing has read it yet.
+pub fn capture(outcome: Result<Capture, CaptureError>) -> CallToolResult {
+    let capture = match outcome {
+        Ok(capture) => capture,
+        Err(why) => return refuse("refused", vec![why.to_string()]),
+    };
+    match capture {
+        Capture::Ok { path, picture } => say(
+            "ok",
+            vec![
+                format!("path: {}", path.display()),
+                format!("format: {}", picture.format.extension()),
+                format!("bytes: {}", picture.bytes),
+                format!("width: {}", picture.width),
+                format!("height: {}", picture.height),
+            ],
+        ),
+        Capture::Pending {
+            id,
+            phase,
+            flag,
+            dir,
+            name,
+        } => {
+            let mut lines = pending_lines(&id, &phase, flag);
+            lines.push(match dir {
+                Some(dir) => format!("directory: {}", dir.display()),
+                // Decision record 0039: the directory is read off where the
+                // session's output sits, and only this executor's layout
+                // says anything about that.
+                None => "directory: not known; the session's output is not where this \
+                         executor puts its own, so the write directory cannot be read off it"
+                    .to_owned(),
+            });
+            lines.push(format!("name: {name}"));
+            lines.push(
+                "the executor has not answered yet; collect the id for the directory, \
+                 then look there for the name"
+                    .to_owned(),
+            );
+            say("pending", lines)
+        }
+        Capture::NotWritten { dir, name } => {
+            let lines = vec![
+                format!("directory: {}", dir.display()),
+                format!("name: {name}"),
+                "the executor answered and no whole file under the name landed inside the \
+                 wait; it may still land, and where nothing renders it never will"
+                    .to_owned(),
+            ];
+            say("not-written", lines)
+        }
+        Capture::Empty { path } => refuse(
+            "empty",
+            vec![
+                format!("path: {}", path.display()),
+                "a file landed under the name and was still zero bytes when the wait ended, \
+                 which is what an abandoned capture leaves"
+                    .to_owned(),
+            ],
+        ),
+        Capture::BadName(why) => refuse("bad-request", vec![why.to_string()]),
+        Capture::Unsupported { host } => refuse(
+            "unsupported",
+            vec![format!(
+                "the capture runs in the hook state, which the {host} host cannot reach; \
+                 ask host hook"
+            )],
+        ),
+        Capture::Replied(envelope) => reply(&envelope),
+        Capture::Malformed(envelope) => {
+            let mut lines =
+                vec!["the reply is not the directory the capture's chunk returns".to_owned()];
+            lines.extend(reply_lines(&envelope));
+            refuse("refused", lines)
+        }
+        Capture::Superseded { id } => answered(Some(Ok(Outcome::Superseded { id }))),
+        Capture::Dead { id } => answered(Some(Ok(Outcome::Dead { id }))),
+    }
 }
 
 #[cfg(test)]
@@ -414,6 +511,155 @@ mod tests {
             assert_eq!(head(&answer), word);
             assert!(text(&answer).contains(id), "{word} names the id it refused");
         }
+    }
+
+    /// A capture that found its file: headed `ok`, not an error, and each
+    /// of the five facts on a line of its own.
+    #[test]
+    fn a_capture_found_is_ok_with_its_five_facts() {
+        use dcs_eval::shot_file::{Format, Picture};
+        let answer = capture(Ok(Capture::Ok {
+            path: "C:\\Saved Games\\DCS\\ScreenShots\\shot.png".into(),
+            picture: Picture {
+                format: Format::Png,
+                bytes: 1234,
+                width: 37,
+                height: 23,
+            },
+        }));
+
+        assert_ne!(answer.is_error, Some(true), "an ok capture is not an error");
+        assert_eq!(
+            text(&answer),
+            "ok\npath: C:\\Saved Games\\DCS\\ScreenShots\\shot.png\nformat: png\n\
+             bytes: 1234\nwidth: 37\nheight: 23"
+        );
+    }
+
+    /// The two answers that are not refusals. Each names the directory and
+    /// the name rather than a path, and neither is marked an error.
+    #[test]
+    fn a_capture_pending_or_not_written_is_not_an_error() {
+        let dir = std::path::PathBuf::from("C:\\Saved Games\\DCS\\ScreenShots");
+        let pending = capture(Ok(Capture::Pending {
+            id: "0000000001-abcd1234".to_owned(),
+            phase: "menu".to_owned(),
+            flag: None,
+            dir: Some(dir.clone()),
+            name: "shot".to_owned(),
+        }));
+        let not_written = capture(Ok(Capture::NotWritten {
+            dir,
+            name: "shot".to_owned(),
+        }));
+
+        for (answer, word) in [(pending, "pending"), (not_written, "not-written")] {
+            let rendered = text(&answer);
+            assert_ne!(answer.is_error, Some(true), "{word} is not an error");
+            assert_eq!(head(&answer), word, "{rendered}");
+            assert!(
+                rendered.contains("directory: C:\\Saved Games\\DCS\\ScreenShots"),
+                "{rendered}"
+            );
+            assert!(rendered.contains("name: shot"), "{rendered}");
+        }
+    }
+
+    /// A `pending` whose directory could not be read off the session says
+    /// so, rather than dropping the line or printing an empty path.
+    #[test]
+    fn a_capture_pending_with_no_directory_says_why() {
+        let answer = capture(Ok(Capture::Pending {
+            id: "0000000001-abcd1234".to_owned(),
+            phase: "load".to_owned(),
+            flag: Some(Flag::Waking),
+            dir: None,
+            name: "shot".to_owned(),
+        }));
+
+        assert_ne!(answer.is_error, Some(true));
+        let rendered = text(&answer);
+        assert!(rendered.contains("id: 0000000001-abcd1234"), "{rendered}");
+        assert!(rendered.contains("phase: load"), "{rendered}");
+        assert!(rendered.contains("directory: not known; "), "{rendered}");
+        assert!(rendered.contains("name: shot"), "{rendered}");
+    }
+
+    /// Every capture refusal this build words itself: marked an error,
+    /// headed by its word, and saying why on the line after it.
+    #[test]
+    fn a_capture_refusal_is_headed_by_its_word() {
+        use dcs_eval::shot_name::NameRefusal;
+        let cases = [
+            (
+                capture(Ok(Capture::Empty {
+                    path: "C:\\ScreenShots\\shot".into(),
+                })),
+                "empty",
+                "path: C:\\ScreenShots\\shot",
+            ),
+            (
+                capture(Ok(Capture::BadName(NameRefusal::Character {
+                    at: 2,
+                    character: '.',
+                }))),
+                "bad-request",
+                "'.'",
+            ),
+            (
+                capture(Ok(Capture::Unsupported {
+                    host: "export".to_owned(),
+                })),
+                "unsupported",
+                "ask host hook",
+            ),
+            (
+                capture(Ok(Capture::Malformed(envelope(
+                    &[("status", "ok"), ("result_type", "nil")],
+                    "",
+                )))),
+                "refused",
+                "not the directory",
+            ),
+            (
+                capture(Ok(Capture::Superseded {
+                    id: "0000000001-abcd1234".to_owned(),
+                })),
+                "stale-session",
+                "0000000001-abcd1234",
+            ),
+            (
+                capture(Ok(Capture::Dead {
+                    id: "0000000001-abcd1234".to_owned(),
+                })),
+                "no-session",
+                "0000000001-abcd1234",
+            ),
+        ];
+        for (answer, word, says) in cases {
+            let rendered = text(&answer);
+            assert_eq!(
+                answer.is_error,
+                Some(true),
+                "{word} is an error: {rendered}"
+            );
+            assert_eq!(head(&answer), word, "{rendered}");
+            assert!(rendered.contains(says), "{word} says {says:?}: {rendered}");
+        }
+    }
+
+    /// The executor's own refusal of the chunk is its word, not this
+    /// build's: a chunk that raised reads as `run`, as it would from an eval.
+    #[test]
+    fn a_capture_the_executor_refused_is_passed_through() {
+        let answer = capture(Ok(Capture::Replied(envelope(
+            &[("status", "error"), ("stage", "run")],
+            "attempt to call a nil value",
+        ))));
+
+        assert_eq!(answer.is_error, Some(true));
+        assert_eq!(head(&answer), "run");
+        assert!(text(&answer).ends_with("attempt to call a nil value"));
     }
 
     /// A window that ended without yielding anything at all. There is no
