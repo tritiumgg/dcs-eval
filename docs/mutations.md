@@ -2699,6 +2699,63 @@ an entry below belongs to.
 +             refuse("not-written", lines)
 ```
 
+### shotcli/out-written-from-the-reply
+
+- task: T69
+- command: `mise exec -- cargo test -p dcs-mcp screenshot_cli`
+- reddens: `screenshot_cli_out_is_the_file_byte_for_byte`
+- note: `--out` written from the answer the terminal prints instead of
+  copied off the file the capture found — the eval verbs' own habit of
+  keeping what came back, carried over. The copy still lands and the exit
+  code is still 0, so only the byte comparison goes red: the copy is the
+  `ok` block's six lines against the 2,272 bytes of the picture. The exit-code
+  test's own `ok` case gives `--out` too and stays green, which is what
+  says the two watch different things.
+
+```sweep-edit crates/dcs-mcp/src/cli.rs
+-                 if let Err(why) = std::fs::copy(shot, to) {
++                 if let Err(why) = std::fs::write(to, wording::text(&answered.answer)) {
+```
+
+### shotcli/copy-written-for-not-written
+
+- task: T69
+- command: `mise exec -- cargo test -p dcs-mcp screenshot_cli`
+- reddens: `screenshot_cli_not_written_writes_nothing_at_out`
+- note: an answer that is not `ok` writes its own words at `PATH`, so a
+  file that is not a picture sits where one would be read back. The exit
+  code is untouched and the exit-code test stays green. The binary's
+  `pending` case asserts the same rule and would go red too, but the
+  command stops at the failed unit-test binary and never runs it.
+
+```sweep-edit crates/dcs-mcp/src/cli.rs
+-             None => eprintln!(
+-                 "{} was not written: only an ok has a picture to copy",
+-                 to.display()
+-             ),
++             None => drop(std::fs::write(to, wording::text(&answered.answer))),
+```
+
+### shotcli/not-written-exits-one
+
+- task: T69
+- command: `mise exec -- cargo test -p dcs-mcp screenshot_cli`
+- reddens: `screenshot_cli_exits_0_for_an_answer_and_1_for_a_refusal_or_a_failed_copy`
+- note: a picture that did not come taken for a copy that failed, which is
+  the natural wrong reading of an `--out` with nothing to copy. The
+  `not-written` case goes red first; the `pending` case after it, given an
+  `--out` as well, would exit 1 under the same edit. The no-write test
+  stays green, because nothing is written either way. The assertion that
+  goes is `a capture not written is an answer`.
+
+```sweep-edit crates/dcs-mcp/src/cli.rs
+-             None => eprintln!(
+-                 "{} was not written: only an ok has a picture to copy",
+-                 to.display()
+-             ),
++             None => code = 1,
+```
+
 ---
 
 ## Out of scope
